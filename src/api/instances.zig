@@ -288,6 +288,8 @@ pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8,
         .body = "{\"error\":\"internal error\"}",
     };
 
+    s.save() catch return helpers.serverError();
+
     return jsonOk("{\"status\":\"updated\"}");
 }
 

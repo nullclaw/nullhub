@@ -7,14 +7,20 @@
   let container: HTMLElement;
   let autoScroll = $state(true);
 
-  onMount(async () => {
+  async function fetchLogs() {
     try {
       const data = await api.getLogs(component, name, 200);
       lines = data.lines || [];
       scrollToBottom();
     } catch (e) {
-      lines = ['Failed to load logs'];
+      if (lines.length === 0) lines = ['Failed to load logs'];
     }
+  }
+
+  onMount(() => {
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 3000);
+    return () => clearInterval(interval);
   });
 
   function scrollToBottom() {

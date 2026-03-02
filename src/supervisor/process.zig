@@ -100,13 +100,19 @@ fn appendShellSafe(buf: *std.array_list.Managed(u8), s: []const u8) !void {
 
 /// Check whether a process with the given PID is still alive.
 ///
-/// On POSIX systems, sends signal 0 to the process. If the call succeeds,
-/// the process exists. If it returns an error, the process is dead or
-/// inaccessible.
+/// On POSIX systems, first tries a non-blocking waitpid to reap zombies,
+/// then sends signal 0. A zombie process has exited but not been waited on —
+/// `kill(pid, 0)` succeeds for zombies, giving a false positive. By calling
+/// `waitpid(WNOHANG)` first, we reap any zombie and correctly report it dead.
 pub fn isAlive(pid: std.process.Child.Id) bool {
     if (comptime builtin.os.tag == .windows) {
         return false; // TODO: Windows support via OpenProcess
     }
+    // Try to reap zombie — WNOHANG returns immediately.
+    // If waitpid returns the pid, the process has exited (zombie reaped).
+    const wait_result = std.posix.waitpid(pid, std.c.W.NOHANG);
+    if (wait_result.pid == pid) return false; // reaped zombie or exited child
+
     if (std.posix.kill(pid, 0)) {
         return true;
     } else |_| {

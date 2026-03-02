@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import WizardRenderer from '$lib/components/WizardRenderer.svelte';
@@ -8,12 +7,14 @@
   let componentName = $derived($page.params.component);
   let wizardData = $state<any>(null);
 
-  onMount(async () => {
-    try {
-      wizardData = await api.getWizard(componentName);
-    } catch (e) {
+  $effect(() => {
+    const comp = componentName;
+    wizardData = null;
+    api.getWizard(comp).then((data) => {
+      wizardData = data;
+    }).catch((e) => {
       console.error(e);
-    }
+    });
   });
 </script>
 

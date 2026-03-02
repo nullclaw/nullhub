@@ -501,7 +501,7 @@ fn readBody(raw: []const u8, n: usize, stream: std.net.Stream, alloc: std.mem.Al
 }
 
 fn sendResponse(stream: std.net.Stream, response: Response) !void {
-    var buf: [1024]u8 = undefined;
+    var buf: [4096]u8 = undefined;
     const header = try std.fmt.bufPrint(&buf,
         "HTTP/1.1 {s}\r\n" ++
             "Content-Type: {s}\r\n" ++

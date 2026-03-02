@@ -232,6 +232,7 @@ pub const State = struct {
         const new_version = try self.allocator.dupe(u8, entry.version);
         errdefer self.allocator.free(new_version);
         const new_launch_mode = try self.allocator.dupe(u8, entry.launch_mode);
+        errdefer self.allocator.free(new_launch_mode);
 
         self.allocator.free(ptr.version);
         self.allocator.free(ptr.launch_mode);

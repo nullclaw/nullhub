@@ -9,6 +9,7 @@
     auto_update_check: true
   });
   let saving = $state(false);
+  let serviceLoading = $state(false);
   let message = $state('');
 
   onMount(async () => {
@@ -69,12 +70,14 @@
   <div class="settings-section">
     <h2>Service</h2>
     <p class="hint">Register NullHub as a system service for automatic startup</p>
-    <button class="btn" onclick={async () => {
+    <button class="btn" disabled={serviceLoading} onclick={async () => {
+      serviceLoading = true;
       try {
         const data = await api.serviceInstall();
         message = data.message;
       } catch (e) { message = 'Failed to register service'; }
-    }}>Enable Autostart</button>
+      finally { serviceLoading = false; }
+    }}>{serviceLoading ? 'Installing...' : 'Enable Autostart'}</button>
   </div>
 
   {#if message}

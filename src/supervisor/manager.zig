@@ -349,6 +349,15 @@ pub const Manager = struct {
         } else {
             inst.health_consecutive_failures += 1;
             if (inst.health_consecutive_failures >= 3) {
+                // Kill the unresponsive process and reap it to avoid zombies.
+                if (inst.pid) |pid| {
+                    process.terminate(pid) catch {};
+                }
+                if (inst.child) |*child| {
+                    _ = child.wait() catch {};
+                    inst.child = null;
+                }
+                inst.pid = null;
                 inst.status = .failed;
             }
         }

@@ -9,7 +9,9 @@
   // Sync localStatus when prop changes (from poll)
   $effect(() => { localStatus = status; });
 
-  async function start() {
+  async function start(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
     loading = true;
     localStatus = 'starting';
     try {
@@ -19,7 +21,9 @@
     finally { loading = false; }
   }
 
-  async function stop() {
+  async function stop(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
     loading = true;
     localStatus = 'stopping';
     try {

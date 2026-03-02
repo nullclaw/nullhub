@@ -1,12 +1,30 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { api } from '$lib/api/client';
+
   let { title = 'Dashboard' } = $props();
+  let hubOk = $state(true);
+
+  onMount(() => {
+    async function check() {
+      try {
+        await api.getStatus();
+        hubOk = true;
+      } catch {
+        hubOk = false;
+      }
+    }
+    check();
+    const interval = setInterval(check, 10000);
+    return () => clearInterval(interval);
+  });
 </script>
 
 <header class="topbar">
   <h1>{title}</h1>
   <div class="hub-status">
-    <span class="status-dot running"></span>
-    <span>Hub Running</span>
+    <span class="status-dot" class:running={hubOk}></span>
+    <span>{hubOk ? 'Hub Running' : 'Hub Unreachable'}</span>
   </div>
 </header>
 

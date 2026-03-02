@@ -59,8 +59,15 @@
   }
   async function remove() {
     if (confirm('Are you sure you want to delete this instance?')) {
-      await api.deleteInstance(component, name);
-      window.location.href = '/';
+      loading = true;
+      try {
+        await api.deleteInstance(component, name);
+        window.location.href = '/';
+      } catch (e) {
+        console.error(e);
+      } finally {
+        loading = false;
+      }
     }
   }
   async function setMode(mode: string) {

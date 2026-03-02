@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
 
   let { component = '', name = '' } = $props();
@@ -6,6 +7,7 @@
   let saving = $state(false);
   let message = $state('');
   let error = $state(false);
+  let loaded = $state(false);
 
   async function load() {
     try {
@@ -18,6 +20,7 @@
       message = 'No config found, starting with empty object';
       error = false;
     }
+    loaded = true;
   }
 
   async function save() {
@@ -35,7 +38,7 @@
     }
   }
 
-  $effect(() => { load(); });
+  onMount(() => { load(); });
 </script>
 
 <div class="config-editor">
