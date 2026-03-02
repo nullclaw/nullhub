@@ -297,6 +297,24 @@ pub const Server = struct {
             };
         }
 
+        // Versions API — GET /api/wizard/{component}/versions
+        if (std.mem.eql(u8, method, "GET") and wizard_api.isVersionsPath(target)) {
+            if (wizard_api.extractComponentName(target)) |comp_name| {
+                if (wizard_api.handleGetVersions(allocator, comp_name)) |json| {
+                    return .{
+                        .status = "200 OK",
+                        .content_type = "application/json",
+                        .body = json,
+                    };
+                }
+                return .{
+                    .status = "404 Not Found",
+                    .content_type = "application/json",
+                    .body = "{\"error\":\"component not found\"}",
+                };
+            }
+        }
+
         // Models API — GET /api/wizard/{component}/models?provider=X&api_key=Y
         if (std.mem.eql(u8, method, "GET") and wizard_api.isModelsPath(target)) {
             if (wizard_api.extractComponentName(target)) |comp_name| {

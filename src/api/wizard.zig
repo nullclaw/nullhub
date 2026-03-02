@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const registry = @import("../installer/registry.zig");
 const downloader = @import("../installer/downloader.zig");
+const versions = @import("../installer/versions.zig");
 const platform = @import("../core/platform.zig");
 const local_binary = @import("../core/local_binary.zig");
 const helpers = @import("helpers.zig");
@@ -25,6 +26,14 @@ pub fn extractComponentName(target: []const u8) ?[]const u8 {
     const rest = path[prefix.len..];
     if (rest.len == 0) return null;
 
+    const versions_suffix = "/versions";
+    if (std.mem.endsWith(u8, rest, versions_suffix)) {
+        const component = rest[0 .. rest.len - versions_suffix.len];
+        if (component.len == 0) return null;
+        if (std.mem.indexOfScalar(u8, component, '/') != null) return null;
+        return component;
+    }
+
     const models_suffix = "/models";
     if (std.mem.endsWith(u8, rest, models_suffix)) {
         const component = rest[0 .. rest.len - models_suffix.len];
@@ -47,6 +56,11 @@ pub fn isWizardPath(target: []const u8) bool {
 /// Check if this is a models request path.
 pub fn isModelsPath(target: []const u8) bool {
     return std.mem.endsWith(u8, stripQuery(target), "/models");
+}
+
+/// Check if this is a versions request path.
+pub fn isVersionsPath(target: []const u8) bool {
+    return std.mem.endsWith(u8, stripQuery(target), "/versions");
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -98,6 +112,38 @@ pub fn handleGetModels(allocator: std.mem.Allocator, component_name: []const u8,
     const key = api_key orelse "";
 
     return component_cli.listModels(allocator, bin_path, prov, key) catch null;
+}
+
+/// Handle GET /api/wizard/{component}/versions — fetch available releases from GitHub.
+/// Returns a JSON array of version options: [{"value":"v1.0.0","label":"v1.0.0","recommended":true}, ...]
+/// Falls back to [{"value":"latest","label":"latest","recommended":true}] on fetch failure.
+/// Returns null if the component is unknown.
+/// Caller owns the returned memory.
+pub fn handleGetVersions(allocator: std.mem.Allocator, component_name: []const u8) ?[]const u8 {
+    const known = registry.findKnownComponent(component_name) orelse return null;
+
+    const releases = versions.fetchReleases(allocator, known.repo) catch
+        return allocator.dupe(u8, "[{\"value\":\"latest\",\"label\":\"latest\",\"recommended\":true}]") catch null;
+    defer releases.deinit();
+
+    // Build JSON array of version options
+    var buf = std.array_list.Managed(u8).init(allocator);
+    buf.appendSlice("[") catch return null;
+    var count: usize = 0;
+    for (releases.value) |rel| {
+        if (rel.prerelease) continue;
+        if (count > 0) buf.append(',') catch return null;
+        buf.appendSlice("{\"value\":\"") catch return null;
+        buf.appendSlice(rel.tag_name) catch return null;
+        buf.appendSlice("\",\"label\":\"") catch return null;
+        buf.appendSlice(rel.tag_name) catch return null;
+        buf.appendSlice("\"") catch return null;
+        if (count == 0) buf.appendSlice(",\"recommended\":true") catch return null;
+        buf.appendSlice("}") catch return null;
+        count += 1;
+    }
+    buf.appendSlice("]") catch return null;
+    return buf.toOwnedSlice() catch null;
 }
 
 fn stripQuery(target: []const u8) []const u8 {
@@ -282,6 +328,11 @@ test "extractComponentName parses wizard paths correctly" {
     try std.testing.expect(name4 != null);
     try std.testing.expectEqualStrings("nullclaw", name4.?);
 
+    // Versions sub-path
+    const name5 = extractComponentName("/api/wizard/nullclaw/versions");
+    try std.testing.expect(name5 != null);
+    try std.testing.expectEqualStrings("nullclaw", name5.?);
+
     // Invalid paths
     try std.testing.expect(extractComponentName("/api/wizard/") == null);
     try std.testing.expect(extractComponentName("/api/wizard") == null);
@@ -293,6 +344,7 @@ test "isWizardPath identifies wizard paths" {
     try std.testing.expect(isWizardPath("/api/wizard/nullclaw"));
     try std.testing.expect(isWizardPath("/api/wizard/nullboiler"));
     try std.testing.expect(isWizardPath("/api/wizard/nullclaw/models"));
+    try std.testing.expect(isWizardPath("/api/wizard/nullclaw/versions"));
     try std.testing.expect(!isWizardPath("/api/wizard/"));
     try std.testing.expect(!isWizardPath("/api/wizard"));
     try std.testing.expect(!isWizardPath("/api/components/nullclaw"));
@@ -303,6 +355,18 @@ test "isModelsPath detects models suffix" {
     try std.testing.expect(isModelsPath("/api/wizard/nullclaw/models"));
     try std.testing.expect(isModelsPath("/api/wizard/nullclaw/models?provider=openai"));
     try std.testing.expect(!isModelsPath("/api/wizard/nullclaw"));
+}
+
+test "isVersionsPath detects versions suffix" {
+    try std.testing.expect(isVersionsPath("/api/wizard/nullclaw/versions"));
+    try std.testing.expect(!isVersionsPath("/api/wizard/nullclaw"));
+    try std.testing.expect(!isVersionsPath("/api/wizard/nullclaw/models"));
+}
+
+test "handleGetVersions returns null for unknown component" {
+    const allocator = std.testing.allocator;
+    const result = handleGetVersions(allocator, "nonexistent");
+    try std.testing.expect(result == null);
 }
 
 test "findInstalledComponentBinary finds binary in bin directory" {

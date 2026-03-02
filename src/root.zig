@@ -24,6 +24,7 @@ pub const state = @import("core/state.zig");
 pub const status_api = @import("api/status.zig");
 pub const ui_modules = @import("installer/ui_modules.zig");
 pub const updates_api = @import("api/updates.zig");
+pub const versions = @import("installer/versions.zig");
 pub const wizard_api = @import("api/wizard.zig");
 
 test {
@@ -53,5 +54,6 @@ test {
     _ = status_api;
     _ = ui_modules;
     _ = updates_api;
+    _ = versions;
     _ = wizard_api;
 }

@@ -14,6 +14,7 @@ export const api = {
   getComponents: () => request<any>('/components'),
   getInstances: () => request<any>('/instances'),
   getWizard: (component: string) => request<any>(`/wizard/${component}`),
+  getVersions: (component: string) => request<any>(`/wizard/${component}/versions`),
   postWizard: (component: string, data: any) =>
     request<any>(`/wizard/${component}`, { method: 'POST', body: JSON.stringify(data) }),
   startInstance: (c: string, n: string) =>

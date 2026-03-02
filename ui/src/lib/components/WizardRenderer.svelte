@@ -13,6 +13,8 @@
   let currentStep = $state(0);
   let installing = $state(false);
   let installMessage = $state('');
+  let versions = $state<any[]>([]);
+  let selectedVersion = $state('latest');
 
   // Auto-generate instance name on mount
   $effect(() => {
@@ -25,6 +27,22 @@
         instanceName = `instance-${id}`;
       }).catch(() => {
         instanceName = 'instance-1';
+      });
+    }
+  });
+
+  // Fetch available versions
+  $effect(() => {
+    if (component) {
+      api.getVersions(component).then((data: any) => {
+        versions = Array.isArray(data) ? data : [];
+        if (versions.length > 0) {
+          const rec = versions.find((v: any) => v.recommended);
+          selectedVersion = rec?.value || versions[0].value;
+        }
+      }).catch(() => {
+        versions = [{ value: 'latest', label: 'latest', recommended: true }];
+        selectedVersion = 'latest';
       });
     }
   });
@@ -63,7 +81,7 @@
     try {
       const payload = {
         instance_name: instanceName,
-        version: 'latest',
+        version: selectedVersion,
         ...answers
       };
       const result = await api.postWizard(component, payload);
@@ -87,6 +105,20 @@
       <label>Instance Name</label>
       <input type="text" bind:value={instanceName} placeholder="instance-1" />
     </div>
+
+    {#if versions.length > 1}
+      <WizardStep
+        step={{
+          id: '_version',
+          title: 'Version',
+          description: 'Select the version to install',
+          type: 'select',
+          options: versions
+        }}
+        value={selectedVersion}
+        onchange={(v) => selectedVersion = v}
+      />
+    {/if}
 
     {#each visibleSteps as step}
       <WizardStep
