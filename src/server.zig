@@ -14,6 +14,7 @@ const wizard_api = @import("api/wizard.zig");
 
 const version = "0.1.0";
 const max_request_size: usize = 65_536;
+const ui_build_path = "ui/build";
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -442,6 +443,11 @@ fn route(allocator: std.mem.Allocator, method: []const u8, target: []const u8, b
         }
     }
 
+    // For non-API paths, attempt to serve static files from ui/build
+    if (!std.mem.startsWith(u8, target, "/api/")) {
+        return serveStaticFile(allocator, target);
+    }
+
     return .{
         .status = "404 Not Found",
         .content_type = "application/json",
@@ -494,6 +500,77 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn contentType(path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, path, ".html")) return "text/html";
+    if (std.mem.endsWith(u8, path, ".js")) return "application/javascript";
+    if (std.mem.endsWith(u8, path, ".css")) return "text/css";
+    if (std.mem.endsWith(u8, path, ".json")) return "application/json";
+    if (std.mem.endsWith(u8, path, ".svg")) return "image/svg+xml";
+    if (std.mem.endsWith(u8, path, ".png")) return "image/png";
+    if (std.mem.endsWith(u8, path, ".ico")) return "image/x-icon";
+    return "application/octet-stream";
+}
+
+fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
+    // Determine the file path relative to ui/build
+    const rel_path = if (std.mem.eql(u8, target, "/"))
+        "index.html"
+    else if (target.len > 1)
+        target[1..] // strip leading '/'
+    else
+        "index.html";
+
+    // Build full path: ui/build/ + rel_path
+    const full_path = std.fmt.allocPrint(allocator, ui_build_path ++ "/{s}", .{rel_path}) catch {
+        return .{
+            .status = "500 Internal Server Error",
+            .content_type = "text/html",
+            .body = "internal server error",
+        };
+    };
+
+    // Try to open the requested file, fall back to index.html for SPA routing
+    const file = std.fs.cwd().openFile(full_path, .{}) catch {
+        // SPA fallback: serve index.html for any non-file path
+        const index_path = ui_build_path ++ "/index.html";
+        const index_file = std.fs.cwd().openFile(index_path, .{}) catch {
+            return .{
+                .status = "404 Not Found",
+                .content_type = "text/html",
+                .body = "not found",
+            };
+        };
+        defer index_file.close();
+        const index_content = index_file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+            return .{
+                .status = "500 Internal Server Error",
+                .content_type = "text/html",
+                .body = "internal server error",
+            };
+        };
+        return .{
+            .status = "200 OK",
+            .content_type = "text/html",
+            .body = index_content,
+        };
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+        return .{
+            .status = "500 Internal Server Error",
+            .content_type = "text/html",
+            .body = "internal server error",
+        };
+    };
+
+    return .{
+        .status = "200 OK",
+        .content_type = contentType(full_path),
+        .body = content,
+    };
+}
+
 // --- Tests ---
 
 test "route GET /health returns 200 OK" {
@@ -513,15 +590,23 @@ test "route GET /api/status returns version and platform" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "platform") != null);
 }
 
-test "route unknown path returns 404" {
+test "route unknown non-API path attempts static file serving" {
     const resp = route(std.testing.allocator, "GET", "/nonexistent", "");
+    // Without ui/build directory, static file serving returns 404
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
-    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
 }
 
-test "route POST to GET-only route returns 404" {
+test "route POST to GET-only route falls through to static serving" {
     const resp = route(std.testing.allocator, "POST", "/health", "");
+    // POST /health doesn't match any route, falls through to static file serving
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
+}
+
+test "route unknown API path returns JSON 404" {
+    const resp = route(std.testing.allocator, "GET", "/api/nonexistent", "");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
 }
 
 test "route GET /api/components returns component list" {
@@ -669,4 +754,47 @@ test "Server init sets fields" {
     const s = Server.init(std.testing.allocator, "127.0.0.1", 9800);
     try std.testing.expectEqualStrings("127.0.0.1", s.host);
     try std.testing.expectEqual(@as(u16, 9800), s.port);
+}
+
+test "contentType returns correct MIME type for .html" {
+    try std.testing.expectEqualStrings("text/html", contentType("index.html"));
+}
+
+test "contentType returns correct MIME type for .js" {
+    try std.testing.expectEqualStrings("application/javascript", contentType("app.js"));
+}
+
+test "contentType returns correct MIME type for .css" {
+    try std.testing.expectEqualStrings("text/css", contentType("style.css"));
+}
+
+test "contentType returns correct MIME type for .json" {
+    try std.testing.expectEqualStrings("application/json", contentType("data.json"));
+}
+
+test "contentType returns correct MIME type for .svg" {
+    try std.testing.expectEqualStrings("image/svg+xml", contentType("icon.svg"));
+}
+
+test "contentType returns correct MIME type for .png" {
+    try std.testing.expectEqualStrings("image/png", contentType("logo.png"));
+}
+
+test "contentType returns correct MIME type for .ico" {
+    try std.testing.expectEqualStrings("image/x-icon", contentType("favicon.ico"));
+}
+
+test "contentType returns octet-stream for unknown extension" {
+    try std.testing.expectEqualStrings("application/octet-stream", contentType("file.xyz"));
+}
+
+test "serveStaticFile returns 404 when ui/build does not exist" {
+    const resp = serveStaticFile(std.testing.allocator, "/nonexistent.html");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+}
+
+test "route GET / attempts static file serving" {
+    const resp = route(std.testing.allocator, "GET", "/", "");
+    // Without ui/build/index.html, falls back to 404
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
 }
