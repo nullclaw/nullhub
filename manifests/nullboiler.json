@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "name": "nullboiler",
+  "display_name": "NullBoiler",
+  "description": "DAG-based workflow orchestrator for AI agent pipelines",
+  "icon": "workflow",
+  "repo": "nullclaw/NullBoiler",
+
+  "platforms": {
+    "aarch64-macos": { "asset": "nullboiler-macos-aarch64", "binary": "nullboiler" },
+    "x86_64-macos": { "asset": "nullboiler-macos-x86_64", "binary": "nullboiler" },
+    "x86_64-linux": { "asset": "nullboiler-linux-x86_64", "binary": "nullboiler" },
+    "aarch64-linux": { "asset": "nullboiler-linux-aarch64", "binary": "nullboiler" }
+  },
+
+  "build_from_source": {
+    "zig_version": "0.15.2",
+    "command": "zig build -Doptimize=ReleaseSmall",
+    "output": "zig-out/bin/nullboiler"
+  },
+
+  "config": {
+    "path": "config.json"
+  },
+
+  "launch": {
+    "command": "nullboiler",
+    "args": ["--config", "config.json"]
+  },
+
+  "health": {
+    "endpoint": "/health",
+    "port_from_config": "port",
+    "interval_ms": 15000
+  },
+
+  "ports": [
+    { "name": "api", "config_key": "port", "default": 8080, "protocol": "http" }
+  ],
+
+  "wizard": {
+    "steps": [
+      {
+        "id": "api_port",
+        "title": "API Port",
+        "description": "HTTP port for the NullBoiler REST API",
+        "type": "number",
+        "required": true,
+        "writes_to": "port"
+      },
+      {
+        "id": "api_token",
+        "title": "API Token",
+        "description": "Bearer token for API authentication (leave empty to disable)",
+        "type": "secret",
+        "required": false,
+        "writes_to": "api_token"
+      }
+    ]
+  },
+
+  "ui_modules": [],
+
+  "depends_on": [],
+
+  "connects_to": [
+    {
+      "component": "nullclaw",
+      "role": "orchestrator",
+      "description": "Dispatches workflow steps to NullClaw agent workers"
+    }
+  ],
+
+  "migrations": []
+}
