@@ -121,6 +121,7 @@ pub fn handlePostWizard(
     }, paths, state, manager) catch |err| {
         return buildErrorResponse(allocator, err);
     };
+    defer allocator.free(result.version);
 
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();

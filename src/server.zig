@@ -316,8 +316,13 @@ pub const Server = struct {
                 }
                 if (std.mem.eql(u8, method, "POST")) {
                     if (wizard_api.handlePostWizard(allocator, comp_name, body, self.paths, self.state, self.manager)) |json| {
+                        // Check if the response is an error
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null)
+                            "400 Bad Request"
+                        else
+                            "200 OK";
                         return .{
-                            .status = "200 OK",
+                            .status = status,
                             .content_type = "application/json",
                             .body = json,
                         };

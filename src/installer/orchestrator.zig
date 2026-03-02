@@ -162,7 +162,7 @@ pub fn install(
     ) catch return error.StartFailed;
 
     return .{
-        .version = release.value.tag_name,
+        .version = allocator.dupe(u8, release.value.tag_name) catch return error.FetchFailed,
         .instance_name = opts.instance_name,
     };
 }
