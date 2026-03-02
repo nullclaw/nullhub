@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 pub const root = @import("root.zig");
 const cli = root.cli;
 const server = root.server;
@@ -36,6 +37,8 @@ pub fn main() !void {
 
             const sup_thread = try std.Thread.spawn(.{}, supervisorLoop, .{ &mgr, &mutex });
             sup_thread.detach();
+
+            if (!opts.no_open) openBrowser(allocator, opts.host, opts.port);
 
             try srv.run();
         },
@@ -91,4 +94,18 @@ fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) void 
         }
         std.Thread.sleep(1_000_000_000); // 1 second
     }
+}
+
+fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16) void {
+    const url = std.fmt.allocPrint(allocator, "http://{s}:{d}", .{ host, port }) catch return;
+    defer allocator.free(url);
+
+    const open_cmd = comptime switch (builtin.os.tag) {
+        .macos => "open",
+        .windows => "start",
+        else => "xdg-open",
+    };
+
+    var child = std.process.Child.init(&.{ open_cmd, url }, allocator);
+    _ = child.spawnAndWait() catch return;
 }
