@@ -12,6 +12,7 @@ pub const instances_api = @import("api/instances.zig");
 pub const logs_api = @import("api/logs.zig");
 pub const main = @import("main.zig");
 pub const manager = @import("supervisor/manager.zig");
+pub const orchestrator = @import("installer/orchestrator.zig");
 pub const manifest = @import("core/manifest.zig");
 pub const paths = @import("core/paths.zig");
 pub const platform = @import("core/platform.zig");
@@ -41,6 +42,7 @@ test {
     _ = logs_api;
     _ = main;
     _ = manager;
+    _ = orchestrator;
     _ = manifest;
     _ = paths;
     _ = platform;
