@@ -297,11 +297,29 @@ pub const Server = struct {
             };
         }
 
+        // Models API — GET /api/wizard/{component}/models?provider=X&api_key=Y
+        if (std.mem.eql(u8, method, "GET") and wizard_api.isModelsPath(target)) {
+            if (wizard_api.extractComponentName(target)) |comp_name| {
+                if (wizard_api.handleGetModels(allocator, comp_name, self.paths, target)) |json| {
+                    return .{
+                        .status = "200 OK",
+                        .content_type = "application/json",
+                        .body = json,
+                    };
+                }
+                return .{
+                    .status = "404 Not Found",
+                    .content_type = "application/json",
+                    .body = "{\"error\":\"component not found or models unavailable\"}",
+                };
+            }
+        }
+
         // Wizard API
         if (wizard_api.isWizardPath(target)) {
             if (wizard_api.extractComponentName(target)) |comp_name| {
                 if (std.mem.eql(u8, method, "GET")) {
-                    if (wizard_api.handleGetWizard(allocator, comp_name)) |json| {
+                    if (wizard_api.handleGetWizard(allocator, comp_name, self.paths)) |json| {
                         return .{
                             .status = "200 OK",
                             .content_type = "application/json",

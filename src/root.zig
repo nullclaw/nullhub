@@ -4,7 +4,6 @@ pub const cli = @import("cli.zig");
 pub const component_cli = @import("core/component_cli.zig");
 pub const components_api = @import("api/components.zig");
 pub const config_api = @import("api/config.zig");
-pub const config_writer = @import("wizard/config_writer.zig");
 pub const discovery = @import("discovery.zig");
 pub const downloader = @import("installer/downloader.zig");
 pub const health = @import("supervisor/health.zig");
@@ -26,7 +25,6 @@ pub const status_api = @import("api/status.zig");
 pub const ui_modules = @import("installer/ui_modules.zig");
 pub const updates_api = @import("api/updates.zig");
 pub const wizard_api = @import("api/wizard.zig");
-pub const wizard_engine = @import("wizard/engine.zig");
 
 test {
     _ = auth;
@@ -35,7 +33,6 @@ test {
     _ = component_cli;
     _ = components_api;
     _ = config_api;
-    _ = config_writer;
     _ = discovery;
     _ = downloader;
     _ = health;
@@ -57,5 +54,4 @@ test {
     _ = ui_modules;
     _ = updates_api;
     _ = wizard_api;
-    _ = wizard_engine;
 }

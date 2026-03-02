@@ -18,17 +18,15 @@ pub fn run(allocator: std.mem.Allocator, binary_path: []const u8, args: []const 
     try argv.append(binary_path);
     for (args) |arg| try argv.append(arg);
 
-    var child = std.process.Child.init(argv.items, allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-
-    const stdout = try child.stdout.?.reader().readAllAlloc(allocator, 10 * 1024 * 1024);
-    const term = try child.wait();
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+    }) catch return error.CommandFailed;
+    defer allocator.free(result.stderr);
 
     return .{
-        .stdout = stdout,
-        .success = switch (term) {
+        .stdout = result.stdout,
+        .success = switch (result.term) {
             .Exited => |code| code == 0,
             else => false,
         },

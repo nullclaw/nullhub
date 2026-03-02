@@ -85,6 +85,16 @@ pub fn findAssetForPlatform(
     return null;
 }
 
+/// Find an asset by exact name in a release's asset list.
+pub fn findAssetByName(release: ReleaseInfo, name: []const u8) ?AssetInfo {
+    for (release.assets) |asset| {
+        if (std.mem.eql(u8, asset.name, name)) {
+            return asset;
+        }
+    }
+    return null;
+}
+
 // ─── HTTP fetch (via curl) ───────────────────────────────────────────────────
 
 /// Fetch the latest release information for a GitHub repository.

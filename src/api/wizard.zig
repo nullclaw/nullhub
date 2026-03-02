@@ -1,7 +1,7 @@
 const std = @import("std");
 const registry = @import("../installer/registry.zig");
 const helpers = @import("helpers.zig");
-const manifest_mod = @import("../core/manifest.zig");
+const component_cli = @import("../core/component_cli.zig");
 const orchestrator = @import("../installer/orchestrator.zig");
 const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
@@ -12,7 +12,7 @@ const appendEscaped = helpers.appendEscaped;
 // ─── Path Parsing ────────────────────────────────────────────────────────────
 
 /// Extract the component name from a wizard API path.
-/// Matches `/api/wizard/{component}`.
+/// Matches `/api/wizard/{component}` or `/api/wizard/{component}/models`.
 /// Returns null if the path doesn't match the expected prefix or is empty.
 pub fn extractComponentName(target: []const u8) ?[]const u8 {
     const prefix = "/api/wizard/";
@@ -20,68 +20,102 @@ pub fn extractComponentName(target: []const u8) ?[]const u8 {
     const rest = target[prefix.len..];
     if (rest.len == 0) return null;
 
-    // Reject paths with additional segments (e.g. /api/wizard/foo/bar)
+    // Check for /models suffix
+    if (std.mem.indexOf(u8, rest, "/models")) |idx| {
+        if (idx == 0) return null;
+        return rest[0..idx];
+    }
+
+    // Reject paths with other additional segments
     if (std.mem.indexOfScalar(u8, rest, '/') != null) return null;
 
     return rest;
 }
 
-/// Check if a target path matches `/api/wizard/{component}`.
+/// Check if a target path matches `/api/wizard/{component}` or `/api/wizard/{component}/models`.
 pub fn isWizardPath(target: []const u8) bool {
     return extractComponentName(target) != null;
 }
 
+/// Check if this is a models request path.
+pub fn isModelsPath(target: []const u8) bool {
+    return std.mem.endsWith(u8, target, "/models");
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-/// Handle GET /api/wizard/{component} — returns wizard steps and available versions.
-/// Reads the bundled manifest from manifests/{component}.json to get real wizard steps.
-/// Returns null if the component is unknown (caller should return 404).
+/// Handle GET /api/wizard/{component} — runs component --export-manifest.
+/// Returns the manifest JSON directly (the component owns its wizard definition).
+/// Returns null if the component is unknown or binary not found.
 /// Caller owns the returned memory.
-pub fn handleGetWizard(allocator: std.mem.Allocator, component_name: []const u8) ?[]const u8 {
+pub fn handleGetWizard(allocator: std.mem.Allocator, component_name: []const u8, paths: paths_mod.Paths) ?[]const u8 {
     // Verify the component is known
     if (registry.findKnownComponent(component_name) == null) return null;
 
-    // Read the manifest file from manifests/{component_name}.json
-    const manifest_bytes = readManifestFile(allocator, component_name) orelse return null;
-    defer allocator.free(manifest_bytes);
+    // Find the component binary
+    const bin_path = findComponentBinary(allocator, component_name, paths) orelse return null;
+    defer allocator.free(bin_path);
 
-    // Parse the manifest
-    const parsed = manifest_mod.parseManifest(allocator, manifest_bytes) catch return null;
-    defer parsed.deinit();
-
-    // Serialize the wizard steps to JSON
-    const steps_json = std.json.Stringify.valueAlloc(
-        allocator,
-        parsed.value.wizard.steps,
-        .{ .emit_null_optional_fields = false },
-    ) catch return null;
-    defer allocator.free(steps_json);
-
-    var buf = std.array_list.Managed(u8).init(allocator);
-    errdefer buf.deinit();
-
-    buildGetResponse(&buf, component_name, steps_json) catch return null;
-    return buf.toOwnedSlice() catch null;
+    // Run --export-manifest
+    const manifest_json = component_cli.exportManifest(allocator, bin_path) catch return null;
+    return manifest_json;
 }
 
-/// Read the manifest file for a component from the manifests/ directory.
-fn readManifestFile(allocator: std.mem.Allocator, component_name: []const u8) ?[]const u8 {
-    // Build path: manifests/{component_name}.json
-    const path = std.fmt.allocPrint(allocator, "manifests/{s}.json", .{component_name}) catch return null;
-    defer allocator.free(path);
+/// Handle GET /api/wizard/{component}/models — runs component --list-models.
+/// Expects query params: provider and api_key.
+/// Returns the JSON model array directly.
+pub fn handleGetModels(allocator: std.mem.Allocator, component_name: []const u8, paths: paths_mod.Paths, target: []const u8) ?[]const u8 {
+    if (registry.findKnownComponent(component_name) == null) return null;
 
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
+    const bin_path = findComponentBinary(allocator, component_name, paths) orelse return null;
+    defer allocator.free(bin_path);
 
-    return file.readToEndAlloc(allocator, 1024 * 1024) catch null;
+    // Parse query string for provider and api_key
+    const query_start = std.mem.indexOf(u8, target, "?") orelse return null;
+    const query = target[query_start + 1 ..];
+
+    var provider: ?[]const u8 = null;
+    var api_key: ?[]const u8 = null;
+
+    var pairs = std.mem.splitScalar(u8, query, '&');
+    while (pairs.next()) |pair| {
+        if (std.mem.indexOf(u8, pair, "=")) |eq| {
+            const key = pair[0..eq];
+            const val = pair[eq + 1 ..];
+            if (std.mem.eql(u8, key, "provider")) provider = val;
+            if (std.mem.eql(u8, key, "api_key")) api_key = val;
+        }
+    }
+
+    const prov = provider orelse return null;
+    const key = api_key orelse "";
+
+    return component_cli.listModels(allocator, bin_path, prov, key) catch null;
 }
 
-fn buildGetResponse(buf: *std.array_list.Managed(u8), component_name: []const u8, steps_json: []const u8) !void {
-    try buf.appendSlice("{\"component\":\"");
-    try buf.appendSlice(component_name);
-    try buf.appendSlice("\",\"steps\":");
-    try buf.appendSlice(steps_json);
-    try buf.appendSlice(",\"versions\":[\"latest\"]}");
+/// Find the component binary in the bins/ directory.
+fn findComponentBinary(allocator: std.mem.Allocator, component: []const u8, paths: paths_mod.Paths) ?[]const u8 {
+    // Look for binary in {root}/bins/{component}/ directory
+    const bins_dir = std.fmt.allocPrint(allocator, "{s}/bins/{s}", .{ paths.root, component }) catch return null;
+    defer allocator.free(bins_dir);
+
+    var dir = std.fs.openDirAbsolute(bins_dir, .{ .iterate = true }) catch return null;
+    defer dir.close();
+
+    // Find any version directory with the binary
+    var it = dir.iterate();
+    while (it.next() catch null) |entry| {
+        if (entry.kind == .directory) {
+            const bin = paths.binary(allocator, component, entry.name) catch continue;
+            if (std.fs.openFileAbsolute(bin, .{})) |f| {
+                f.close();
+                return bin;
+            } else |_| {
+                allocator.free(bin);
+            }
+        }
+    }
+    return null;
 }
 
 /// Handle POST /api/wizard/{component} — accepts wizard answers and initiates install.
@@ -104,7 +138,6 @@ pub fn handlePostWizard(
         struct {
             instance_name: []const u8,
             version: []const u8 = "latest",
-            answers: std.json.ArrayHashMap(std.json.Value) = .{ .map = .{} },
         },
         allocator,
         body,
@@ -117,7 +150,7 @@ pub fn handlePostWizard(
         .component = component_name,
         .instance_name = parsed.value.instance_name,
         .version = parsed.value.version,
-        .answers = parsed.value.answers,
+        .answers_json = body,
     }, paths, state, manager) catch |err| {
         return buildErrorResponse(allocator, err);
     };
@@ -174,6 +207,11 @@ test "extractComponentName parses wizard paths correctly" {
     try std.testing.expect(name2 != null);
     try std.testing.expectEqualStrings("nullboiler", name2.?);
 
+    // Models sub-path
+    const name3 = extractComponentName("/api/wizard/nullclaw/models");
+    try std.testing.expect(name3 != null);
+    try std.testing.expectEqualStrings("nullclaw", name3.?);
+
     // Invalid paths
     try std.testing.expect(extractComponentName("/api/wizard/") == null);
     try std.testing.expect(extractComponentName("/api/wizard") == null);
@@ -184,61 +222,33 @@ test "extractComponentName parses wizard paths correctly" {
 test "isWizardPath identifies wizard paths" {
     try std.testing.expect(isWizardPath("/api/wizard/nullclaw"));
     try std.testing.expect(isWizardPath("/api/wizard/nullboiler"));
+    try std.testing.expect(isWizardPath("/api/wizard/nullclaw/models"));
     try std.testing.expect(!isWizardPath("/api/wizard/"));
     try std.testing.expect(!isWizardPath("/api/wizard"));
     try std.testing.expect(!isWizardPath("/api/components/nullclaw"));
     try std.testing.expect(!isWizardPath("/health"));
 }
 
-test "handleGetWizard returns valid JSON with component name and real steps" {
-    const allocator = std.testing.allocator;
-
-    const json = handleGetWizard(allocator, "nullclaw");
-    try std.testing.expect(json != null);
-    defer allocator.free(json.?);
-
-    // Verify it contains expected fields
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"component\":\"nullclaw\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"versions\":[\"latest\"]") != null);
-
-    // Verify real wizard steps are present (from manifests/nullclaw.json)
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"steps\":[{") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"provider\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"api_key\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"channels\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"gateway_port\"") != null);
-
-    // Verify the response is valid JSON by parsing it
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, json.?, .{}) catch |err| {
-        std.debug.print("Failed to parse response JSON: {}\n", .{err});
-        return error.TestUnexpectedResult;
-    };
-    defer parsed.deinit();
+test "isModelsPath detects models suffix" {
+    try std.testing.expect(isModelsPath("/api/wizard/nullclaw/models"));
+    try std.testing.expect(!isModelsPath("/api/wizard/nullclaw"));
 }
 
 test "handleGetWizard returns null for unknown component" {
     const allocator = std.testing.allocator;
-    const result = handleGetWizard(allocator, "nonexistent");
+    const paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-wizard-get") catch @panic("Paths.init");
+    defer paths.deinit(allocator);
+    const result = handleGetWizard(allocator, "nonexistent", paths);
     try std.testing.expect(result == null);
 }
 
-test "handlePostWizard returns error JSON for known component (no GitHub in test env)" {
+test "handleGetWizard returns null when no binary found" {
     const allocator = std.testing.allocator;
-    var paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-wizard-post") catch @panic("Paths.init");
+    const paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-wizard-nobin") catch @panic("Paths.init");
     defer paths.deinit(allocator);
-    var state = state_mod.State.init(allocator, "/tmp/nullhub-test-wizard-post/state.json");
-    defer state.deinit();
-    var mgr = manager_mod.Manager.init(allocator, paths);
-    defer mgr.deinit();
-
-    const body = "{\"instance_name\":\"my-agent\",\"version\":\"latest\",\"answers\":{\"provider\":\"openrouter\"}}";
-    const json = handlePostWizard(allocator, "nullclaw", body, paths, &state, &mgr);
-    // In test environment, orchestrator.install will fail (no GitHub/binary), so we get an error JSON
-    try std.testing.expect(json != null);
-    defer allocator.free(json.?);
-
-    // Should contain an error field (e.g. fetch failed or manifest not found)
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"error\":\"") != null);
+    // nullclaw is a known component but there's no binary in test dirs
+    const result = handleGetWizard(allocator, "nullclaw", paths);
+    try std.testing.expect(result == null);
 }
 
 test "handlePostWizard returns null for unknown component" {
@@ -250,7 +260,24 @@ test "handlePostWizard returns null for unknown component" {
     var mgr = manager_mod.Manager.init(allocator, paths);
     defer mgr.deinit();
 
-    const body = "{\"instance_name\":\"my-agent\",\"version\":\"latest\",\"answers\":{}}";
+    const body = "{\"instance_name\":\"my-agent\",\"version\":\"latest\"}";
     const result = handlePostWizard(allocator, "nonexistent", body, paths, &state, &mgr);
     try std.testing.expect(result == null);
+}
+
+test "handlePostWizard returns error for known component without binary" {
+    const allocator = std.testing.allocator;
+    var paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-wizard-post3") catch @panic("Paths.init");
+    defer paths.deinit(allocator);
+    var state = state_mod.State.init(allocator, "/tmp/nullhub-test-wizard-post3/state.json");
+    defer state.deinit();
+    var mgr = manager_mod.Manager.init(allocator, paths);
+    defer mgr.deinit();
+
+    const body = "{\"instance_name\":\"my-agent\",\"version\":\"latest\"}";
+    const json = handlePostWizard(allocator, "nullclaw", body, paths, &state, &mgr);
+    // In test environment, orchestrator.install will fail, so we get an error JSON
+    try std.testing.expect(json != null);
+    defer allocator.free(json.?);
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"error\":\"") != null);
 }
