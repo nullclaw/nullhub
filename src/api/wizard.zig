@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const registry = @import("../installer/registry.zig");
 const downloader = @import("../installer/downloader.zig");
 const platform = @import("../core/platform.zig");
+const local_binary = @import("../core/local_binary.zig");
 const helpers = @import("helpers.zig");
 const component_cli = @import("../core/component_cli.zig");
 const orchestrator = @import("../installer/orchestrator.zig");
@@ -154,6 +155,9 @@ fn findOrFetchComponentBinary(allocator: std.mem.Allocator, component: []const u
         return bin;
     }
     if (builtin.is_test) return null;
+    if (local_binary.find(allocator, component)) |bin| {
+        return bin;
+    }
     return fetchLatestComponentBinary(allocator, component, paths);
 }
 
@@ -163,9 +167,7 @@ fn fetchLatestComponentBinary(allocator: std.mem.Allocator, component: []const u
     defer release.deinit();
 
     const platform_key = comptime platform.detect().toString();
-    const asset_name = std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, platform_key }) catch return null;
-    defer allocator.free(asset_name);
-    const asset = registry.findAssetByName(release.value, asset_name) orelse return null;
+    const asset = registry.findAssetForComponentPlatform(allocator, release.value, component, platform_key) orelse return null;
 
     paths.ensureDirs() catch return null;
     const bin_path = paths.binary(allocator, component, release.value.tag_name) catch return null;

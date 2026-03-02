@@ -15,6 +15,7 @@ pub const Status = enum {
 pub const ManagedInstance = struct {
     component: []const u8,
     name: []const u8,
+    owns_memory: bool = false,
     status: Status = .stopped,
     pid: ?std.process.Child.Id = null,
     child: ?std.process.Child = null,
@@ -76,12 +77,23 @@ pub const Manager = struct {
     pub fn deinit(self: *Manager) void {
         var it = self.instances.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.launch_args_str.len > 0) {
-                self.allocator.free(entry.value_ptr.launch_args_str);
-            }
+            self.freeInstanceOwned(entry.value_ptr);
             self.allocator.free(entry.key_ptr.*);
         }
         self.instances.deinit();
+    }
+
+    fn freeInstanceOwned(self: *Manager, inst: *ManagedInstance) void {
+        if (!inst.owns_memory) return;
+        self.allocator.free(inst.component);
+        self.allocator.free(inst.name);
+        self.allocator.free(inst.health_endpoint);
+        self.allocator.free(inst.binary_path);
+        if (inst.working_dir.len > 0) self.allocator.free(inst.working_dir);
+        if (inst.config_path.len > 0) self.allocator.free(inst.config_path);
+        if (inst.launch_command.len > 0) self.allocator.free(inst.launch_command);
+        if (inst.launch_args_str.len > 0) self.allocator.free(inst.launch_args_str);
+        inst.owns_memory = false;
     }
 
     /// Start an instance. binary_path is the path to the component binary.
@@ -98,36 +110,73 @@ pub const Manager = struct {
         launch_command: []const u8,
     ) !void {
         const key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ component, name });
+        errdefer self.allocator.free(key);
 
-        // Build space-separated args string for restart
-        var args_buf = std.array_list.Managed(u8).init(self.allocator);
-        defer args_buf.deinit();
-        for (launch_args, 0..) |arg, i| {
-            if (i > 0) try args_buf.append(' ');
-            try args_buf.appendSlice(arg);
+        const component_owned = try self.allocator.dupe(u8, component);
+        errdefer self.allocator.free(component_owned);
+        const name_owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_owned);
+        const health_endpoint_owned = try self.allocator.dupe(u8, health_endpoint);
+        errdefer self.allocator.free(health_endpoint_owned);
+        const binary_path_owned = try self.allocator.dupe(u8, binary_path);
+        errdefer self.allocator.free(binary_path_owned);
+        const working_dir_owned = if (working_dir.len > 0) try self.allocator.dupe(u8, working_dir) else "";
+        errdefer if (working_dir_owned.len > 0) self.allocator.free(working_dir_owned);
+        const config_path_owned = if (config_path.len > 0) try self.allocator.dupe(u8, config_path) else "";
+        errdefer if (config_path_owned.len > 0) self.allocator.free(config_path_owned);
+        const launch_command_owned = if (launch_command.len > 0) try self.allocator.dupe(u8, launch_command) else "";
+        errdefer if (launch_command_owned.len > 0) self.allocator.free(launch_command_owned);
+
+        // Build space-separated args string for restart.
+        var launch_args_str: []const u8 = "";
+        if (launch_args.len > 0) {
+            var args_buf = std.array_list.Managed(u8).init(self.allocator);
+            defer args_buf.deinit();
+            for (launch_args, 0..) |arg, i| {
+                if (i > 0) try args_buf.append(' ');
+                try args_buf.appendSlice(arg);
+            }
+            launch_args_str = try args_buf.toOwnedSlice();
         }
-        const launch_args_str = try args_buf.toOwnedSlice();
+        errdefer if (launch_args_str.len > 0) self.allocator.free(launch_args_str);
 
         const cwd: ?[]const u8 = if (working_dir.len > 0) working_dir else null;
-        const result = try process.spawn(self.allocator, .{
+        var result = try process.spawn(self.allocator, .{
             .binary = binary_path,
             .argv = launch_args,
             .cwd = cwd,
         });
+        errdefer {
+            process.forceKill(result.pid) catch {};
+            _ = result.child.wait() catch {};
+        }
+
+        if (self.instances.fetchRemove(key)) |old_entry| {
+            var old_value = old_entry.value;
+            if (old_value.pid) |pid| {
+                process.terminate(pid) catch {};
+            }
+            if (old_value.child) |*child| {
+                _ = child.wait() catch {};
+            }
+            self.freeInstanceOwned(&old_value);
+            self.allocator.free(old_entry.key);
+        }
 
         const now = std.time.milliTimestamp();
         try self.instances.put(key, .{
-            .component = component,
-            .name = name,
+            .component = component_owned,
+            .name = name_owned,
+            .owns_memory = true,
             .status = .starting,
             .pid = result.pid,
             .child = result.child,
             .port = port,
-            .health_endpoint = health_endpoint,
-            .binary_path = binary_path,
-            .working_dir = working_dir,
-            .config_path = config_path,
-            .launch_command = launch_command,
+            .health_endpoint = health_endpoint_owned,
+            .binary_path = binary_path_owned,
+            .working_dir = working_dir_owned,
+            .config_path = config_path_owned,
+            .launch_command = launch_command_owned,
             .launch_args_str = launch_args_str,
             .started_at = now,
             .starting_since = now,

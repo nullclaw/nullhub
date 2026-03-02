@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
 const component_cli = @import("../core/component_cli.zig");
@@ -6,6 +7,7 @@ const manifest_mod = @import("../core/manifest.zig");
 const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
+const local_binary = @import("../core/local_binary.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -51,28 +53,7 @@ pub fn install(
     const comp = registry.findKnownComponent(opts.component) orelse
         return error.UnknownComponent;
 
-    // 2. Resolve version — fetch release info from GitHub
-    var release = if (std.mem.eql(u8, opts.version, "latest"))
-        registry.fetchLatestRelease(allocator, comp.repo) catch return error.FetchFailed
-    else
-        registry.fetchReleaseByTag(allocator, comp.repo, opts.version) catch return error.FetchFailed;
-    defer release.deinit();
-
-    // 3. We need the manifest to find the platform asset. Download binary first,
-    //    then run --export-manifest on it.
-    //    But we need the manifest to find the right asset name...
-    //    So we download by convention: asset name = "{component}-{platform}"
-    //    Then run --export-manifest for launch/health/port info.
-
-    // 4. Find asset for current platform by name convention
-    const platform_key = comptime platform.detect().toString();
-    const asset_name = std.fmt.allocPrint(allocator, "{s}-{s}", .{ opts.component, platform_key }) catch
-        return error.NoPlatformAsset;
-    defer allocator.free(asset_name);
-    const asset = registry.findAssetByName(release.value, asset_name) orelse
-        return error.NoPlatformAsset;
-
-    // 5. Create instance directories
+    // 2. Create instance directories
     p.ensureDirs() catch return error.DirCreationFailed;
 
     // Create instances/{component}/ directory
@@ -111,14 +92,61 @@ pub fn install(
         else => return error.DirCreationFailed,
     };
 
-    // 6. Download binary
-    const bin_path = p.binary(allocator, opts.component, release.value.tag_name) catch
-        return error.DownloadFailed;
-    defer allocator.free(bin_path);
-    downloader.download(allocator, asset.browser_download_url, bin_path) catch
-        return error.DownloadFailed;
+    // 3. Resolve binary source: GitHub release asset first, then local dev binary.
+    var resolved_version: ?[]const u8 = null;
+    errdefer if (resolved_version) |v| allocator.free(v);
+    var resolved_bin_path: ?[]const u8 = null;
+    errdefer if (resolved_bin_path) |b| allocator.free(b);
 
-    // 7. Run --export-manifest to get launch/health/port info
+    var release_fetched = false;
+    const platform_key = comptime platform.detect().toString();
+    // Development-first: for "latest" use local sibling binary when available.
+    if (std.mem.eql(u8, opts.version, "latest")) {
+        if (stageLocalBinary(allocator, p, opts.component)) |staged| {
+            resolved_version = staged.version;
+            resolved_bin_path = staged.bin_path;
+        }
+    }
+
+    if (resolved_bin_path == null or resolved_version == null) {
+        const release_result = if (std.mem.eql(u8, opts.version, "latest"))
+            registry.fetchLatestRelease(allocator, comp.repo)
+        else
+            registry.fetchReleaseByTag(allocator, comp.repo, opts.version);
+        if (release_result) |release| {
+            defer release.deinit();
+            release_fetched = true;
+
+            if (registry.findAssetForComponentPlatform(allocator, release.value, opts.component, platform_key)) |asset| {
+                resolved_version = allocator.dupe(u8, release.value.tag_name) catch return error.FetchFailed;
+                const bin_path = p.binary(allocator, opts.component, resolved_version.?) catch return error.DownloadFailed;
+                resolved_bin_path = bin_path;
+                downloader.download(allocator, asset.browser_download_url, bin_path) catch {
+                    allocator.free(bin_path);
+                    resolved_bin_path = null;
+                    allocator.free(resolved_version.?);
+                    resolved_version = null;
+                };
+            }
+        } else |_| {}
+    }
+
+    if (resolved_bin_path == null or resolved_version == null) {
+        if (stageLocalBinary(allocator, p, opts.component)) |staged| {
+            resolved_version = staged.version;
+            resolved_bin_path = staged.bin_path;
+        } else if (!release_fetched) {
+            return error.FetchFailed;
+        } else {
+            return error.NoPlatformAsset;
+        }
+    }
+
+    const version = resolved_version.?;
+    const bin_path = resolved_bin_path.?;
+    defer allocator.free(bin_path);
+
+    // 4. Run --export-manifest to get launch/health/port info
     const manifest_json = component_cli.exportManifest(allocator, bin_path) catch
         return error.ManifestNotFound;
     defer allocator.free(manifest_json);
@@ -127,19 +155,19 @@ pub fn install(
     defer parsed_manifest.deinit();
     const m = parsed_manifest.value;
 
-    // 8. Run --from-json to generate config (component owns its config generation)
+    // 5. Run --from-json to generate config (component owns its config generation)
     const from_json_result = component_cli.fromJson(allocator, bin_path, opts.answers_json, inst_dir) catch
         return error.ConfigGenerationFailed;
     defer allocator.free(from_json_result);
 
-    // 9. Register in state.json
+    // 6. Register in state.json
     s.addInstance(opts.component, opts.instance_name, .{
-        .version = release.value.tag_name,
+        .version = version,
         .auto_start = true,
     }) catch return error.StateError;
     s.save() catch return error.StateError;
 
-    // 10. Start process via Manager
+    // 7. Start process via Manager
     const port = resolveConfiguredPort(allocator, opts.answers_json, if (m.ports.len > 0) m.ports[0].default else 0);
     mgr.startInstance(
         opts.component,
@@ -154,7 +182,7 @@ pub fn install(
     ) catch return error.StartFailed;
 
     return .{
-        .version = allocator.dupe(u8, release.value.tag_name) catch return error.FetchFailed,
+        .version = version,
         .instance_name = opts.instance_name,
     };
 }
@@ -184,6 +212,30 @@ fn resolveConfiguredPort(allocator: std.mem.Allocator, answers_json: []const u8,
         if (a.gateway_port) |v| return v;
     }
     return default_port;
+}
+
+fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8) ?struct { version: []const u8, bin_path: []const u8 } {
+    if (builtin.is_test) return null;
+    const local_path = local_binary.find(allocator, component) orelse return null;
+    defer allocator.free(local_path);
+
+    const version = allocator.dupe(u8, "dev-local") catch return null;
+    errdefer allocator.free(version);
+    const bin_path = p.binary(allocator, component, version) catch return null;
+    errdefer allocator.free(bin_path);
+
+    if (std.fs.openFileAbsolute(bin_path, .{})) |f| {
+        f.close();
+        return .{ .version = version, .bin_path = bin_path };
+    } else |_| {}
+
+    std.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
+    if (std.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
+        defer f.close();
+        f.chmod(0o755) catch {};
+    } else |_| {}
+
+    return .{ .version = version, .bin_path = bin_path };
 }
 
 /// Write content to a file at an absolute path, creating the file if needed.

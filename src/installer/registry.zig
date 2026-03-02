@@ -95,6 +95,43 @@ pub fn findAssetByName(release: ReleaseInfo, name: []const u8) ?AssetInfo {
     return null;
 }
 
+fn matchesAssetNameOrExt(asset_name: []const u8, base_name: []const u8) bool {
+    if (std.mem.eql(u8, asset_name, base_name)) return true;
+    if (asset_name.len == base_name.len + 4 and std.mem.startsWith(u8, asset_name, base_name)) {
+        const ext = asset_name[base_name.len..];
+        if (std.mem.eql(u8, ext, ".bin") or std.mem.eql(u8, ext, ".exe")) return true;
+    }
+    return false;
+}
+
+/// Find an asset for component+platform across known naming conventions:
+/// - `{component}-{arch}-{os}` (platform key order)
+/// - `{component}-{os}-{arch}` (release convention in nullclaw repos)
+/// Optional `.bin` / `.exe` suffix is accepted.
+pub fn findAssetForComponentPlatform(
+    allocator: std.mem.Allocator,
+    release: ReleaseInfo,
+    component: []const u8,
+    platform_key: []const u8,
+) ?AssetInfo {
+    const candidate_primary = std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, platform_key }) catch return null;
+    defer allocator.free(candidate_primary);
+    for (release.assets) |asset| {
+        if (matchesAssetNameOrExt(asset.name, candidate_primary)) return asset;
+    }
+
+    const dash = std.mem.indexOfScalar(u8, platform_key, '-') orelse return null;
+    const arch = platform_key[0..dash];
+    const os = platform_key[dash + 1 ..];
+    const candidate_swapped = std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{ component, os, arch }) catch return null;
+    defer allocator.free(candidate_swapped);
+    for (release.assets) |asset| {
+        if (matchesAssetNameOrExt(asset.name, candidate_swapped)) return asset;
+    }
+
+    return null;
+}
+
 // ─── HTTP fetch (via curl) ───────────────────────────────────────────────────
 
 /// Fetch the latest release information for a GitHub repository.
@@ -272,4 +309,18 @@ test "findAssetForPlatform matches correct asset" {
     // No match for unknown platform
     const unknown_asset = findAssetForPlatform(release, "riscv64-linux", parsed_manifest.value);
     try std.testing.expect(unknown_asset == null);
+}
+
+test "findAssetForComponentPlatform matches swapped platform order" {
+    const allocator = std.testing.allocator;
+    const release = ReleaseInfo{
+        .tag_name = "v1.0.0",
+        .assets = &.{
+            .{ .name = "nullclaw-macos-aarch64.bin", .browser_download_url = "https://example.com/macos", .size = 1 },
+        },
+    };
+
+    const asset = findAssetForComponentPlatform(allocator, release, "nullclaw", "aarch64-macos");
+    try std.testing.expect(asset != null);
+    try std.testing.expectEqualStrings("nullclaw-macos-aarch64.bin", asset.?.name);
 }
