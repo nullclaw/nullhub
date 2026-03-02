@@ -1,5 +1,6 @@
 <script lang="ts">
   import WizardStep from './WizardStep.svelte';
+  import ProviderList from './ProviderList.svelte';
   import { api } from '$lib/api/client';
 
   let { component = '', steps = [], onComplete } = $props<{
@@ -60,6 +61,18 @@
     }
   });
 
+  // Initialize default provider entry when provider step exists
+  $effect(() => {
+    if (!('_providers' in answers)) {
+      const providerStep = steps.find(s => s.id === 'provider');
+      if (providerStep) {
+        const rec = providerStep.options?.find((o: any) => o.recommended);
+        const defaultProvider = rec?.value || providerStep.options?.[0]?.value || '';
+        answers['_providers'] = JSON.stringify([{ provider: defaultProvider, api_key: '', model: '' }]);
+      }
+    }
+  });
+
   function isStepVisible(step: any): boolean {
     if (!step.condition) return true;
     const ref = answers[step.condition.step] || '';
@@ -79,11 +92,15 @@
     installing = true;
     installMessage = 'Installing...';
     try {
-      const payload = {
+      const { _providers, ...rest } = answers;
+      const payload: any = {
         instance_name: instanceName,
         version: selectedVersion,
-        ...answers
+        ...rest
       };
+      if (_providers) {
+        try { payload.providers = JSON.parse(_providers); } catch {}
+      }
       const result = await api.postWizard(component, payload);
       installMessage = result.message || 'Installation complete!';
       onComplete?.();
@@ -121,11 +138,22 @@
     {/if}
 
     {#each visibleSteps as step}
-      <WizardStep
-        {step}
-        value={answers[step.id] || ''}
-        onchange={(v) => answers[step.id] = v}
-      />
+      {#if step.id === 'provider'}
+        <ProviderList
+          providers={step.options || []}
+          value={answers['_providers'] || '[]'}
+          onchange={(v) => answers['_providers'] = v}
+          {component}
+        />
+      {:else if step.id === 'api_key' || step.id === 'model'}
+        <!-- Handled by ProviderList above -->
+      {:else}
+        <WizardStep
+          {step}
+          value={answers[step.id] || ''}
+          onchange={(v) => answers[step.id] = v}
+        />
+      {/if}
     {/each}
   </div>
 
