@@ -154,7 +154,7 @@ pub const Server = struct {
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (std.mem.eql(u8, target, "/api/components")) {
-                if (components_api.handleList(allocator)) |json| {
+                if (components_api.handleList(allocator, self.state)) |json| {
                     return .{
                         .status = "200 OK",
                         .content_type = "application/json",

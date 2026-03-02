@@ -1,6 +1,7 @@
 const std = @import("std");
 const registry = @import("../installer/registry.zig");
 const paths_mod = @import("../core/paths.zig");
+const state_mod = @import("../core/state.zig");
 
 // ─── Display name derivation ─────────────────────────────────────────────────
 
@@ -28,40 +29,21 @@ fn hasStandaloneInstall(allocator: std.mem.Allocator, component: []const u8) boo
     return true;
 }
 
-/// Count the number of instance subdirectories for a component.
-/// Returns 0 if the instances directory doesn't exist.
-fn countInstances(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8) !u32 {
-    const inst_base = try std.fs.path.join(allocator, &.{ p.root, "instances", component });
-    defer allocator.free(inst_base);
-
-    var dir = std.fs.openDirAbsolute(inst_base, .{ .iterate = true }) catch return 0;
-    defer dir.close();
-
-    var count: u32 = 0;
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind == .directory or entry.kind == .sym_link) {
-            count += 1;
-        }
-    }
-    return count;
+/// Count the number of instances for a component from state.
+fn countInstancesFromState(s: *state_mod.State, component: []const u8) u32 {
+    const inst_map = s.instances.get(component) orelse return 0;
+    return @intCast(inst_map.count());
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// Handle GET /api/components — returns list of all known components with metadata.
 /// Caller owns the returned memory.
-pub fn handleList(allocator: std.mem.Allocator) ![]const u8 {
-    var p = paths_mod.Paths.init(allocator, null) catch |err| switch (err) {
-        error.HomeNotSet => return try buildListJson(allocator, null),
-        else => return err,
-    };
-    defer p.deinit(allocator);
-
-    return buildListJson(allocator, p);
+pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 {
+    return buildListJson(allocator, s);
 }
 
-fn buildListJson(allocator: std.mem.Allocator, p: ?paths_mod.Paths) ![]const u8 {
+fn buildListJson(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     const writer = buf.writer();
@@ -71,11 +53,8 @@ fn buildListJson(allocator: std.mem.Allocator, p: ?paths_mod.Paths) ![]const u8 
     for (registry.known_components, 0..) |comp, i| {
         if (i > 0) try writer.writeByte(',');
 
-        // Count managed instances if paths are available
-        var instance_count: u32 = 0;
-        if (p) |pp| {
-            instance_count = countInstances(allocator, pp, comp.name) catch 0;
-        }
+        // Count managed instances from state
+        const instance_count = countInstancesFromState(s, comp.name);
 
         // standalone = has dot-dir config but not yet imported into nullhub
         const has_dot_dir = hasStandaloneInstall(allocator, comp.name);
@@ -198,8 +177,10 @@ test "deriveDisplayName capitalizes first letter" {
 
 test "handleList returns valid JSON with all 3 known components" {
     const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-components.json");
+    defer s.deinit();
 
-    const json = try handleList(allocator);
+    const json = try handleList(allocator, &s);
     defer allocator.free(json);
 
     // Verify it starts and ends correctly
