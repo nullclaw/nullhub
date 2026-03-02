@@ -1,12 +1,37 @@
 <script lang="ts">
+  import { api } from '$lib/api/client';
+
   let { name = '', displayName = '', description = '', installed = false, standalone = false, instanceCount = 0 } = $props();
+  let importing = $state(false);
+  let imported = $state(false);
+
+  async function handleImport(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    importing = true;
+    try {
+      await api.importInstance(name);
+      imported = true;
+      standalone = false;
+      installed = true;
+      instanceCount = 1;
+    } catch (err) {
+      console.error('Import failed:', err);
+    } finally {
+      importing = false;
+    }
+  }
 </script>
 
 <a href="/install/{name}" class="component-card">
   <div class="card-header">
     <h3>{displayName}</h3>
-    {#if standalone}
-      <span class="installed-badge standalone">Standalone</span>
+    {#if imported}
+      <span class="installed-badge">Imported</span>
+    {:else if standalone}
+      <button class="import-btn" onclick={handleImport} disabled={importing}>
+        {importing ? 'Importing...' : 'Import'}
+      </button>
     {:else if installed}
       <span class="installed-badge">{instanceCount} installed</span>
     {/if}
@@ -51,8 +76,24 @@
     border-radius: var(--radius-sm);
   }
 
-  .installed-badge.standalone {
-    background: var(--text-secondary);
+  .import-btn {
+    font-size: 0.75rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 0.25rem 0.75rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .import-btn:hover {
+    opacity: 0.85;
+  }
+
+  .import-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   p {

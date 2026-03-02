@@ -161,6 +161,46 @@ pub fn handleDelete(s: *state_mod.State, manager: *manager_mod.Manager, componen
     return jsonOk("{\"status\":\"deleted\"}");
 }
 
+/// POST /api/instances/{component}/import — import a standalone installation.
+/// Copies config and data from ~/.{component}/ into the nullhub instance directory.
+/// The binary will be downloaded via the normal install flow on first start.
+pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8) ApiResponse {
+    const home = std.posix.getenv("HOME") orelse return helpers.serverError();
+
+    // 1. Verify standalone dir exists
+    const dot_dir = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return helpers.serverError();
+    defer allocator.free(dot_dir);
+    std.fs.accessAbsolute(dot_dir, .{}) catch return notFound();
+
+    // 2. Create instance directory structure
+    const inst_dir = paths.instanceDir(allocator, component, "default") catch return helpers.serverError();
+    defer allocator.free(inst_dir);
+
+    // Ensure parent component dir exists
+    const comp_dir = std.fs.path.join(allocator, &.{ paths.root, "instances", component }) catch return helpers.serverError();
+    defer allocator.free(comp_dir);
+    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return helpers.serverError(),
+    };
+
+    // 3. Symlink the entire standalone dir as the instance dir
+    //    ~/.nullclaw → ~/.nullhub/instances/nullclaw/default
+    //    This preserves all data in place (config, auth, workspace, state, logs)
+    std.fs.deleteFileAbsolute(inst_dir) catch {};
+    std.fs.deleteTreeAbsolute(inst_dir) catch {};
+    std.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
+
+    // 4. Register in state
+    s.addInstance(component, "default", .{
+        .version = "standalone",
+        .auto_start = false,
+    }) catch return helpers.serverError();
+    s.save() catch return helpers.serverError();
+
+    return jsonOk("{\"status\":\"imported\",\"instance\":\"default\"}");
+}
+
 /// PATCH /api/instances/{component}/{name} — update settings (auto_start).
 pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8, body: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
@@ -211,6 +251,11 @@ pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *man
         if (std.mem.eql(u8, action, "restart")) return handleRestart(allocator, s, manager, paths, parsed.component, parsed.name);
 
         return notFound();
+    }
+
+    // POST /api/instances/{component}/import — import standalone installation
+    if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, parsed.name, "import")) {
+        return handleImport(allocator, s, paths, parsed.component);
     }
 
     // No action — CRUD on the instance itself.

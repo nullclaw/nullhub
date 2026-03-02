@@ -40,7 +40,7 @@ fn countInstances(allocator: std.mem.Allocator, p: paths_mod.Paths, component: [
     var count: u32 = 0;
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        if (entry.kind == .directory) {
+        if (entry.kind == .directory or entry.kind == .sym_link) {
             count += 1;
         }
     }
@@ -77,9 +77,10 @@ fn buildListJson(allocator: std.mem.Allocator, p: ?paths_mod.Paths) ![]const u8 
             instance_count = countInstances(allocator, pp, comp.name) catch 0;
         }
 
-        // Check for standalone installation (~/.{component}/config.json)
-        const standalone = hasStandaloneInstall(allocator, comp.name);
-        const installed = standalone or instance_count > 0;
+        // standalone = has dot-dir config but not yet imported into nullhub
+        const has_dot_dir = hasStandaloneInstall(allocator, comp.name);
+        const standalone = has_dot_dir and instance_count == 0;
+        const installed = has_dot_dir or instance_count > 0;
 
         try writer.print(
             "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"{s}\",\"repo\":\"{s}\",\"installed\":{s},\"standalone\":{s},\"instance_count\":{d}}}",

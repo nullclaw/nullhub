@@ -52,4 +52,7 @@ export const api = {
   serviceUninstall: () => request<any>('/service/uninstall', { method: 'POST' }),
 
   serviceStatus: () => request<any>('/service/status'),
+
+  importInstance: (component: string) =>
+    request<any>(`/instances/${component}/import`, { method: 'POST' }),
 };
