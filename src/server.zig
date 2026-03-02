@@ -3,6 +3,10 @@ const auth = @import("auth.zig");
 const instances_api = @import("api/instances.zig");
 const platform = @import("core/platform.zig");
 const components_api = @import("api/components.zig");
+const config_api = @import("api/config.zig");
+const logs_api = @import("api/logs.zig");
+const status_api = @import("api/status.zig");
+const paths_mod = @import("core/paths.zig");
 const wizard_api = @import("api/wizard.zig");
 
 const version = "0.1.0";
@@ -227,6 +231,59 @@ fn route(allocator: std.mem.Allocator, method: []const u8, target: []const u8, b
                 .content_type = "application/json",
                 .body = "{\"error\":\"method not allowed\"}",
             };
+        }
+    }
+
+    // Config API — /api/instances/{c}/{n}/config
+    if (config_api.isConfigPath(target)) {
+        if (config_api.parseConfigPath(target)) |parsed| {
+            const p = paths_mod.Paths.init(allocator, null) catch return .{
+                .status = "500 Internal Server Error",
+                .content_type = "application/json",
+                .body = "{\"error\":\"internal error\"}",
+            };
+            if (std.mem.eql(u8, method, "GET")) {
+                const resp = config_api.handleGet(allocator, p, parsed.component, parsed.name);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            if (std.mem.eql(u8, method, "PUT")) {
+                const resp = config_api.handlePut(allocator, p, parsed.component, parsed.name, body);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            if (std.mem.eql(u8, method, "PATCH")) {
+                const resp = config_api.handlePatch(allocator, p, parsed.component, parsed.name, body);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            return .{
+                .status = "405 Method Not Allowed",
+                .content_type = "application/json",
+                .body = "{\"error\":\"method not allowed\"}",
+            };
+        }
+    }
+
+    // Logs API — /api/instances/{c}/{n}/logs and /api/instances/{c}/{n}/logs/stream
+    if (logs_api.isLogsPath(target)) {
+        if (logs_api.parseLogsPath(target)) |parsed| {
+            if (!std.mem.eql(u8, method, "GET")) {
+                return .{
+                    .status = "405 Method Not Allowed",
+                    .content_type = "application/json",
+                    .body = "{\"error\":\"method not allowed\"}",
+                };
+            }
+            if (parsed.is_stream) {
+                const resp = logs_api.handleStream();
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            const p = paths_mod.Paths.init(allocator, null) catch return .{
+                .status = "500 Internal Server Error",
+                .content_type = "application/json",
+                .body = "{\"error\":\"internal error\"}",
+            };
+            const max_lines = logs_api.parseLines(target);
+            const resp = logs_api.handleGet(allocator, p, parsed.component, parsed.name, max_lines);
+            return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
         }
     }
 
