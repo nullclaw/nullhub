@@ -16,6 +16,7 @@ pub fn fetchReleases(allocator: std.mem.Allocator, repo: []const u8) !std.json.P
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
+        .max_output_bytes = 2 * 1024 * 1024,
     }) catch return error.FetchFailed;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);

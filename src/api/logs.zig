@@ -158,6 +158,34 @@ fn buildLinesJson(buf: *std.array_list.Managed(u8), contents: []const u8, max_li
     try buf.appendSlice("]}");
 }
 
+/// DELETE /api/instances/{c}/{n}/logs — truncate stdout.log.
+pub fn handleDelete(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+    const logs_dir = p.instanceLogs(allocator, component, name) catch return .{
+        .status = "500 Internal Server Error",
+        .content_type = "application/json",
+        .body = "{\"error\":\"internal error\"}",
+    };
+    defer allocator.free(logs_dir);
+
+    const log_path = std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" }) catch return .{
+        .status = "500 Internal Server Error",
+        .content_type = "application/json",
+        .body = "{\"error\":\"internal error\"}",
+    };
+    defer allocator.free(log_path);
+
+    // Truncate the file (open for writing, which clears contents).
+    if (std.fs.createFileAbsolute(log_path, .{ .truncate = true })) |file| {
+        file.close();
+    } else |_| {}
+
+    return .{
+        .status = "200 OK",
+        .content_type = "application/json",
+        .body = "{\"status\":\"cleared\"}",
+    };
+}
+
 /// GET /api/instances/{c}/{n}/logs/stream — SSE endpoint placeholder.
 pub fn handleStream() ApiResponse {
     return .{

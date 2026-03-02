@@ -24,15 +24,23 @@
       });
     }
   }
+
+  async function clearLogs() {
+    await api.clearLogs(component, name);
+    lines = [];
+  }
 </script>
 
 <div class="log-viewer">
   <div class="log-header">
     <span>Logs</span>
-    <label class="auto-scroll">
-      <input type="checkbox" bind:checked={autoScroll} />
-      Auto-scroll
-    </label>
+    <div class="log-actions">
+      <button class="clear-btn" onclick={clearLogs}>Clear</button>
+      <label class="auto-scroll">
+        <input type="checkbox" bind:checked={autoScroll} />
+        Auto-scroll
+      </label>
+    </div>
   </div>
   <div class="log-content" bind:this={container}>
     {#each lines as line}
@@ -78,6 +86,25 @@
     color: var(--text-muted);
     text-align: center;
     padding: 2rem;
+  }
+  .log-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .clear-btn {
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .clear-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
   }
   .auto-scroll {
     display: flex;

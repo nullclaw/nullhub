@@ -34,6 +34,8 @@ export const api = {
     request<any>(`/instances/${c}/${n}/config`, { method: 'PUT', body: JSON.stringify(config) }),
   getLogs: (c: string, n: string, lines = 100) =>
     request<any>(`/instances/${c}/${n}/logs?lines=${lines}`),
+  clearLogs: (c: string, n: string) =>
+    request<any>(`/instances/${c}/${n}/logs`, { method: 'DELETE' }),
   getUpdates: () => request<any>('/updates'),
   getSettings: () => request<any>('/settings'),
   putSettings: (settings: any) =>

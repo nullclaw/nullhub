@@ -410,6 +410,10 @@ pub const Server = struct {
         // Logs API — /api/instances/{c}/{n}/logs and /api/instances/{c}/{n}/logs/stream
         if (logs_api.isLogsPath(target)) {
             if (logs_api.parseLogsPath(target)) |parsed| {
+                if (std.mem.eql(u8, method, "DELETE")) {
+                    const resp = logs_api.handleDelete(allocator, self.paths, parsed.component, parsed.name);
+                    return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+                }
                 if (!std.mem.eql(u8, method, "GET")) {
                     return .{
                         .status = "405 Method Not Allowed",
