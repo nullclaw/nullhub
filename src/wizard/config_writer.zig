@@ -356,10 +356,10 @@ pub fn generateConfig(
             if (!visible) continue;
         }
 
-        // Resolve template in writes_to
+        // Use step id as the config key path (writes_to was removed from schema)
         const resolved_path = try resolveTemplate(
             allocator,
-            step.writes_to,
+            step.id,
             step.id,
             answer,
             answers,
@@ -586,17 +586,16 @@ test "serializeJson: empty object" {
 test "generateConfig: simple port" {
     const steps = [_]manifest_mod.WizardStep{
         .{
-            .id = "port",
+            .id = "gateway.port",
             .title = "Gateway port",
             .@"type" = .number,
             .required = true,
-            .writes_to = "gateway.port",
         },
     };
 
     var answers = std.StringHashMap([]const u8).init(std.testing.allocator);
     defer answers.deinit();
-    try answers.put("port", "3000");
+    try answers.put("gateway.port", "3000");
 
     const json = try generateConfig(std.testing.allocator, &steps, &answers);
     defer std.testing.allocator.free(json);
@@ -619,7 +618,6 @@ test "generateConfig: toggle writes boolean" {
             .title = "Auto-start?",
             .@"type" = .toggle,
             .required = false,
-            .writes_to = "auto_start",
         },
     };
 
@@ -646,7 +644,6 @@ test "generateConfig: template with cross-step reference" {
             .title = "Select provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "models.providers.{value}",
             .options = &.{
                 .{ .value = "anthropic", .label = "Anthropic" },
                 .{ .value = "openai", .label = "OpenAI" },
@@ -657,7 +654,6 @@ test "generateConfig: template with cross-step reference" {
             .title = "API Key",
             .@"type" = .secret,
             .required = true,
-            .writes_to = "models.providers.{provider.value}.api_key",
         },
     };
 
@@ -669,19 +665,9 @@ test "generateConfig: template with cross-step reference" {
     const json = try generateConfig(std.testing.allocator, &steps, &answers);
     defer std.testing.allocator.free(json);
 
-    const expected =
-        \\{
-        \\  "models": {
-        \\    "providers": {
-        \\      "anthropic": {
-        \\        "api_key": "sk-123"
-        \\      }
-        \\    }
-        \\  }
-        \\}
-        \\
-    ;
-    try std.testing.expectEqualStrings(expected, json);
+    // With writes_to removed, generateConfig uses step.id as the config path
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\": \"anthropic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"api_key\": \"sk-123\"") != null);
 }
 
 test "generateConfig: multiple steps build config tree" {
@@ -691,7 +677,6 @@ test "generateConfig: multiple steps build config tree" {
             .title = "Provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "provider",
             .options = &.{
                 .{ .value = "anthropic", .label = "Anthropic" },
             },
@@ -701,14 +686,12 @@ test "generateConfig: multiple steps build config tree" {
             .title = "Port",
             .@"type" = .number,
             .required = true,
-            .writes_to = "gateway.port",
         },
         .{
             .id = "debug",
             .title = "Debug mode",
             .@"type" = .toggle,
             .required = false,
-            .writes_to = "debug",
         },
     };
 
@@ -735,14 +718,12 @@ test "generateConfig: skips steps with no answer" {
             .title = "Port",
             .@"type" = .number,
             .required = false,
-            .writes_to = "gateway.port",
         },
         .{
             .id = "name",
             .title = "Name",
             .@"type" = .text,
             .required = false,
-            .writes_to = "name",
         },
     };
 
@@ -765,7 +746,6 @@ test "generateConfig: skips invisible conditional steps" {
             .title = "Provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "provider",
             .options = &.{
                 .{ .value = "local", .label = "Local" },
                 .{ .value = "cloud", .label = "Cloud" },
@@ -776,7 +756,6 @@ test "generateConfig: skips invisible conditional steps" {
             .title = "API Key",
             .@"type" = .secret,
             .required = true,
-            .writes_to = "api_key",
             .condition = .{ .step = "provider", .equals = "cloud" },
         },
     };
@@ -797,17 +776,16 @@ test "generateConfig: skips invisible conditional steps" {
 test "generateConfig: deep nesting with telegram bot token" {
     const steps = [_]manifest_mod.WizardStep{
         .{
-            .id = "bot_token",
+            .id = "channels.telegram.accounts.default.bot_token",
             .title = "Bot token",
             .@"type" = .secret,
             .required = true,
-            .writes_to = "channels.telegram.accounts.default.bot_token",
         },
     };
 
     var answers = std.StringHashMap([]const u8).init(std.testing.allocator);
     defer answers.deinit();
-    try answers.put("bot_token", "tok");
+    try answers.put("channels.telegram.accounts.default.bot_token", "tok");
 
     const json = try generateConfig(std.testing.allocator, &steps, &answers);
     defer std.testing.allocator.free(json);

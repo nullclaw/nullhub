@@ -11,15 +11,12 @@ pub const Manifest = struct {
     repo: []const u8,
     platforms: std.json.ArrayHashMap(PlatformEntry),
     build_from_source: ?BuildFromSource = null,
-    config: ConfigSpec,
     launch: LaunchSpec,
     health: HealthSpec,
     ports: []const PortSpec,
     wizard: WizardSpec,
-    ui_modules: []const UiModuleSpec,
     depends_on: []const []const u8,
     connects_to: []const ConnectionSpec,
-    migrations: []const MigrationSpec = &.{},
 };
 
 pub const PlatformEntry = struct {
@@ -31,10 +28,6 @@ pub const BuildFromSource = struct {
     zig_version: []const u8,
     command: []const u8,
     output: []const u8,
-};
-
-pub const ConfigSpec = struct {
-    path: []const u8,
 };
 
 pub const LaunchSpec = struct {
@@ -67,7 +60,7 @@ pub const WizardStep = struct {
     @"type": StepType,
     required: bool = true,
     options: []const StepOption = &.{},
-    writes_to: []const u8,
+    dynamic_source: ?DynamicSource = null,
     condition: ?StepCondition = null,
 };
 
@@ -78,6 +71,12 @@ pub const StepType = enum {
     text,
     number,
     toggle,
+    dynamic_select,
+};
+
+pub const DynamicSource = struct {
+    command: []const u8,
+    depends_on: []const []const u8 = &.{},
 };
 
 pub const StepOption = struct {
@@ -93,25 +92,11 @@ pub const StepCondition = struct {
     contains: ?[]const u8 = null,
 };
 
-pub const UiModuleSpec = struct {
-    name: []const u8,
-    repo: []const u8,
-    mount_path: []const u8,
-    label: []const u8,
-    icon: []const u8,
-};
-
 pub const ConnectionSpec = struct {
     component: []const u8,
     role: []const u8 = "",
     description: []const u8 = "",
     auto_config: ?std.json.Value = null,
-};
-
-pub const MigrationSpec = struct {
-    from: []const u8,
-    to: []const u8,
-    actions: []const std.json.Value = &.{},
 };
 
 // ─── Parse functions ─────────────────────────────────────────────────────────
@@ -147,15 +132,12 @@ test "parse minimal manifest" {
         \\  "platforms": {
         \\    "aarch64-macos": { "asset": "nullclaw-macos-aarch64", "binary": "nullclaw" }
         \\  },
-        \\  "config": { "path": "config.json" },
         \\  "launch": { "command": "gateway", "args": [] },
         \\  "health": { "endpoint": "/health", "port_from_config": "gateway.port", "interval_ms": 15000 },
         \\  "ports": [{ "name": "gateway", "config_key": "gateway.port", "default": 3000, "protocol": "http" }],
         \\  "wizard": { "steps": [] },
-        \\  "ui_modules": [],
         \\  "depends_on": [],
-        \\  "connects_to": [],
-        \\  "migrations": []
+        \\  "connects_to": []
         \\}
     ;
 
@@ -189,7 +171,6 @@ test "parse manifest with wizard steps and conditions" {
         \\  "icon": "test",
         \\  "repo": "test/testcomp",
         \\  "platforms": {},
-        \\  "config": { "path": "config.json" },
         \\  "launch": { "command": "serve" },
         \\  "health": { "endpoint": "/health", "port_from_config": "port" },
         \\  "ports": [],
@@ -199,7 +180,6 @@ test "parse manifest with wizard steps and conditions" {
         \\        "id": "provider",
         \\        "title": "Select provider",
         \\        "type": "select",
-        \\        "writes_to": "provider",
         \\        "options": [
         \\          { "value": "openai", "label": "OpenAI" },
         \\          { "value": "anthropic", "label": "Anthropic" }
@@ -210,12 +190,10 @@ test "parse manifest with wizard steps and conditions" {
         \\        "title": "Enter API key",
         \\        "description": "Your provider API key",
         \\        "type": "secret",
-        \\        "writes_to": "api_key",
         \\        "condition": { "step": "provider", "not_equals": "local" }
         \\      }
         \\    ]
         \\  },
-        \\  "ui_modules": [],
         \\  "depends_on": [],
         \\  "connects_to": []
         \\}
@@ -254,12 +232,10 @@ test "parse manifest with unknown fields succeeds" {
         \\  "icon": "ic",
         \\  "repo": "r/r",
         \\  "platforms": {},
-        \\  "config": { "path": "c.json" },
         \\  "launch": { "command": "run" },
         \\  "health": { "endpoint": "/h", "port_from_config": "p" },
         \\  "ports": [],
         \\  "wizard": { "steps": [] },
-        \\  "ui_modules": [],
         \\  "depends_on": [],
         \\  "connects_to": [],
         \\  "unknown_field_1": "should be ignored",

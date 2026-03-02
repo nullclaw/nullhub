@@ -174,7 +174,8 @@ test "validateAnswers: required field missing" {
             .title = "Enter name",
             .@"type" = .text,
             .required = true,
-            .writes_to = "name",
+
+
         },
     };
 
@@ -196,7 +197,8 @@ test "validateAnswers: invalid select option" {
             .title = "Select provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "provider",
+
+
             .options = &.{
                 .{ .value = "openai", .label = "OpenAI" },
                 .{ .value = "anthropic", .label = "Anthropic" },
@@ -223,7 +225,8 @@ test "validateAnswers: valid answers pass" {
             .title = "Select provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "provider",
+
+
             .options = &.{
                 .{ .value = "openai", .label = "OpenAI" },
                 .{ .value = "anthropic", .label = "Anthropic" },
@@ -234,7 +237,8 @@ test "validateAnswers: valid answers pass" {
             .title = "Port number",
             .@"type" = .number,
             .required = true,
-            .writes_to = "port",
+
+
         },
     };
 
@@ -256,7 +260,8 @@ test "validateAnswers: skips invisible steps" {
             .title = "API Key",
             .@"type" = .secret,
             .required = true,
-            .writes_to = "api_key",
+
+
             .condition = .{ .step = "provider", .equals = "cloud" },
         },
     };
@@ -278,14 +283,16 @@ test "getVisibleSteps filters by condition" {
             .title = "Select provider",
             .@"type" = .select,
             .required = true,
-            .writes_to = "provider",
+
+
         },
         .{
             .id = "api_key",
             .title = "API Key",
             .@"type" = .secret,
             .required = true,
-            .writes_to = "api_key",
+
+
             .condition = .{ .step = "provider", .equals = "cloud" },
         },
         .{
@@ -293,7 +300,8 @@ test "getVisibleSteps filters by condition" {
             .title = "Model",
             .@"type" = .text,
             .required = false,
-            .writes_to = "model",
+
+
         },
     };
 

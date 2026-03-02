@@ -1,7 +1,6 @@
 const std = @import("std");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
-const manifest = @import("../core/manifest.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -86,11 +85,12 @@ pub fn isModuleInstalled(dest_dir: []const u8) bool {
 /// 4. Removes the temporary tarball after extraction.
 pub fn downloadUiModule(
     allocator: std.mem.Allocator,
-    module_spec: manifest.UiModuleSpec,
+    repo: []const u8,
+    module_name: []const u8,
     version: []const u8,
     dest_dir: []const u8,
 ) !void {
-    const url = try buildBundleAssetUrl(allocator, module_spec.repo, version, module_spec.name);
+    const url = try buildBundleAssetUrl(allocator, repo, version, module_name);
     defer allocator.free(url);
 
     // Ensure dest_dir exists before downloading into it.
@@ -107,7 +107,7 @@ pub fn downloadUiModule(
         else => return err,
     };
 
-    const archive_path = try std.fmt.allocPrint(allocator, "{s}/{s}-bundle.tar.gz", .{ dest_dir, module_spec.name });
+    const archive_path = try std.fmt.allocPrint(allocator, "{s}/{s}-bundle.tar.gz", .{ dest_dir, module_name });
     defer allocator.free(archive_path);
 
     try downloader.download(allocator, url, archive_path);
