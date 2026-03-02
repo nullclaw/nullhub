@@ -14,12 +14,44 @@
   let installing = $state(false);
   let installMessage = $state('');
 
+  // Auto-generate instance name on mount
+  $effect(() => {
+    if (component && !instanceName) {
+      api.getInstances().then((data: any) => {
+        const existing = data?.instances?.[component] || {};
+        const names = Object.keys(existing);
+        let id = 1;
+        while (names.includes(`instance-${id}`)) id++;
+        instanceName = `instance-${id}`;
+      }).catch(() => {
+        instanceName = 'instance-1';
+      });
+    }
+  });
+
+  // Apply default values from steps
+  $effect(() => {
+    for (const step of steps) {
+      if (step.default_value && !(step.id in answers)) {
+        answers[step.id] = step.default_value;
+      } else if (step.options?.length && !(step.id in answers)) {
+        // Auto-select recommended option
+        const rec = step.options.find((o: any) => o.recommended);
+        if (rec) answers[step.id] = rec.value;
+      }
+    }
+  });
+
   function isStepVisible(step: any): boolean {
     if (!step.condition) return true;
     const ref = answers[step.condition.step] || '';
     if (step.condition.equals) return ref === step.condition.equals;
     if (step.condition.not_equals) return ref !== step.condition.not_equals;
     if (step.condition.contains) return ref.split(',').includes(step.condition.contains);
+    if (step.condition.not_in) {
+      const excluded = step.condition.not_in.split(',');
+      return !excluded.includes(ref);
+    }
     return true;
   }
 
@@ -53,7 +85,7 @@
   <div class="wizard-body">
     <div class="name-step">
       <label>Instance Name</label>
-      <input type="text" bind:value={instanceName} placeholder="my-instance" />
+      <input type="text" bind:value={instanceName} placeholder="instance-1" />
     </div>
 
     {#each visibleSteps as step}

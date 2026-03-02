@@ -60,6 +60,7 @@ pub const WizardStep = struct {
     @"type": StepType,
     required: bool = true,
     options: []const StepOption = &.{},
+    default_value: []const u8 = "",
     dynamic_source: ?DynamicSource = null,
     condition: ?StepCondition = null,
 };
@@ -83,6 +84,7 @@ pub const StepOption = struct {
     value: []const u8,
     label: []const u8,
     description: []const u8 = "",
+    recommended: bool = false,
 };
 
 pub const StepCondition = struct {
@@ -90,6 +92,7 @@ pub const StepCondition = struct {
     equals: ?[]const u8 = null,
     not_equals: ?[]const u8 = null,
     contains: ?[]const u8 = null,
+    not_in: ?[]const u8 = null, // comma-separated list of values to exclude
 };
 
 pub const ConnectionSpec = struct {
