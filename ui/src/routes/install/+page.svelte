@@ -26,6 +26,7 @@
         displayName={comp.display_name}
         description={comp.description}
         installed={comp.installed}
+        standalone={comp.standalone}
         instanceCount={comp.instance_count}
       />
     {/each}

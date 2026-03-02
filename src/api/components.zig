@@ -14,7 +14,19 @@ pub fn deriveDisplayName(allocator: std.mem.Allocator, name: []const u8) ![]cons
     return buf;
 }
 
-// ─── Instance counting ──────────────────────────────────────────────────────
+// ─── Installation detection ─────────────────────────────────────────────────
+
+/// Check if a component has a standalone installation at ~/.{component}/config.json
+fn hasStandaloneInstall(allocator: std.mem.Allocator, component: []const u8) bool {
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch return false;
+    defer allocator.free(home);
+    const dot_name = std.fmt.allocPrint(allocator, ".{s}", .{component}) catch return false;
+    defer allocator.free(dot_name);
+    const config_path = std.fs.path.join(allocator, &.{ home, dot_name, "config.json" }) catch return false;
+    defer allocator.free(config_path);
+    std.fs.accessAbsolute(config_path, .{}) catch return false;
+    return true;
+}
 
 /// Count the number of instance subdirectories for a component.
 /// Returns 0 if the instances directory doesn't exist.
@@ -59,24 +71,25 @@ fn buildListJson(allocator: std.mem.Allocator, p: ?paths_mod.Paths) ![]const u8 
     for (registry.known_components, 0..) |comp, i| {
         if (i > 0) try writer.writeByte(',');
 
-        const display_name = try deriveDisplayName(allocator, comp.name);
-        defer allocator.free(display_name);
-
-        // Count instances if paths are available
+        // Count managed instances if paths are available
         var instance_count: u32 = 0;
-        var installed = false;
         if (p) |pp| {
             instance_count = countInstances(allocator, pp, comp.name) catch 0;
-            installed = instance_count > 0;
         }
 
+        // Check for standalone installation (~/.{component}/config.json)
+        const standalone = hasStandaloneInstall(allocator, comp.name);
+        const installed = standalone or instance_count > 0;
+
         try writer.print(
-            "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"\",\"repo\":\"{s}\",\"installed\":{s},\"instance_count\":{d}}}",
+            "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"{s}\",\"repo\":\"{s}\",\"installed\":{s},\"standalone\":{s},\"instance_count\":{d}}}",
             .{
                 comp.name,
-                display_name,
+                comp.display_name,
+                comp.description,
                 comp.repo,
                 if (installed) "true" else "false",
+                if (standalone) "true" else "false",
                 instance_count,
             },
         );
@@ -197,10 +210,15 @@ test "handleList returns valid JSON with all 3 known components" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullboiler\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nulltickets\"") != null);
 
-    // Verify display names are capitalized
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"Nullclaw\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"Nullboiler\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"Nulltickets\"") != null);
+    // Verify display names
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"NullClaw\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"NullBoiler\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"NullTickets\"") != null);
+
+    // Verify descriptions are present
+    try std.testing.expect(std.mem.indexOf(u8, json, "Autonomous AI agent runtime") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "DAG-based workflow orchestrator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "Task and issue tracker") != null);
 
     // Verify repo fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nullclaw\"") != null);

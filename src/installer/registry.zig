@@ -5,13 +5,30 @@ const manifest = @import("../core/manifest.zig");
 
 pub const KnownComponent = struct {
     name: []const u8,
+    display_name: []const u8,
+    description: []const u8,
     repo: []const u8,
 };
 
 pub const known_components = [_]KnownComponent{
-    .{ .name = "nullclaw", .repo = "nullclaw/nullclaw" },
-    .{ .name = "nullboiler", .repo = "nullclaw/NullBoiler" },
-    .{ .name = "nulltickets", .repo = "nullclaw/nulltickets" },
+    .{
+        .name = "nullclaw",
+        .display_name = "NullClaw",
+        .description = "Autonomous AI agent runtime. Connects to 30+ LLM providers, runs tools, manages memory, and exposes a gateway API. The core brain of the null stack.",
+        .repo = "nullclaw/nullclaw",
+    },
+    .{
+        .name = "nullboiler",
+        .display_name = "NullBoiler",
+        .description = "DAG-based workflow orchestrator. Chains agents into multi-step pipelines with branching, loops, and parallel execution. Turns NullClaw agents into teams.",
+        .repo = "nullclaw/NullBoiler",
+    },
+    .{
+        .name = "nulltickets",
+        .display_name = "NullTickets",
+        .description = "Task and issue tracker for AI agents. Project management that agents can read, create, and update autonomously via API.",
+        .repo = "nullclaw/nulltickets",
+    },
 };
 
 /// Look up a component by name in the known_components list.

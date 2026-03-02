@@ -1,11 +1,13 @@
 <script lang="ts">
-  let { name = '', displayName = '', description = '', installed = false, instanceCount = 0 } = $props();
+  let { name = '', displayName = '', description = '', installed = false, standalone = false, instanceCount = 0 } = $props();
 </script>
 
 <a href="/install/{name}" class="component-card">
   <div class="card-header">
     <h3>{displayName}</h3>
-    {#if installed}
+    {#if standalone}
+      <span class="installed-badge standalone">Standalone</span>
+    {:else if installed}
       <span class="installed-badge">{instanceCount} installed</span>
     {/if}
   </div>
@@ -47,6 +49,10 @@
     color: #fff;
     padding: 0.15rem 0.5rem;
     border-radius: var(--radius-sm);
+  }
+
+  .installed-badge.standalone {
+    background: var(--text-secondary);
   }
 
   p {
