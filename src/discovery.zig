@@ -20,7 +20,7 @@ pub fn findConnections(
     m: manifest_mod.Manifest,
     s: *state_mod.State,
 ) ![]Connection {
-    var results = std.ArrayList(Connection).init(allocator);
+    var results = std.array_list.Managed(Connection).init(allocator);
     errdefer results.deinit();
 
     for (m.connects_to) |spec| {
@@ -53,7 +53,7 @@ pub fn resolveTemplate(
     target_instance: []const u8,
     target_port: u16,
 ) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     // Format port once up front.

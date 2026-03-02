@@ -40,6 +40,7 @@ pub const ConfigSpec = struct {
 pub const LaunchSpec = struct {
     command: []const u8,
     args: []const []const u8 = &.{},
+    env: ?std.json.Value = null,
 };
 
 pub const HealthSpec = struct {
@@ -104,11 +105,13 @@ pub const ConnectionSpec = struct {
     component: []const u8,
     role: []const u8 = "",
     description: []const u8 = "",
+    auto_config: ?std.json.Value = null,
 };
 
 pub const MigrationSpec = struct {
     from: []const u8,
     to: []const u8,
+    actions: []const std.json.Value = &.{},
 };
 
 // ─── Parse functions ─────────────────────────────────────────────────────────
