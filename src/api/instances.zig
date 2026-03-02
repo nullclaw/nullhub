@@ -3,6 +3,9 @@ const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
+const local_binary = @import("../core/local_binary.zig");
+const component_cli = @import("../core/component_cli.zig");
+const manifest_mod = @import("../core/manifest.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -129,8 +132,25 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
     const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
     defer allocator.free(bin_path);
 
+    // Read manifest from binary to get launch command and port
+    var launch_cmd: []const u8 = "";
+    var health_endpoint: []const u8 = "/health";
+    var port: u16 = 0;
+    const manifest_json = component_cli.exportManifest(allocator, bin_path) catch null;
+    var parsed_manifest: ?std.json.Parsed(manifest_mod.Manifest) = null;
+    if (manifest_json) |mj| {
+        parsed_manifest = manifest_mod.parseManifest(allocator, mj) catch null;
+        if (parsed_manifest) |pm| {
+            launch_cmd = pm.value.launch.command;
+            health_endpoint = pm.value.health.endpoint;
+            if (pm.value.ports.len > 0) port = pm.value.ports[0].default;
+        }
+    }
+    defer if (manifest_json) |mj| allocator.free(mj);
+    defer if (parsed_manifest) |*pm| pm.deinit();
+
     // Start via manager
-    manager.startInstance(component, name, bin_path, &.{}, 0, "/health", "", "", "") catch return helpers.serverError();
+    manager.startInstance(component, name, bin_path, &.{}, port, health_endpoint, "", "", launch_cmd) catch return helpers.serverError();
     return jsonOk("{\"status\":\"started\"}");
 }
 
@@ -145,12 +165,7 @@ pub fn handleStop(s: *state_mod.State, manager: *manager_mod.Manager, component:
 pub fn handleRestart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     _ = s.getInstance(component, name) orelse return notFound();
     manager.stopInstance(component, name) catch {};
-    // Re-read entry for version
-    const entry = s.getInstance(component, name) orelse return notFound();
-    const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
-    defer allocator.free(bin_path);
-    manager.startInstance(component, name, bin_path, &.{}, 0, "/health", "", "", "") catch return helpers.serverError();
-    return jsonOk("{\"status\":\"restarted\"}");
+    return handleStart(allocator, s, manager, paths, component, name);
 }
 
 /// DELETE /api/instances/{component}/{name}
@@ -191,9 +206,28 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     std.fs.deleteTreeAbsolute(inst_dir) catch {};
     std.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
 
-    // 4. Register in state
+    // 4. Stage binary — copy from local dev build or leave for download on start
+    const version = blk: {
+        if (local_binary.find(allocator, component)) |src_bin| {
+            defer allocator.free(src_bin);
+            const ver = "dev-local";
+            const dest_bin = paths.binary(allocator, component, ver) catch break :blk "standalone";
+            defer allocator.free(dest_bin);
+            std.fs.deleteFileAbsolute(dest_bin) catch {};
+            std.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
+            // Make executable
+            if (std.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
+                defer f.close();
+                f.chmod(0o755) catch {};
+            } else |_| {}
+            break :blk ver;
+        }
+        break :blk "standalone";
+    };
+
+    // 5. Register in state
     s.addInstance(component, "default", .{
-        .version = "standalone",
+        .version = version,
         .auto_start = false,
     }) catch return helpers.serverError();
     s.save() catch return helpers.serverError();
