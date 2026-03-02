@@ -140,11 +140,22 @@ pub const Manager = struct {
         }
         errdefer if (launch_args_str.len > 0) self.allocator.free(launch_args_str);
 
+        // Ensure logs directory exists and compute log file path
+        const logs_dir = try self.p.instanceLogs(self.allocator, component, name);
+        defer self.allocator.free(logs_dir);
+        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        const stdout_log = try std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" });
+        defer self.allocator.free(stdout_log);
+
         const cwd: ?[]const u8 = if (working_dir.len > 0) working_dir else null;
         var result = try process.spawn(self.allocator, .{
             .binary = binary_path,
             .argv = launch_args,
             .cwd = cwd,
+            .stdout_path = stdout_log,
         });
         errdefer {
             process.forceKill(result.pid) catch {};
@@ -376,11 +387,31 @@ pub const Manager = struct {
             }
         }
 
+        // Compute log file path for output redirect
+        const logs_dir = self.p.instanceLogs(self.allocator, inst.component, inst.name) catch {
+            inst.status = .failed;
+            return;
+        };
+        defer self.allocator.free(logs_dir);
+        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                inst.status = .failed;
+                return;
+            },
+        };
+        const stdout_log = std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" }) catch {
+            inst.status = .failed;
+            return;
+        };
+        defer self.allocator.free(stdout_log);
+
         const cwd: ?[]const u8 = if (inst.working_dir.len > 0) inst.working_dir else null;
         const result = process.spawn(self.allocator, .{
             .binary = inst.binary_path,
             .argv = argv_list.items,
             .cwd = cwd,
+            .stdout_path = stdout_log,
         }) catch {
             inst.status = .failed;
             return;

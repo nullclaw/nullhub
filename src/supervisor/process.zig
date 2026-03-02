@@ -22,15 +22,46 @@ pub const SpawnResult = struct {
 /// Builds argv as `[binary] ++ options.argv`, sets cwd if provided,
 /// and spawns the child process. Returns the PID and child handle.
 ///
-/// For MVP, stdout/stderr inherit from the parent process.
-/// Log file redirect (stdout_path/stderr_path) will be added in a future iteration.
+/// When `stdout_path` is set, stdout and stderr are redirected to the file
+/// using a POSIX shell wrapper (`exec binary args >> path 2>&1`).
+/// The `exec` ensures the shell replaces itself with the binary, keeping
+/// the PID identical for process management (terminate, isAlive, etc.).
 pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
     var argv_list = std.array_list.Managed([]const u8).init(allocator);
     defer argv_list.deinit();
 
-    try argv_list.append(options.binary);
-    for (options.argv) |arg| {
-        try argv_list.append(arg);
+    // When stdout_path is set, wrap the command in a shell for output redirection.
+    var shell_cmd: ?[]u8 = null;
+    defer if (shell_cmd) |c| allocator.free(c);
+
+    if (options.stdout_path) |stdout_path| {
+        var cmd = std.array_list.Managed(u8).init(allocator);
+        errdefer cmd.deinit();
+
+        try cmd.appendSlice("exec '");
+        try appendShellSafe(&cmd, options.binary);
+        try cmd.append('\'');
+
+        for (options.argv) |arg| {
+            try cmd.appendSlice(" '");
+            try appendShellSafe(&cmd, arg);
+            try cmd.append('\'');
+        }
+
+        try cmd.appendSlice(" >> '");
+        try appendShellSafe(&cmd, stdout_path);
+        try cmd.appendSlice("' 2>&1");
+
+        shell_cmd = try cmd.toOwnedSlice();
+
+        try argv_list.append("/bin/sh");
+        try argv_list.append("-c");
+        try argv_list.append(shell_cmd.?);
+    } else {
+        try argv_list.append(options.binary);
+        for (options.argv) |arg| {
+            try argv_list.append(arg);
+        }
     }
 
     var child = std.process.Child.init(argv_list.items, allocator);
@@ -43,7 +74,6 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
         child.env_map = env;
     }
 
-    // MVP: inherit parent stdout/stderr. Log file redirect to be added later.
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
@@ -53,6 +83,19 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
         .pid = child.id,
         .child = child,
     };
+}
+
+/// Append a string escaped for use inside single quotes in POSIX shell.
+/// The only character that needs escaping inside single quotes is the
+/// single quote itself, which becomes `'\''` (end quote, escaped quote, start quote).
+fn appendShellSafe(buf: *std.array_list.Managed(u8), s: []const u8) !void {
+    for (s) |c| {
+        if (c == '\'') {
+            try buf.appendSlice("'\\''");
+        } else {
+            try buf.append(c);
+        }
+    }
 }
 
 /// Check whether a process with the given PID is still alive.

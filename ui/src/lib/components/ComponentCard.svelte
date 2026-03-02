@@ -33,7 +33,7 @@
         {importing ? 'Importing...' : 'Import'}
       </button>
     {:else if installed}
-      <span class="installed-badge">{instanceCount} installed</span>
+      <span class="installed-badge">{instanceCount} {instanceCount === 1 ? 'instance' : 'instances'}</span>
     {/if}
   </div>
   <p>{description}</p>
