@@ -11,7 +11,7 @@ pub const ApiResponse = struct {
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),

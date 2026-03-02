@@ -37,7 +37,7 @@ pub fn evaluateCondition(condition: ?manifest_mod.StepCondition, answers: *const
 /// Return the indices of wizard steps whose conditions evaluate to true
 /// given the current answers.
 pub fn getVisibleSteps(allocator: std.mem.Allocator, steps: []const manifest_mod.WizardStep, answers: *const WizardAnswers) ![]usize {
-    var visible = std.ArrayList(usize).init(allocator);
+    var visible = std.array_list.Managed(usize).init(allocator);
     errdefer visible.deinit();
     for (steps, 0..) |step, i| {
         if (evaluateCondition(step.condition, answers)) {
@@ -50,7 +50,7 @@ pub fn getVisibleSteps(allocator: std.mem.Allocator, steps: []const manifest_mod
 /// Validate all visible wizard steps: check that required fields have answers
 /// and that select / multi_select / number values are well-formed.
 pub fn validateAnswers(allocator: std.mem.Allocator, steps: []const manifest_mod.WizardStep, answers: *const WizardAnswers) ![]ValidationError {
-    var errors = std.ArrayList(ValidationError).init(allocator);
+    var errors = std.array_list.Managed(ValidationError).init(allocator);
     errdefer errors.deinit();
 
     for (steps) |step| {

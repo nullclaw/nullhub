@@ -25,7 +25,7 @@ pub const SpawnResult = struct {
 /// For MVP, stdout/stderr inherit from the parent process.
 /// Log file redirect (stdout_path/stderr_path) will be added in a future iteration.
 pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
-    var argv_list = std.ArrayList([]const u8).init(allocator);
+    var argv_list = std.array_list.Managed([]const u8).init(allocator);
     defer argv_list.deinit();
 
     try argv_list.append(options.binary);

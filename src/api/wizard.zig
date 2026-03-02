@@ -33,14 +33,14 @@ pub fn handleGetWizard(allocator: std.mem.Allocator, component_name: []const u8)
     // Verify the component is known
     if (registry.findKnownComponent(component_name) == null) return null;
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     buildGetResponse(&buf, component_name) catch return null;
     return buf.toOwnedSlice() catch null;
 }
 
-fn buildGetResponse(buf: *std.ArrayList(u8), component_name: []const u8) !void {
+fn buildGetResponse(buf: *std.array_list.Managed(u8), component_name: []const u8) !void {
     try buf.appendSlice("{\"component\":\"");
     try buf.appendSlice(component_name);
     try buf.appendSlice("\",\"steps\":[],\"versions\":[\"latest\"]}");
@@ -69,14 +69,14 @@ pub fn handlePostWizard(allocator: std.mem.Allocator, component_name: []const u8
 
     const instance_name = parsed.value.instance_name;
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     buildPostResponse(&buf, component_name, instance_name) catch return null;
     return buf.toOwnedSlice() catch null;
 }
 
-fn buildPostResponse(buf: *std.ArrayList(u8), component_name: []const u8, instance_name: []const u8) !void {
+fn buildPostResponse(buf: *std.array_list.Managed(u8), component_name: []const u8, instance_name: []const u8) !void {
     try buf.appendSlice("{\"status\":\"ok\",\"component\":\"");
     try appendEscaped(buf, component_name);
     try buf.appendSlice("\",\"instance\":\"");
@@ -86,7 +86,7 @@ fn buildPostResponse(buf: *std.ArrayList(u8), component_name: []const u8, instan
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),

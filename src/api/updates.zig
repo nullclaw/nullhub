@@ -31,7 +31,7 @@ fn serverError() ApiResponse {
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),
@@ -82,14 +82,14 @@ pub fn parseUpdatePath(target: []const u8) ?ParsedUpdatePath {
 /// For now, returns latest_version as "unknown" and update_available as false.
 /// Real version checking will be wired in later.
 pub fn handleCheckUpdates(allocator: std.mem.Allocator, s: *state_mod.State) ApiResponse {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     buildUpdatesJson(&buf, s) catch return serverError();
 
     return jsonOk(buf.items);
 }
 
-fn buildUpdatesJson(buf: *std.ArrayList(u8), s: *state_mod.State) !void {
+fn buildUpdatesJson(buf: *std.array_list.Managed(u8), s: *state_mod.State) !void {
     try buf.appendSlice("{\"updates\":[");
 
     var first = true;
@@ -119,14 +119,14 @@ fn buildUpdatesJson(buf: *std.ArrayList(u8), s: *state_mod.State) !void {
 pub fn handleApplyUpdate(allocator: std.mem.Allocator, s: *state_mod.State, component: []const u8, name: []const u8) ApiResponse {
     _ = s.getInstance(component, name) orelse return notFound();
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     buildApplyJson(&buf, component, name) catch return serverError();
 
     return jsonOk(buf.items);
 }
 
-fn buildApplyJson(buf: *std.ArrayList(u8), component: []const u8, name: []const u8) !void {
+fn buildApplyJson(buf: *std.array_list.Managed(u8), component: []const u8, name: []const u8) !void {
     try buf.appendSlice("{\"status\":\"ok\",\"component\":\"");
     try appendEscaped(buf, component);
     try buf.appendSlice("\",\"instance\":\"");

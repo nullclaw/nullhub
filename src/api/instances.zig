@@ -74,7 +74,7 @@ fn methodNotAllowed() ApiResponse {
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),
@@ -87,7 +87,7 @@ fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
     }
 }
 
-fn appendInstanceJson(buf: *std.ArrayList(u8), entry: state_mod.InstanceEntry, status_str: []const u8) !void {
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8) !void {
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
     try buf.appendSlice("\",\"auto_start\":");
@@ -101,7 +101,7 @@ fn appendInstanceJson(buf: *std.ArrayList(u8), entry: state_mod.InstanceEntry, s
 
 /// GET /api/instances — list all instances grouped by component.
 pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State) ApiResponse {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     buildListJson(&buf, s) catch return .{
         .status = "500 Internal Server Error",
@@ -112,7 +112,7 @@ pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State) ApiResponse
     return jsonOk(buf.items);
 }
 
-fn buildListJson(buf: *std.ArrayList(u8), s: *state_mod.State) !void {
+fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State) !void {
     try buf.appendSlice("{\"instances\":{");
 
     var comp_it = s.instances.iterator();
@@ -147,7 +147,7 @@ fn buildListJson(buf: *std.ArrayList(u8), s: *state_mod.State) !void {
 pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, component: []const u8, name: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     appendInstanceJson(&buf, entry, "stopped") catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",

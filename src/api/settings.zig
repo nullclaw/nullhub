@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 /// GET /api/settings — return hub configuration defaults.
 /// Caller owns the returned memory.
 pub fn handleGetSettings(allocator: std.mem.Allocator) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     try buf.appendSlice(
@@ -25,7 +25,7 @@ pub fn handlePutSettings(allocator: std.mem.Allocator, body: []const u8) ![]cons
     };
     defer parsed.deinit();
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     try buf.appendSlice("{\"status\":\"ok\",\"settings\":");
@@ -38,7 +38,7 @@ pub fn handlePutSettings(allocator: std.mem.Allocator, body: []const u8) ![]cons
 /// POST /api/service/install — detect platform and return dry-run service registration info.
 /// Caller owns the returned memory.
 pub fn handleServiceInstall(allocator: std.mem.Allocator) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     const os = builtin.os.tag;
@@ -75,7 +75,7 @@ pub fn handleServiceStatus(allocator: std.mem.Allocator) ![]const u8 {
     const os = builtin.os.tag;
     const service_type = if (os == .macos) "launchd" else if (os == .linux) "systemd" else "unknown";
 
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
     try buf.appendSlice("{\"registered\":false,\"running\":false,\"service_type\":\"");

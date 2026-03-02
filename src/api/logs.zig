@@ -11,7 +11,7 @@ pub const ApiResponse = struct {
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),
@@ -137,7 +137,7 @@ pub fn handleGet(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []
     defer allocator.free(contents);
 
     // Split into lines and take last N.
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     buildLinesJson(&buf, contents, max_lines) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
@@ -147,9 +147,9 @@ pub fn handleGet(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []
     return .{ .status = "200 OK", .content_type = "application/json", .body = buf.items };
 }
 
-fn buildLinesJson(buf: *std.ArrayList(u8), contents: []const u8, max_lines: usize) !void {
+fn buildLinesJson(buf: *std.array_list.Managed(u8), contents: []const u8, max_lines: usize) !void {
     // Collect all lines.
-    var all_lines = std.ArrayList([]const u8).init(buf.allocator);
+    var all_lines = std.array_list.Managed([]const u8).init(buf.allocator);
     defer all_lines.deinit();
 
     var line_it = std.mem.splitScalar(u8, contents, '\n');

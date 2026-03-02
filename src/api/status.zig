@@ -14,7 +14,7 @@ pub const ApiResponse = struct {
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn appendEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),
@@ -27,7 +27,7 @@ fn appendEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
     }
 }
 
-fn appendInstanceJson(buf: *std.ArrayList(u8), entry: state_mod.InstanceEntry) !void {
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry) !void {
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
     try buf.appendSlice("\",\"auto_start\":");
@@ -39,7 +39,7 @@ fn appendInstanceJson(buf: *std.ArrayList(u8), entry: state_mod.InstanceEntry) !
 
 /// GET /api/status — aggregated dashboard data.
 pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, uptime_seconds: u64) ApiResponse {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     buildStatusJson(&buf, s, uptime_seconds) catch return .{
         .status = "500 Internal Server Error",
@@ -50,7 +50,7 @@ pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, uptime_se
     return .{ .status = "200 OK", .content_type = "application/json", .body = buf.items };
 }
 
-fn buildStatusJson(buf: *std.ArrayList(u8), s: *state_mod.State, uptime_seconds: u64) !void {
+fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, uptime_seconds: u64) !void {
     // Hub info
     try buf.appendSlice("{\"hub\":{\"version\":\"");
     try buf.appendSlice(version);

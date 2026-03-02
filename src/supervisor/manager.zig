@@ -153,7 +153,7 @@ pub const Manager = struct {
 
     /// Get all instance statuses.
     pub fn getAllStatuses(self: *Manager, allocator: std.mem.Allocator) ![]InstanceStatus {
-        var list = std.ArrayList(InstanceStatus).init(allocator);
+        var list = std.array_list.Managed(InstanceStatus).init(allocator);
         errdefer list.deinit();
         var it = self.instances.iterator();
         while (it.next()) |entry| {

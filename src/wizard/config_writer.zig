@@ -8,7 +8,7 @@ pub const JsonValue = union(enum) {
     integer: i64,
     boolean: bool,
     object: std.StringArrayHashMap(JsonValue),
-    array: std.ArrayList(JsonValue),
+    array: std.array_list.Managed(JsonValue),
     null_val,
 };
 
@@ -53,7 +53,7 @@ pub fn resolveTemplate(
 ) ![]const u8 {
     _ = current_step_id; // reserved for future use
 
-    var result = std.ArrayList(u8).init(allocator);
+    var result = std.array_list.Managed(u8).init(allocator);
     errdefer result.deinit();
 
     var i: usize = 0;
@@ -209,7 +209,7 @@ fn dupeValue(allocator: std.mem.Allocator, value: JsonValue) !JsonValue {
             break :blk .{ .object = new_map };
         },
         .array => |list| blk: {
-            var new_list = std.ArrayList(JsonValue).init(allocator);
+            var new_list = std.array_list.Managed(JsonValue).init(allocator);
             errdefer {
                 for (new_list.items) |*item| {
                     deinitValue(allocator, item);
@@ -229,14 +229,14 @@ fn dupeValue(allocator: std.mem.Allocator, value: JsonValue) !JsonValue {
 /// Serialize a JsonValue tree to a pretty-printed JSON string.
 /// Caller owns the returned slice.
 pub fn serializeJson(allocator: std.mem.Allocator, value: JsonValue, indent: usize) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     try writeJsonValue(&buf, value, indent);
     try buf.append('\n');
     return buf.toOwnedSlice();
 }
 
-fn writeJsonValue(buf: *std.ArrayList(u8), value: JsonValue, indent: usize) !void {
+fn writeJsonValue(buf: *std.array_list.Managed(u8), value: JsonValue, indent: usize) !void {
     switch (value) {
         .string => |s| {
             try buf.append('"');
@@ -296,13 +296,13 @@ fn writeJsonValue(buf: *std.ArrayList(u8), value: JsonValue, indent: usize) !voi
     }
 }
 
-fn writeIndent(buf: *std.ArrayList(u8), level: usize) !void {
+fn writeIndent(buf: *std.array_list.Managed(u8), level: usize) !void {
     for (0..level) |_| {
         try buf.appendSlice("  ");
     }
 }
 
-fn writeJsonEscaped(buf: *std.ArrayList(u8), s: []const u8) !void {
+fn writeJsonEscaped(buf: *std.array_list.Managed(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
             '"' => try buf.appendSlice("\\\""),

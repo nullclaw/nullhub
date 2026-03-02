@@ -50,7 +50,7 @@ pub fn handleList(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn buildListJson(allocator: std.mem.Allocator, p: ?paths_mod.Paths) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     const writer = buf.writer();
 
