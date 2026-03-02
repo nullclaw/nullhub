@@ -6,7 +6,7 @@
   }>();
 
   // Searchable dropdown state (for select with many options)
-  const SEARCHABLE_THRESHOLD = 8;
+  const SEARCHABLE_THRESHOLD = 10;
   let searchQuery = $state('');
   let dropdownOpen = $state(false);
 
@@ -22,8 +22,11 @@
       : (step.options || [])
   );
 
+  let selectedOption = $derived(
+    (step.options || []).find(o => o.value === value)
+  );
   let selectedLabel = $derived(
-    (step.options || []).find(o => o.value === value)?.label || ''
+    selectedOption ? (selectedOption.recommended ? `${selectedOption.label} (recommended)` : selectedOption.label) : ''
   );
 
   function selectOption(optValue: string) {
