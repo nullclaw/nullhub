@@ -1,6 +1,7 @@
 const std = @import("std");
 const registry = @import("../installer/registry.zig");
 const helpers = @import("helpers.zig");
+const manifest_mod = @import("../core/manifest.zig");
 
 const appendEscaped = helpers.appendEscaped;
 
@@ -29,24 +30,54 @@ pub fn isWizardPath(target: []const u8) bool {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// Handle GET /api/wizard/{component} — returns wizard steps and available versions.
-/// For now returns a stub with empty steps and versions: ["latest"].
+/// Reads the bundled manifest from manifests/{component}.json to get real wizard steps.
 /// Returns null if the component is unknown (caller should return 404).
 /// Caller owns the returned memory.
 pub fn handleGetWizard(allocator: std.mem.Allocator, component_name: []const u8) ?[]const u8 {
     // Verify the component is known
     if (registry.findKnownComponent(component_name) == null) return null;
 
+    // Read the manifest file from manifests/{component_name}.json
+    const manifest_bytes = readManifestFile(allocator, component_name) orelse return null;
+    defer allocator.free(manifest_bytes);
+
+    // Parse the manifest
+    const parsed = manifest_mod.parseManifest(allocator, manifest_bytes) catch return null;
+    defer parsed.deinit();
+
+    // Serialize the wizard steps to JSON
+    const steps_json = std.json.Stringify.valueAlloc(
+        allocator,
+        parsed.value.wizard.steps,
+        .{ .emit_null_optional_fields = false },
+    ) catch return null;
+    defer allocator.free(steps_json);
+
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
-    buildGetResponse(&buf, component_name) catch return null;
+    buildGetResponse(&buf, component_name, steps_json) catch return null;
     return buf.toOwnedSlice() catch null;
 }
 
-fn buildGetResponse(buf: *std.array_list.Managed(u8), component_name: []const u8) !void {
+/// Read the manifest file for a component from the manifests/ directory.
+fn readManifestFile(allocator: std.mem.Allocator, component_name: []const u8) ?[]const u8 {
+    // Build path: manifests/{component_name}.json
+    const path = std.fmt.allocPrint(allocator, "manifests/{s}.json", .{component_name}) catch return null;
+    defer allocator.free(path);
+
+    const file = std.fs.cwd().openFile(path, .{}) catch return null;
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, 1024 * 1024) catch null;
+}
+
+fn buildGetResponse(buf: *std.array_list.Managed(u8), component_name: []const u8, steps_json: []const u8) !void {
     try buf.appendSlice("{\"component\":\"");
     try buf.appendSlice(component_name);
-    try buf.appendSlice("\",\"steps\":[],\"versions\":[\"latest\"]}");
+    try buf.appendSlice("\",\"steps\":");
+    try buf.appendSlice(steps_json);
+    try buf.appendSlice(",\"versions\":[\"latest\"]}");
 }
 
 /// Handle POST /api/wizard/{component} — accepts wizard answers and initiates install.
@@ -115,7 +146,7 @@ test "isWizardPath identifies wizard paths" {
     try std.testing.expect(!isWizardPath("/health"));
 }
 
-test "handleGetWizard returns valid JSON with component name" {
+test "handleGetWizard returns valid JSON with component name and real steps" {
     const allocator = std.testing.allocator;
 
     const json = handleGetWizard(allocator, "nullclaw");
@@ -124,8 +155,21 @@ test "handleGetWizard returns valid JSON with component name" {
 
     // Verify it contains expected fields
     try std.testing.expect(std.mem.indexOf(u8, json.?, "\"component\":\"nullclaw\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"steps\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, json.?, "\"versions\":[\"latest\"]") != null);
+
+    // Verify real wizard steps are present (from manifests/nullclaw.json)
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"steps\":[{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"provider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"api_key\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"channels\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json.?, "\"id\":\"gateway_port\"") != null);
+
+    // Verify the response is valid JSON by parsing it
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, json.?, .{}) catch |err| {
+        std.debug.print("Failed to parse response JSON: {}\n", .{err});
+        return error.TestUnexpectedResult;
+    };
+    defer parsed.deinit();
 }
 
 test "handleGetWizard returns null for unknown component" {
