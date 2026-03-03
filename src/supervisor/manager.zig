@@ -435,11 +435,17 @@ pub const Manager = struct {
         defer self.allocator.free(stdout_log);
 
         const cwd: ?[]const u8 = if (inst.working_dir.len > 0) inst.working_dir else null;
+        // Keep NULLCLAW_HOME override on restarts as well.
+        const extra_env: []const process.EnvEntry = if (inst.working_dir.len > 0)
+            &.{.{ "NULLCLAW_HOME", inst.working_dir }}
+        else
+            &.{};
         const result = process.spawn(self.allocator, .{
             .binary = inst.binary_path,
             .argv = argv_list.items,
             .cwd = cwd,
             .stdout_path = stdout_log,
+            .extra_env = extra_env,
         }) catch {
             inst.status = .failed;
             return;

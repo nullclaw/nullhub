@@ -117,6 +117,4 @@ ui/src/
   lib/stores/           # Reactive state (instances, hub config)
 tests/
   test_e2e.sh           # End-to-end test script
-docs/
-  plans/                # Architecture and design documents
 ```
