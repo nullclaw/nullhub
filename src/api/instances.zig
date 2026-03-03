@@ -161,15 +161,23 @@ pub const ParsedPath = struct {
     action: ?[]const u8,
 };
 
+fn stripQuery(target: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, target, '?')) |qmark| {
+        return target[0..qmark];
+    }
+    return target;
+}
+
 /// Parse `/api/instances/{component}/{name}` or
 /// `/api/instances/{component}/{name}/{action}` from a request target.
 /// Returns `null` if the path does not match the expected prefix or has
 /// too few / too many segments.
 pub fn parsePath(target: []const u8) ?ParsedPath {
+    const clean = stripQuery(target);
     const prefix = "/api/instances/";
-    if (!std.mem.startsWith(u8, target, prefix)) return null;
+    if (!std.mem.startsWith(u8, clean, prefix)) return null;
 
-    const rest = target[prefix.len..];
+    const rest = clean[prefix.len..];
     if (rest.len == 0) return null;
 
     var it = std.mem.splitScalar(u8, rest, '/');
@@ -186,6 +194,49 @@ pub fn parsePath(target: []const u8) ?ParsedPath {
     const action: ?[]const u8 = if (action_raw) |a| (if (a.len == 0) null else a) else null;
 
     return .{ .component = component, .name = name, .action = action };
+}
+
+const UsageLedgerLine = struct {
+    ts: i64 = 0,
+    provider: ?[]const u8 = null,
+    model: ?[]const u8 = null,
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    total_tokens: u64 = 0,
+    success: bool = true,
+};
+
+const UsageAggregate = struct {
+    provider: []const u8,
+    model: []const u8,
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    total_tokens: u64 = 0,
+    requests: u64 = 0,
+    last_used: i64 = 0,
+};
+
+fn parseUsageWindow(target: []const u8) []const u8 {
+    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return "24h";
+    const query = target[qmark + 1 ..];
+    var params = std.mem.splitScalar(u8, query, '&');
+    while (params.next()) |param| {
+        if (!std.mem.startsWith(u8, param, "window=")) continue;
+        const value = param["window=".len..];
+        if (std.mem.eql(u8, value, "24h")) return "24h";
+        if (std.mem.eql(u8, value, "7d")) return "7d";
+        if (std.mem.eql(u8, value, "30d")) return "30d";
+        if (std.mem.eql(u8, value, "all")) return "all";
+    }
+    return "24h";
+}
+
+fn usageWindowMinTs(window: []const u8, now_ts: i64) ?i64 {
+    if (std.mem.eql(u8, window, "all")) return null;
+    if (std.mem.eql(u8, window, "24h")) return now_ts - 24 * 60 * 60;
+    if (std.mem.eql(u8, window, "7d")) return now_ts - 7 * 24 * 60 * 60;
+    if (std.mem.eql(u8, window, "30d")) return now_ts - 30 * 24 * 60 * 60;
+    return now_ts - 24 * 60 * 60;
 }
 
 // ─── JSON helpers ────────────────────────────────────────────────────────────
@@ -473,6 +524,164 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
     return jsonOk(buf.items);
 }
 
+/// GET /api/instances/{component}/{name}/usage?window=24h|7d|30d|all
+/// Reads llm_usage.jsonl from the instance root and aggregates usage by (provider, model).
+pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const now_ts = std.time.timestamp();
+    const window = parseUsageWindow(target);
+    const min_ts = usageWindowMinTs(window, now_ts);
+
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
+    defer allocator.free(inst_dir);
+
+    const ledger_path = std.fs.path.join(allocator, &.{ inst_dir, "llm_usage.jsonl" }) catch return helpers.serverError();
+    defer allocator.free(ledger_path);
+
+    const file = std.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            var empty_buf = std.array_list.Managed(u8).init(allocator);
+            empty_buf.appendSlice("{\"window\":\"") catch return helpers.serverError();
+            appendEscaped(&empty_buf, window) catch return helpers.serverError();
+            empty_buf.writer().print(
+                "\",\"generated_at\":{d},\"rows\":[],\"totals\":{{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"requests\":0}}",
+                .{now_ts},
+            ) catch return helpers.serverError();
+            return jsonOk(empty_buf.items);
+        },
+        else => return helpers.serverError(),
+    };
+    defer file.close();
+
+    const contents = file.readToEndAlloc(allocator, 64 * 1024 * 1024) catch return helpers.serverError();
+    defer allocator.free(contents);
+
+    var aggregates: std.StringHashMapUnmanaged(UsageAggregate) = .{};
+    defer {
+        var it_cleanup = aggregates.iterator();
+        while (it_cleanup.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.provider);
+            allocator.free(entry.value_ptr.model);
+        }
+        aggregates.deinit(allocator);
+    }
+
+    var total_prompt: u64 = 0;
+    var total_completion: u64 = 0;
+    var total_tokens: u64 = 0;
+    var total_requests: u64 = 0;
+
+    var line_it = std.mem.splitScalar(u8, contents, '\n');
+    while (line_it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r\n");
+        if (line.len == 0) continue;
+
+        const parsed = std.json.parseFromSlice(UsageLedgerLine, allocator, line, .{
+            .allocate = .alloc_if_needed,
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer parsed.deinit();
+
+        const record = parsed.value;
+        if (min_ts) |cutoff| {
+            if (record.ts < cutoff) continue;
+        }
+
+        const provider_raw = record.provider orelse "unknown";
+        const model_raw = record.model orelse "unknown";
+        const provider = if (provider_raw.len > 0) provider_raw else "unknown";
+        const model = if (model_raw.len > 0) model_raw else "unknown";
+        const record_total: u64 = if (record.total_tokens > 0)
+            record.total_tokens
+        else
+            record.prompt_tokens + record.completion_tokens;
+
+        total_prompt += record.prompt_tokens;
+        total_completion += record.completion_tokens;
+        total_tokens += record_total;
+        total_requests += 1;
+
+        const key = std.fmt.allocPrint(allocator, "{s}\x1f{s}", .{ provider, model }) catch continue;
+        if (aggregates.getPtr(key)) |agg| {
+            allocator.free(key);
+            agg.prompt_tokens += record.prompt_tokens;
+            agg.completion_tokens += record.completion_tokens;
+            agg.total_tokens += record_total;
+            agg.requests += 1;
+            if (record.ts > agg.last_used) agg.last_used = record.ts;
+        } else {
+            const provider_copy = allocator.dupe(u8, provider) catch {
+                allocator.free(key);
+                continue;
+            };
+            errdefer allocator.free(provider_copy);
+            const model_copy = allocator.dupe(u8, model) catch {
+                allocator.free(key);
+                allocator.free(provider_copy);
+                continue;
+            };
+            errdefer allocator.free(model_copy);
+
+            aggregates.put(allocator, key, .{
+                .provider = provider_copy,
+                .model = model_copy,
+                .prompt_tokens = record.prompt_tokens,
+                .completion_tokens = record.completion_tokens,
+                .total_tokens = record_total,
+                .requests = 1,
+                .last_used = record.ts,
+            }) catch {
+                allocator.free(key);
+                allocator.free(provider_copy);
+                allocator.free(model_copy);
+            };
+        }
+    }
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    buf.appendSlice("{\"window\":\"") catch return helpers.serverError();
+    appendEscaped(&buf, window) catch return helpers.serverError();
+    buf.writer().print("\",\"generated_at\":{d},\"rows\":[", .{now_ts}) catch return helpers.serverError();
+
+    var it = aggregates.iterator();
+    var first_row = true;
+    while (it.next()) |entry| {
+        if (!first_row) buf.append(',') catch return helpers.serverError();
+        first_row = false;
+
+        const row = entry.value_ptr.*;
+        buf.appendSlice("{\"provider\":\"") catch return helpers.serverError();
+        appendEscaped(&buf, row.provider) catch return helpers.serverError();
+        buf.appendSlice("\",\"model\":\"") catch return helpers.serverError();
+        appendEscaped(&buf, row.model) catch return helpers.serverError();
+        buf.appendSlice("\",\"prompt_tokens\":") catch return helpers.serverError();
+        buf.writer().print("{d}", .{row.prompt_tokens}) catch return helpers.serverError();
+        buf.appendSlice(",\"completion_tokens\":") catch return helpers.serverError();
+        buf.writer().print("{d}", .{row.completion_tokens}) catch return helpers.serverError();
+        buf.appendSlice(",\"total_tokens\":") catch return helpers.serverError();
+        buf.writer().print("{d}", .{row.total_tokens}) catch return helpers.serverError();
+        buf.appendSlice(",\"requests\":") catch return helpers.serverError();
+        buf.writer().print("{d}", .{row.requests}) catch return helpers.serverError();
+        buf.appendSlice(",\"last_used\":") catch return helpers.serverError();
+        buf.writer().print("{d}", .{row.last_used}) catch return helpers.serverError();
+        buf.appendSlice("}") catch return helpers.serverError();
+    }
+
+    buf.appendSlice("],\"totals\":{\"prompt_tokens\":") catch return helpers.serverError();
+    buf.writer().print("{d}", .{total_prompt}) catch return helpers.serverError();
+    buf.appendSlice(",\"completion_tokens\":") catch return helpers.serverError();
+    buf.writer().print("{d}", .{total_completion}) catch return helpers.serverError();
+    buf.appendSlice(",\"total_tokens\":") catch return helpers.serverError();
+    buf.writer().print("{d}", .{total_tokens}) catch return helpers.serverError();
+    buf.appendSlice(",\"requests\":") catch return helpers.serverError();
+    buf.writer().print("{d}", .{total_requests}) catch return helpers.serverError();
+    buf.appendSlice("}}") catch return helpers.serverError();
+
+    return jsonOk(buf.items);
+}
+
 /// DELETE /api/instances/{component}/{name}
 pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     if (s.getInstance(component, name) == null) return notFound();
@@ -593,7 +802,7 @@ pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8,
 /// `body` is the (possibly empty) request body.
 pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, method: []const u8, target: []const u8, body: []const u8) ?ApiResponse {
     // Exact match for the collection endpoint.
-    if (std.mem.eql(u8, target, "/api/instances")) {
+    if (std.mem.eql(u8, stripQuery(target), "/api/instances")) {
         if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager);
         return methodNotAllowed();
     }
@@ -604,6 +813,10 @@ pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *man
         if (std.mem.eql(u8, action, "provider-health")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleProviderHealth(allocator, s, manager, paths, parsed.component, parsed.name);
+        }
+        if (std.mem.eql(u8, action, "usage")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleUsage(allocator, s, paths, parsed.component, parsed.name, target);
         }
 
         // Remaining actions are POST-only.
@@ -668,6 +881,24 @@ test "parsePath: provider-health action" {
     try std.testing.expectEqualStrings("nullclaw", p.component);
     try std.testing.expectEqualStrings("default", p.name);
     try std.testing.expectEqualStrings("provider-health", p.action.?);
+}
+
+test "parsePath: usage action with query string" {
+    const p = parsePath("/api/instances/nullclaw/default/usage?window=7d").?;
+    try std.testing.expectEqualStrings("nullclaw", p.component);
+    try std.testing.expectEqualStrings("default", p.name);
+    try std.testing.expectEqualStrings("usage", p.action.?);
+}
+
+test "parseUsageWindow defaults to 24h" {
+    try std.testing.expectEqualStrings("24h", parseUsageWindow("/api/instances/nullclaw/default/usage"));
+}
+
+test "parseUsageWindow accepts supported values" {
+    try std.testing.expectEqualStrings("24h", parseUsageWindow("/api/instances/nullclaw/default/usage?window=24h"));
+    try std.testing.expectEqualStrings("7d", parseUsageWindow("/api/instances/nullclaw/default/usage?window=7d"));
+    try std.testing.expectEqualStrings("30d", parseUsageWindow("/api/instances/nullclaw/default/usage?window=30d"));
+    try std.testing.expectEqualStrings("all", parseUsageWindow("/api/instances/nullclaw/default/usage?window=all"));
 }
 
 test "parseTrailingHttpStatusCode parses status in curl trailer" {
@@ -973,6 +1204,64 @@ test "dispatch provider-health rejects POST" {
 
     const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/provider-health", "").?;
     try std.testing.expectEqualStrings("405 Method Not Allowed", resp.status);
+}
+
+test "handleUsage aggregates provider/model rows" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "usage-agent", .{ .version = "1.0.0" });
+
+    try mctx.paths.ensureDirs();
+    const comp_dir = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw" });
+    defer allocator.free(comp_dir);
+    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "usage-agent");
+    defer allocator.free(inst_dir);
+    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const ledger_path = try std.fs.path.join(allocator, &.{ inst_dir, "llm_usage.jsonl" });
+    defer allocator.free(ledger_path);
+    var ledger = try std.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
+    defer ledger.close();
+    var writer_buf: [512]u8 = undefined;
+    var fw = ledger.writer(&writer_buf);
+    const w = &fw.interface;
+    try w.writeAll("{\"ts\":1700000000,\"provider\":\"openrouter\",\"model\":\"anthropic/claude-sonnet-4\",\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150,\"success\":true}\n");
+    try w.writeAll("{\"ts\":1700000001,\"provider\":\"openrouter\",\"model\":\"anthropic/claude-sonnet-4\",\"prompt_tokens\":20,\"completion_tokens\":10,\"total_tokens\":30,\"success\":true}\n");
+    try w.flush();
+
+    const resp = handleUsage(allocator, &s, mctx.paths, "nullclaw", "usage-agent", "/api/instances/nullclaw/usage-agent/usage?window=all");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"provider\":\"openrouter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"total_tokens\":180") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"requests\":2") != null);
+}
+
+test "dispatch routes GET usage action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/usage?window=all", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"rows\":[]") != null);
 }
 
 test "dispatch returns null for non-matching path" {

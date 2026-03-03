@@ -35,6 +35,8 @@ export const api = {
   getConfig: (c: string, n: string) => request<any>(`/instances/${c}/${n}/config`),
   getProviderHealth: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/provider-health`),
+  getUsage: (c: string, n: string, window: '24h' | '7d' | '30d' | 'all' = '24h') =>
+    request<any>(`/instances/${c}/${n}/usage?window=${window}`),
   putConfig: (c: string, n: string, config: any) =>
     request<any>(`/instances/${c}/${n}/config`, { method: 'PUT', body: JSON.stringify(config) }),
   getLogs: (c: string, n: string, lines = 100) =>

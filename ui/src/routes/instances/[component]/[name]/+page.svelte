@@ -17,6 +17,10 @@
   let providerHealth = $state<any>(null);
   let providerHealthLoading = $state(false);
   let lastProviderProbeAt = $state(0);
+  type UsageWindow = "24h" | "7d" | "30d" | "all";
+  let usageWindow = $state<UsageWindow>("24h");
+  let usageData = $state<any>(null);
+  let usageLoading = $state(false);
 
   let modelName = $derived(extractModel(config));
   let webPort = $derived(extractWebPort(config));
@@ -108,6 +112,20 @@
     return `${d}d ${h % 24}h`;
   }
 
+  function formatTokens(value: number | undefined): string {
+    const v = value ?? 0;
+    return v.toLocaleString();
+  }
+
+  function formatLastUsed(ts: number | undefined): string {
+    if (!ts) return "-";
+    try {
+      return new Date(ts * 1000).toLocaleString();
+    } catch {
+      return "-";
+    }
+  }
+
   function buildProviderHint(
     status: { provider: string; configured: boolean },
     probe: any,
@@ -187,6 +205,26 @@
     }
   }
 
+  async function refreshUsage() {
+    usageLoading = true;
+    try {
+      usageData = await api.getUsage(component, name, usageWindow);
+    } catch {
+      usageData = {
+        window: usageWindow,
+        rows: [],
+        totals: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          requests: 0,
+        },
+      };
+    } finally {
+      usageLoading = false;
+    }
+  }
+
   async function refresh() {
     try {
       const status = await api.getStatus();
@@ -207,6 +245,7 @@
       providerHealth = null;
     }
     await refreshProviderHealth(false, loadedConfig);
+    await refreshUsage();
     // Fetch installed UI modules (best-effort)
     try {
       const res = await api.getUiModules();
@@ -215,6 +254,12 @@
       /* ignore */
     }
   }
+
+  $effect(() => {
+    usageWindow;
+    if (!component || !name) return;
+    void refreshUsage();
+  });
 
   onMount(() => {
     refresh();
@@ -414,6 +459,56 @@
             <span class="mono">{webPort}</span>
           </div>
         {/if}
+        <div class="info-card usage-card">
+          <div class="usage-header">
+            <span class="label">LLM Usage</span>
+            <select class="usage-window" bind:value={usageWindow}>
+              <option value="24h">24h</option>
+              <option value="7d">7d</option>
+              <option value="30d">30d</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          {#if usageLoading}
+            <span class="usage-empty">Loading usage...</span>
+          {:else if !usageData?.rows || usageData.rows.length === 0}
+            <span class="usage-empty">No usage data for selected window.</span>
+          {:else}
+            <div class="usage-table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Model</th>
+                    <th>To provider (prompt)</th>
+                    <th>From provider (completion)</th>
+                    <th>Total</th>
+                    <th>Requests</th>
+                    <th>Last used</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each [...usageData.rows].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)) as row}
+                    <tr>
+                      <td>{row.provider}</td>
+                      <td class="mono">{row.model}</td>
+                      <td>{formatTokens(row.prompt_tokens)}</td>
+                      <td>{formatTokens(row.completion_tokens)}</td>
+                      <td>{formatTokens(row.total_tokens)}</td>
+                      <td>{row.requests || 0}</td>
+                      <td>{formatLastUsed(row.last_used)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+          {#if usageData?.totals}
+            <div class="usage-total">
+              Total: {formatTokens(usageData.totals.total_tokens)} tokens in {usageData.totals.requests || 0} request(s)
+            </div>
+          {/if}
+        </div>
       </div>
     {:else if activeTab === "config"}
       <ConfigEditor {component} {name} />
@@ -580,6 +675,66 @@
   .info-card:hover {
     border-color: color-mix(in srgb, var(--accent) 50%, transparent);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  .usage-card {
+    grid-column: 1 / -1;
+  }
+  .usage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .usage-window {
+    min-width: 90px;
+    padding: 0.25rem 0.5rem;
+    background: var(--bg-surface);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+  .usage-window:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .usage-table-wrap {
+    overflow-x: auto;
+  }
+  .usage-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+  }
+  .usage-table th,
+  .usage-table td {
+    text-align: left;
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    white-space: nowrap;
+  }
+  .usage-table th {
+    color: var(--accent-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 0.6875rem;
+  }
+  .usage-table td {
+    color: var(--fg);
+  }
+  .usage-empty {
+    color: var(--fg-dim);
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .usage-total {
+    margin-top: 0.5rem;
+    color: var(--fg-dim);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
   }
   .label {
     font-size: 0.75rem;
