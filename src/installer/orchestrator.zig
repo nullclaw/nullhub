@@ -179,8 +179,12 @@ pub fn install(
     defer if (parsed_manifest) |pm| pm.deinit();
 
     // 5. Run --from-json to generate config (component owns its config generation)
+    // Inject "home" field so the component writes config into the instance directory.
+    const answers_with_home = injectHomeField(allocator, opts.answers_json, inst_dir) catch opts.answers_json;
+    defer if (answers_with_home.ptr != opts.answers_json.ptr) allocator.free(answers_with_home);
+
     clearLastErrorDetail();
-    const from_json_result = component_cli.fromJson(allocator, bin_path, opts.answers_json, inst_dir) catch {
+    const from_json_result = component_cli.fromJson(allocator, bin_path, answers_with_home, null) catch {
         setLastErrorDetail("failed to execute binary");
         return error.ConfigGenerationFailed;
     };
@@ -259,6 +263,29 @@ fn findFreePort(start: u16) u16 {
         return port;
     }
     return start;
+}
+
+/// Inject a "home" key into a JSON object string. Returns a new string with the field added.
+/// If the input isn't a valid JSON object (doesn't start with '{'), returns error.
+fn injectHomeField(allocator: std.mem.Allocator, json: []const u8, home: []const u8) ![]const u8 {
+    // Find the opening brace
+    const start = std.mem.indexOfScalar(u8, json, '{') orelse return error.InvalidJson;
+    // Build: { "home": "<home>", <rest of original object>
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    try buf.appendSlice("{\"home\":\"");
+    // Escape the home path (backslashes on Windows, though unlikely)
+    for (home) |c| {
+        switch (c) {
+            '"' => try buf.appendSlice("\\\""),
+            '\\' => try buf.appendSlice("\\\\"),
+            else => try buf.append(c),
+        }
+    }
+    try buf.appendSlice("\",");
+    // Append everything after the opening brace
+    try buf.appendSlice(json[start + 1 ..]);
+    return buf.toOwnedSlice();
 }
 
 fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8) ?struct { version: []const u8, bin_path: []const u8 } {
@@ -504,4 +531,12 @@ test "directory creation succeeds in temp directory" {
         var d = try std.fs.openDirAbsolute(logs_dir, .{});
         d.close();
     }
+}
+
+test "injectHomeField adds home to JSON object" {
+    const allocator = std.testing.allocator;
+    const result = try injectHomeField(allocator, "{\"provider\":\"openrouter\"}", "/tmp/inst");
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"home\":\"/tmp/inst\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"provider\":\"openrouter\"") != null);
 }
