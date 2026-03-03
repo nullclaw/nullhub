@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// Options for spawning a child process.
+pub const EnvEntry = struct { []const u8, []const u8 };
+
 pub const SpawnOptions = struct {
     binary: []const u8,
     argv: []const []const u8 = &.{}, // additional args after binary
@@ -9,6 +11,8 @@ pub const SpawnOptions = struct {
     stdout_path: ?[]const u8 = null, // redirect stdout to this file (reserved for future use)
     stderr_path: ?[]const u8 = null, // redirect stderr to this file (reserved for future use)
     env: ?*const std.process.EnvMap = null,
+    /// Extra env vars prepended to the shell command (only used with stdout_path).
+    extra_env: []const EnvEntry = &.{},
 };
 
 /// Result of a successful process spawn.
@@ -37,6 +41,15 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
     if (options.stdout_path) |stdout_path| {
         var cmd = std.array_list.Managed(u8).init(allocator);
         errdefer cmd.deinit();
+
+        // Prepend extra env vars (e.g. NULLCLAW_HOME=/path)
+        for (options.extra_env) |entry| {
+            try appendShellSafe(&cmd, entry[0]);
+            try cmd.append('=');
+            try cmd.append('\'');
+            try appendShellSafe(&cmd, entry[1]);
+            try cmd.appendSlice("' ");
+        }
 
         try cmd.appendSlice("exec '");
         try appendShellSafe(&cmd, options.binary);

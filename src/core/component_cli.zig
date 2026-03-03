@@ -11,7 +11,7 @@ pub const RunResult = struct {
 };
 
 /// Run a component binary with the given arguments and capture stdout.
-/// Caller owns the returned stdout slice.
+/// Caller owns the returned stdout and stderr slices.
 pub fn run(allocator: std.mem.Allocator, binary_path: []const u8, args: []const []const u8, cwd: ?[]const u8) !RunResult {
     // Build argv: binary + args
     var argv = std.array_list.Managed([]const u8).init(allocator);
@@ -64,7 +64,7 @@ pub const FromJsonResult = struct {
 };
 
 /// Run --from-json on a component binary with the given JSON answers.
-/// On success returns stdout. On failure returns error with stderr detail available via fromJsonDetail().
+/// The JSON should include a "home" field for instance isolation (injected by orchestrator).
 pub fn fromJson(allocator: std.mem.Allocator, binary_path: []const u8, json_answers: []const u8, cwd: ?[]const u8) !FromJsonResult {
     const result = try run(allocator, binary_path, &.{ "--from-json", json_answers }, cwd);
     return .{

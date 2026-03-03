@@ -151,11 +151,17 @@ pub const Manager = struct {
         defer self.allocator.free(stdout_log);
 
         const cwd: ?[]const u8 = if (working_dir.len > 0) working_dir else null;
+        // Set NULLCLAW_HOME so the component reads config from the instance directory.
+        const extra_env: []const process.EnvEntry = if (working_dir.len > 0)
+            &.{.{ "NULLCLAW_HOME", working_dir }}
+        else
+            &.{};
         var result = try process.spawn(self.allocator, .{
             .binary = binary_path,
             .argv = launch_args,
             .cwd = cwd,
             .stdout_path = stdout_log,
+            .extra_env = extra_env,
         });
         errdefer {
             process.forceKill(result.pid) catch {};
