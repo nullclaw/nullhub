@@ -96,6 +96,98 @@ pub const Manager = struct {
         inst.owns_memory = false;
     }
 
+    fn pidToU64(pid: std.process.Child.Id) u64 {
+        return switch (@typeInfo(std.process.Child.Id)) {
+            .pointer => @as(u64, @intCast(@intFromPtr(pid))),
+            else => @as(u64, @intCast(pid)),
+        };
+    }
+
+    fn logSupervisor(
+        self: *Manager,
+        component: []const u8,
+        name: []const u8,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        const logs_dir = self.p.instanceLogs(self.allocator, component, name) catch return;
+        defer self.allocator.free(logs_dir);
+        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return,
+        };
+
+        const stdout_log = std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" }) catch return;
+        defer self.allocator.free(stdout_log);
+
+        var file = std.fs.createFileAbsolute(stdout_log, .{ .truncate = false }) catch return;
+        defer file.close();
+        file.seekFromEnd(0) catch return;
+
+        const msg = std.fmt.allocPrint(self.allocator, fmt, args) catch return;
+        defer self.allocator.free(msg);
+
+        const line = std.fmt.allocPrint(
+            self.allocator,
+            "[nullhub/supervisor][{d}] {s}\n",
+            .{ std.time.milliTimestamp(), msg },
+        ) catch return;
+        defer self.allocator.free(line);
+
+        file.writeAll(line) catch {};
+    }
+
+    fn logHealthFailure(
+        self: *Manager,
+        inst: *ManagedInstance,
+        prefix: []const u8,
+        result: health.HealthCheckResult,
+        failures: u32,
+    ) void {
+        if (result.status_code) |code| {
+            self.logSupervisor(
+                inst.component,
+                inst.name,
+                "{s}: HTTP {d} (consecutive failures: {d})",
+                .{ prefix, code, failures },
+            );
+            return;
+        }
+        if (result.error_message) |msg| {
+            self.logSupervisor(
+                inst.component,
+                inst.name,
+                "{s}: {s} (consecutive failures: {d})",
+                .{ prefix, msg, failures },
+            );
+            return;
+        }
+        self.logSupervisor(
+            inst.component,
+            inst.name,
+            "{s}: unknown error (consecutive failures: {d})",
+            .{ prefix, failures },
+        );
+    }
+
+    fn waitChildAndLog(
+        self: *Manager,
+        inst: *ManagedInstance,
+        child: *std.process.Child,
+        context: []const u8,
+    ) void {
+        const term = child.wait() catch |err| {
+            self.logSupervisor(inst.component, inst.name, "{s}: wait() failed: {s}", .{ context, @errorName(err) });
+            return;
+        };
+        switch (term) {
+            .Exited => |code| self.logSupervisor(inst.component, inst.name, "{s}: exited with code {d}", .{ context, code }),
+            .Signal => |signal| self.logSupervisor(inst.component, inst.name, "{s}: terminated by signal {d}", .{ context, signal }),
+            .Stopped => |signal| self.logSupervisor(inst.component, inst.name, "{s}: stopped by signal {d}", .{ context, signal }),
+            .Unknown => |value| self.logSupervisor(inst.component, inst.name, "{s}: unknown termination value {d}", .{ context, value }),
+        }
+    }
+
     /// Start an instance. binary_path is the path to the component binary.
     pub fn startInstance(
         self: *Manager,
@@ -156,13 +248,16 @@ pub const Manager = struct {
             &.{.{ "NULLCLAW_HOME", working_dir }}
         else
             &.{};
-        var result = try process.spawn(self.allocator, .{
+        var result = process.spawn(self.allocator, .{
             .binary = binary_path,
             .argv = launch_args,
             .cwd = cwd,
             .stdout_path = stdout_log,
             .extra_env = extra_env,
-        });
+        }) catch |err| {
+            self.logSupervisor(component, name, "start failed: spawn error: {s} (binary={s})", .{ @errorName(err), binary_path });
+            return err;
+        };
         errdefer {
             process.forceKill(result.pid) catch {};
             _ = result.child.wait() catch {};
@@ -171,10 +266,13 @@ pub const Manager = struct {
         if (self.instances.fetchRemove(key)) |old_entry| {
             var old_value = old_entry.value;
             if (old_value.pid) |pid| {
-                process.terminate(pid) catch {};
+                self.logSupervisor(old_value.component, old_value.name, "replacing existing process pid={d}", .{pidToU64(pid)});
+                process.terminate(pid) catch |err| {
+                    self.logSupervisor(old_value.component, old_value.name, "replace: terminate failed for pid={d}: {s}", .{ pidToU64(pid), @errorName(err) });
+                };
             }
             if (old_value.child) |*child| {
-                _ = child.wait() catch {};
+                self.waitChildAndLog(&old_value, child, "replace: previous process exit");
             }
             self.freeInstanceOwned(&old_value);
             self.allocator.free(old_entry.key);
@@ -198,6 +296,7 @@ pub const Manager = struct {
             .started_at = now,
             .starting_since = now,
         });
+        self.logSupervisor(component_owned, name_owned, "spawned pid={d}; status=starting; port={d}", .{ pidToU64(result.pid), port });
     }
 
     /// Stop an instance gracefully (SIGTERM, wait, SIGKILL if needed).
@@ -208,16 +307,21 @@ pub const Manager = struct {
         if (self.instances.getPtr(key_buf)) |inst| {
             if (inst.pid) |pid| {
                 inst.status = .stopping;
-                process.terminate(pid) catch {};
+                self.logSupervisor(inst.component, inst.name, "stop requested for pid={d}", .{pidToU64(pid)});
+                process.terminate(pid) catch |err| {
+                    self.logSupervisor(inst.component, inst.name, "stop: terminate failed for pid={d}: {s}", .{ pidToU64(pid), @errorName(err) });
+                };
                 // Wait for the child to actually exit so the PID is reaped.
                 if (inst.child) |*child| {
-                    _ = child.wait() catch {};
+                    self.waitChildAndLog(inst, child, "stop request");
                     inst.child = null;
                 }
                 inst.status = .stopped;
                 inst.pid = null;
+                self.logSupervisor(inst.component, inst.name, "instance stopped", .{});
             } else {
                 inst.status = .stopped;
+                self.logSupervisor(inst.component, inst.name, "stop requested while pid is null; marking stopped", .{});
             }
         }
     }
@@ -296,9 +400,19 @@ pub const Manager = struct {
         // Check if process is alive
         if (inst.pid) |pid| {
             if (!process.isAlive(pid)) {
+                self.logSupervisor(inst.component, inst.name, "startup failed: pid={d} is not alive", .{pidToU64(pid)});
+                if (inst.child) |*child| {
+                    self.waitChildAndLog(inst, child, "startup: process exited before ready");
+                    inst.child = null;
+                }
+                inst.pid = null;
                 inst.status = .failed;
                 return;
             }
+        } else {
+            self.logSupervisor(inst.component, inst.name, "startup failed: missing pid in starting state", .{});
+            inst.status = .failed;
+            return;
         }
 
         // No port means no health endpoint (e.g. agent mode) —
@@ -308,6 +422,7 @@ pub const Manager = struct {
             inst.last_health_ok = now;
             inst.last_health_check = now;
             inst.restart_count = 0;
+            self.logSupervisor(inst.component, inst.name, "startup complete without health endpoint; status=running", .{});
             return;
         }
 
@@ -318,12 +433,25 @@ pub const Manager = struct {
             inst.last_health_ok = now;
             inst.last_health_check = now;
             inst.restart_count = 0;
+            self.logSupervisor(inst.component, inst.name, "startup health check passed on port {d}{s}; status=running", .{ inst.port, inst.health_endpoint });
             return;
         }
 
         // Check timeout
         if (inst.starting_since) |since| {
             if (now - since > inst.start_timeout_ms) {
+                self.logHealthFailure(inst, "startup health check did not pass", result, 1);
+                self.logSupervisor(inst.component, inst.name, "startup timed out after {d} ms; marking failed", .{inst.start_timeout_ms});
+                if (inst.pid) |pid| {
+                    process.terminate(pid) catch |err| {
+                        self.logSupervisor(inst.component, inst.name, "startup timeout: terminate failed for pid={d}: {s}", .{ pidToU64(pid), @errorName(err) });
+                    };
+                }
+                if (inst.child) |*child| {
+                    self.waitChildAndLog(inst, child, "startup timeout");
+                    inst.child = null;
+                }
+                inst.pid = null;
                 inst.status = .failed;
             }
         }
@@ -333,10 +461,26 @@ pub const Manager = struct {
         // Check if process is still alive
         if (inst.pid) |pid| {
             if (!process.isAlive(pid)) {
+                self.logSupervisor(
+                    inst.component,
+                    inst.name,
+                    "process pid={d} exited while running; scheduling restart attempt {d}/{d}",
+                    .{ pidToU64(pid), inst.restart_count + 1, inst.max_restarts },
+                );
+                if (inst.child) |*child| {
+                    self.waitChildAndLog(inst, child, "running: process exit detected");
+                    inst.child = null;
+                }
+                inst.pid = null;
                 inst.status = .restarting;
                 inst.last_restart_attempt = now;
                 return;
             }
+        } else {
+            self.logSupervisor(inst.component, inst.name, "running state has null pid; scheduling restart", .{});
+            inst.status = .restarting;
+            inst.last_restart_attempt = now;
+            return;
         }
 
         // No port means no health endpoint — only process liveness matters.
@@ -350,27 +494,36 @@ pub const Manager = struct {
         inst.last_health_check = now;
         const result = health.check(self.allocator, "127.0.0.1", inst.port, inst.health_endpoint);
         if (result.ok) {
+            if (inst.health_consecutive_failures > 0) {
+                self.logSupervisor(inst.component, inst.name, "health check recovered after {d} consecutive failures", .{inst.health_consecutive_failures});
+            }
             inst.last_health_ok = now;
             inst.health_consecutive_failures = 0;
         } else {
             inst.health_consecutive_failures += 1;
+            self.logHealthFailure(inst, "health check failed", result, inst.health_consecutive_failures);
             if (inst.health_consecutive_failures >= 3) {
                 // Kill the unresponsive process and reap it to avoid zombies.
                 if (inst.pid) |pid| {
-                    process.terminate(pid) catch {};
+                    self.logSupervisor(inst.component, inst.name, "health failure threshold reached; terminating pid={d}", .{pidToU64(pid)});
+                    process.terminate(pid) catch |err| {
+                        self.logSupervisor(inst.component, inst.name, "health failure: terminate failed for pid={d}: {s}", .{ pidToU64(pid), @errorName(err) });
+                    };
                 }
                 if (inst.child) |*child| {
-                    _ = child.wait() catch {};
+                    self.waitChildAndLog(inst, child, "health failure threshold");
                     inst.child = null;
                 }
                 inst.pid = null;
                 inst.status = .failed;
+                self.logSupervisor(inst.component, inst.name, "instance marked failed after {d} consecutive health failures", .{inst.health_consecutive_failures});
             }
         }
     }
 
     fn tickRestarting(self: *Manager, inst: *ManagedInstance, now: i64) void {
         if (inst.restart_count >= inst.max_restarts) {
+            self.logSupervisor(inst.component, inst.name, "restart budget exhausted ({d}/{d}); marking failed", .{ inst.restart_count, inst.max_restarts });
             inst.status = .failed;
             return;
         }
@@ -387,14 +540,16 @@ pub const Manager = struct {
 
         inst.restart_count += 1;
         inst.last_restart_attempt = now;
+        self.logSupervisor(inst.component, inst.name, "restart attempt {d}/{d} after backoff {d} ms", .{ inst.restart_count, inst.max_restarts, delay_ms });
 
         // Reap the old child process before spawning a new one to avoid zombies
         if (inst.child) |*old_child| {
-            _ = old_child.wait() catch {};
+            self.waitChildAndLog(inst, old_child, "restart: previous child reap");
             inst.child = null;
         }
 
         if (inst.binary_path.len == 0) {
+            self.logSupervisor(inst.component, inst.name, "restart failed: binary path is empty", .{});
             inst.status = .failed;
             return;
         }
@@ -407,7 +562,8 @@ pub const Manager = struct {
             var it = std.mem.splitScalar(u8, inst.launch_args_str, ' ');
             while (it.next()) |arg| {
                 if (arg.len > 0) {
-                    argv_list.append(arg) catch {
+                    argv_list.append(arg) catch |err| {
+                        self.logSupervisor(inst.component, inst.name, "restart failed: argv allocation error: {s}", .{@errorName(err)});
                         inst.status = .failed;
                         return;
                     };
@@ -416,7 +572,8 @@ pub const Manager = struct {
         }
 
         // Compute log file path for output redirect
-        const logs_dir = self.p.instanceLogs(self.allocator, inst.component, inst.name) catch {
+        const logs_dir = self.p.instanceLogs(self.allocator, inst.component, inst.name) catch |err| {
+            self.logSupervisor(inst.component, inst.name, "restart failed: cannot resolve logs dir: {s}", .{@errorName(err)});
             inst.status = .failed;
             return;
         };
@@ -424,11 +581,13 @@ pub const Manager = struct {
         std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
+                self.logSupervisor(inst.component, inst.name, "restart failed: cannot create logs dir: {s}", .{@errorName(err)});
                 inst.status = .failed;
                 return;
             },
         };
-        const stdout_log = std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" }) catch {
+        const stdout_log = std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" }) catch |err| {
+            self.logSupervisor(inst.component, inst.name, "restart failed: cannot build stdout.log path: {s}", .{@errorName(err)});
             inst.status = .failed;
             return;
         };
@@ -446,7 +605,8 @@ pub const Manager = struct {
             .cwd = cwd,
             .stdout_path = stdout_log,
             .extra_env = extra_env,
-        }) catch {
+        }) catch |err| {
+            self.logSupervisor(inst.component, inst.name, "restart spawn failed: {s}", .{@errorName(err)});
             inst.status = .failed;
             return;
         };
@@ -457,6 +617,7 @@ pub const Manager = struct {
         inst.started_at = now;
         inst.starting_since = now;
         inst.health_consecutive_failures = 0;
+        self.logSupervisor(inst.component, inst.name, "restart spawned pid={d}; status=starting", .{pidToU64(result.pid)});
     }
 };
 
@@ -480,6 +641,37 @@ test "getStatus returns null for unknown instance" {
     defer mgr.deinit();
 
     try std.testing.expect(mgr.getStatus("foo", "bar") == null);
+}
+
+test "logSupervisor appends diagnostics to stdout.log" {
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/test-nullhub-mgr-log-supervisor";
+    std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+
+    var mgr = Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    mgr.logSupervisor("nullclaw", "diag", "first diagnostic {d}", .{@as(u8, 1)});
+    mgr.logSupervisor("nullclaw", "diag", "second diagnostic", .{});
+
+    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "diag");
+    defer allocator.free(logs_dir);
+    const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
+    defer allocator.free(log_path);
+
+    var file = try std.fs.openFileAbsolute(log_path, .{});
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, 16 * 1024);
+    defer allocator.free(contents);
+
+    try std.testing.expect(std.mem.indexOf(u8, contents, "[nullhub/supervisor]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "first diagnostic 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "second diagnostic") != null);
 }
 
 test "status reporting for manually-added instance" {
