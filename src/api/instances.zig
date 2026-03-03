@@ -66,75 +66,47 @@ const ProviderHealthConfig = struct {
     } = null,
 };
 
-const OpenRouterProbeResult = struct {
+const ProviderProbeResult = struct {
     live_ok: bool,
     status_code: ?u16 = null,
     reason: []const u8,
 };
 
-fn parseTrailingHttpStatusCode(s: []const u8) ?u16 {
-    if (s.len == 0) return null;
-
-    var end = s.len;
-    while (end > 0) : (end -= 1) {
-        const c = s[end - 1];
-        if (c != '\n' and c != '\r' and c != ' ' and c != '\t') break;
+fn parseAnyHttpStatusCode(s: []const u8) ?u16 {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (!std.ascii.isDigit(s[i])) continue;
+        var j = i;
+        while (j < s.len and std.ascii.isDigit(s[j])) : (j += 1) {}
+        if (j - i == 3) {
+            const code = std.fmt.parseInt(u16, s[i..j], 10) catch continue;
+            if (code >= 100 and code <= 599) return code;
+        }
+        i = j;
     }
-    if (end == 0) return null;
-
-    var start = end;
-    while (start > 0) : (start -= 1) {
-        const c = s[start - 1];
-        if (c == '\n' or c == '\r') break;
-    }
-    const line = std.mem.trim(u8, s[start..end], " \t\r\n");
-    if (line.len != 3) return null;
-    return std.fmt.parseInt(u16, line, 10) catch null;
+    return null;
 }
 
-fn probeOpenRouter(allocator: std.mem.Allocator, api_key: []const u8) OpenRouterProbeResult {
-    if (api_key.len == 0) {
-        return .{ .live_ok = false, .reason = "missing_api_key" };
-    }
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (haystack.len < needle.len) return false;
 
-    const auth_header = std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{api_key}) catch {
-        return .{ .live_ok = false, .reason = "allocation_failed" };
-    };
-    defer allocator.free(auth_header);
-
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "curl",
-            "-sS",
-            "--max-time",
-            "10",
-            "-H",
-            auth_header,
-            "-w",
-            "\n%{http_code}\n",
-            "https://openrouter.ai/api/v1/auth/key",
-        },
-    }) catch {
-        return .{ .live_ok = false, .reason = "curl_exec_failed" };
-    };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    const status_code = parseTrailingHttpStatusCode(result.stdout);
-    const exited_ok = switch (result.term) {
-        .Exited => |code| code == 0,
-        else => false,
-    };
-
-    if (exited_ok) {
-        if (status_code) |code| {
-            if (code >= 200 and code < 300) {
-                return .{ .live_ok = true, .status_code = code, .reason = "ok" };
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        var match = true;
+        var j: usize = 0;
+        while (j < needle.len) : (j += 1) {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle[j])) {
+                match = false;
+                break;
             }
         }
+        if (match) return true;
     }
+    return false;
+}
 
+fn classifyProbeFailure(status_code: ?u16, stdout: []const u8, stderr: []const u8) ProviderProbeResult {
     if (status_code) |code| {
         return switch (code) {
             401 => .{ .live_ok = false, .status_code = code, .reason = "invalid_api_key" },
@@ -147,10 +119,73 @@ fn probeOpenRouter(allocator: std.mem.Allocator, api_key: []const u8) OpenRouter
         };
     }
 
-    if (result.stderr.len > 0) {
+    if (containsIgnoreCase(stderr, "unauthorized") or containsIgnoreCase(stdout, "unauthorized")) {
+        return .{ .live_ok = false, .reason = "invalid_api_key" };
+    }
+    if (containsIgnoreCase(stderr, "forbidden") or containsIgnoreCase(stdout, "forbidden")) {
+        return .{ .live_ok = false, .reason = "forbidden" };
+    }
+    if (containsIgnoreCase(stderr, "rate limit") or containsIgnoreCase(stdout, "rate limit") or
+        containsIgnoreCase(stderr, "too many requests") or containsIgnoreCase(stdout, "too many requests"))
+    {
+        return .{ .live_ok = false, .reason = "rate_limited" };
+    }
+    if (containsIgnoreCase(stderr, "timeout") or containsIgnoreCase(stdout, "timeout") or
+        containsIgnoreCase(stderr, "network") or containsIgnoreCase(stdout, "network") or
+        containsIgnoreCase(stderr, "connection") or containsIgnoreCase(stdout, "connection"))
+    {
         return .{ .live_ok = false, .reason = "network_error" };
     }
-    return .{ .live_ok = false, .reason = "unknown_error" };
+    return .{ .live_ok = false, .reason = "auth_check_failed" };
+}
+
+fn probeProviderViaListModels(
+    allocator: std.mem.Allocator,
+    binary_path: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+) ProviderProbeResult {
+    if (api_key.len == 0) return .{ .live_ok = false, .reason = "missing_api_key" };
+
+    const result = component_cli.run(
+        allocator,
+        binary_path,
+        &.{ "--list-models", "--provider", provider, "--api-key", api_key },
+        null,
+    ) catch return .{ .live_ok = false, .reason = "probe_exec_failed" };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.success) {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{
+            .allocate = .alloc_if_needed,
+        }) catch return .{ .live_ok = false, .reason = "invalid_probe_response" };
+        defer parsed.deinit();
+        if (parsed.value != .array) return .{ .live_ok = false, .reason = "invalid_probe_response" };
+        return .{ .live_ok = true, .status_code = 200, .reason = "ok" };
+    }
+
+    const status_code = parseAnyHttpStatusCode(result.stderr) orelse parseAnyHttpStatusCode(result.stdout);
+    return classifyProbeFailure(status_code, result.stdout, result.stderr);
+}
+
+fn probeComponentProvider(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    entry: state_mod.InstanceEntry,
+    component: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+) ProviderProbeResult {
+    if (api_key.len == 0) return .{ .live_ok = false, .reason = "missing_api_key" };
+
+    const bin_path = paths.binary(allocator, component, entry.version) catch {
+        return .{ .live_ok = false, .reason = "probe_binary_path_failed" };
+    };
+    defer allocator.free(bin_path);
+
+    std.fs.accessAbsolute(bin_path, .{}) catch return .{ .live_ok = false, .reason = "component_binary_missing" };
+    return probeProviderViaListModels(allocator, bin_path, provider, api_key);
 }
 
 // ─── Path Parsing ────────────────────────────────────────────────────────────
@@ -394,7 +429,7 @@ pub fn handleRestart(allocator: std.mem.Allocator, s: *state_mod.State, manager:
 /// GET /api/instances/{component}/{name}/provider-health
 /// Performs a live provider credential probe for known providers.
 pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    _ = s.getInstance(component, name) orelse return notFound();
+    const entry = s.getInstance(component, name) orelse return notFound();
 
     const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
     defer allocator.free(config_path);
@@ -441,8 +476,8 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
     if (parsed.value.models) |models_cfg| {
         if (models_cfg.providers) |providers| {
             if (provider.len > 0) {
-                if (providers.map.get(provider)) |entry| {
-                    if (entry.api_key) |k| {
+                if (providers.map.get(provider)) |provider_entry| {
+                    if (provider_entry.api_key) |k| {
                         if (k.len > 0) {
                             configured = true;
                             api_key = k;
@@ -452,10 +487,10 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
             }
             if (!configured) {
                 var it = providers.map.iterator();
-                while (it.next()) |entry| {
-                    if (entry.value_ptr.api_key) |k| {
+                while (it.next()) |provider_entry| {
+                    if (provider_entry.value_ptr.api_key) |k| {
                         if (k.len > 0) {
-                            provider = entry.key_ptr.*;
+                            provider = provider_entry.key_ptr.*;
                             configured = true;
                             api_key = k;
                             break;
@@ -487,17 +522,12 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
     } else if (!running) {
         status = "error";
         reason = "instance_not_running";
-    } else if (std.mem.eql(u8, provider, "openrouter")) {
-        const probe = probeOpenRouter(allocator, api_key);
+    } else {
+        const probe = probeComponentProvider(allocator, paths, entry, component, provider, api_key);
         live_ok = probe.live_ok;
         status_code = probe.status_code;
         status = if (probe.live_ok) "ok" else "error";
         reason = probe.reason;
-    } else {
-        // Preserve compatibility for other providers: only openrouter has live probe for now.
-        live_ok = configured and running;
-        status = if (live_ok) "ok" else "unknown";
-        reason = "probe_not_implemented";
     }
 
     var buf = std.array_list.Managed(u8).init(allocator);
@@ -901,10 +931,28 @@ test "parseUsageWindow accepts supported values" {
     try std.testing.expectEqualStrings("all", parseUsageWindow("/api/instances/nullclaw/default/usage?window=all"));
 }
 
-test "parseTrailingHttpStatusCode parses status in curl trailer" {
-    try std.testing.expectEqual(@as(?u16, 200), parseTrailingHttpStatusCode("{\"x\":1}\n200\n"));
-    try std.testing.expectEqual(@as(?u16, 401), parseTrailingHttpStatusCode("\n401\n"));
-    try std.testing.expectEqual(@as(?u16, null), parseTrailingHttpStatusCode("not-a-code"));
+test "parseAnyHttpStatusCode extracts first valid http code" {
+    try std.testing.expectEqual(@as(?u16, 200), parseAnyHttpStatusCode("{\"x\":1}\n200\n"));
+    try std.testing.expectEqual(@as(?u16, 401), parseAnyHttpStatusCode("status=401 unauthorized"));
+    try std.testing.expectEqual(@as(?u16, null), parseAnyHttpStatusCode("not-a-code"));
+}
+
+test "classifyProbeFailure maps status codes" {
+    const unauthorized = classifyProbeFailure(401, "", "");
+    try std.testing.expectEqualStrings("invalid_api_key", unauthorized.reason);
+    const forbidden = classifyProbeFailure(403, "", "");
+    try std.testing.expectEqualStrings("forbidden", forbidden.reason);
+    const limited = classifyProbeFailure(429, "", "");
+    try std.testing.expectEqualStrings("rate_limited", limited.reason);
+    const unavailable = classifyProbeFailure(503, "", "");
+    try std.testing.expectEqualStrings("provider_unavailable", unavailable.reason);
+}
+
+test "classifyProbeFailure maps stderr hints" {
+    const unauthorized = classifyProbeFailure(null, "", "Unauthorized");
+    try std.testing.expectEqualStrings("invalid_api_key", unauthorized.reason);
+    const network = classifyProbeFailure(null, "", "connection timeout");
+    try std.testing.expectEqualStrings("network_error", network.reason);
 }
 
 test "parsePath: rejects bare /api/instances/" {

@@ -25,11 +25,7 @@
   let modelName = $derived(extractModel(config));
   let webPort = $derived(extractWebPort(config));
   let providerStatus = $derived(extractProviderStatus(config));
-  let providerDotOk = $derived(
-    providerStatus.provider === "openrouter"
-      ? Boolean(providerHealth?.live_ok)
-      : providerStatus.configured,
-  );
+  let providerDotOk = $derived(Boolean(providerStatus.provider) && Boolean(providerHealth?.live_ok));
   let providerCardWarn = $derived(!providerDotOk);
   let providerHintText = $derived(
     buildProviderHint(providerStatus, providerHealth, providerHealthLoading),
@@ -132,14 +128,11 @@
     probeLoading: boolean,
   ): string {
     if (!status.provider) return "";
-    if (status.provider !== "openrouter") {
-      return status.configured ? "" : "No API key";
-    }
     if (probeLoading) return "Checking live auth...";
     if (!status.configured) return "No API key";
     if (!probe) return "Waiting for live check";
     if (probe.live_ok) {
-      return probe.status_code ? `Auth OK (HTTP ${probe.status_code})` : "Auth OK";
+      return probe.status_code ? `Live check OK (HTTP ${probe.status_code})` : "Live check OK";
     }
     const code = probe.status_code ? ` (HTTP ${probe.status_code})` : "";
     switch (probe.reason) {
@@ -157,9 +150,13 @@
         return `Provider unavailable${code}`;
       case "network_error":
         return "Network error during auth check";
-      case "curl_exec_failed":
+      case "probe_exec_failed":
       case "probe_request_failed":
         return "Probe request failed";
+      case "component_binary_missing":
+        return "Component binary missing for probe";
+      case "invalid_probe_response":
+        return "Probe returned invalid response";
       default:
         return `Auth check failed${code}`;
     }
@@ -167,7 +164,7 @@
 
   async function refreshProviderHealth(force = false, cfgOverride: any = config) {
     const status = extractProviderStatus(cfgOverride);
-    if (status.provider !== "openrouter") {
+    if (!status.provider) {
       providerHealthLoading = false;
       providerHealth = null;
       return;
