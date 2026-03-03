@@ -1,5 +1,6 @@
 const std = @import("std");
 const registry = @import("registry.zig");
+const prereqs = @import("prereqs.zig");
 
 pub const VersionInfo = struct {
     tag_name: []const u8,
@@ -10,6 +11,8 @@ pub const VersionInfo = struct {
 /// Returns list of { tag_name, prerelease } sorted newest-first (GitHub default).
 /// Caller owns the returned parsed result.
 pub fn fetchReleases(allocator: std.mem.Allocator, repo: []const u8) !std.json.Parsed([]const VersionInfo) {
+    prereqs.ensureTool(allocator, "curl") catch return error.FetchFailed;
+
     const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/releases?per_page=50", .{repo});
     defer allocator.free(url);
 

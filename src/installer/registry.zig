@@ -1,4 +1,5 @@
 const std = @import("std");
+const prereqs = @import("prereqs.zig");
 const manifest = @import("../core/manifest.zig");
 
 // ─── Known components ────────────────────────────────────────────────────────
@@ -170,6 +171,8 @@ pub fn findAssetForComponentPlatform(
 /// Uses curl as a pragmatic approach for HTTPS requests. The caller owns
 /// the returned Parsed wrapper and must call .deinit() when done.
 pub fn fetchLatestRelease(allocator: std.mem.Allocator, repo: []const u8) !std.json.Parsed(ReleaseInfo) {
+    prereqs.ensureTool(allocator, "curl") catch return error.FetchFailed;
+
     const url = try buildReleasesUrl(allocator, repo);
     defer allocator.free(url);
 
@@ -195,6 +198,8 @@ pub fn fetchLatestRelease(allocator: std.mem.Allocator, repo: []const u8) !std.j
 /// Uses curl as a pragmatic approach for HTTPS requests. The caller owns
 /// the returned Parsed wrapper and must call .deinit() when done.
 pub fn fetchReleaseByTag(allocator: std.mem.Allocator, repo: []const u8, tag: []const u8) !std.json.Parsed(ReleaseInfo) {
+    prereqs.ensureTool(allocator, "curl") catch return error.FetchFailed;
+
     const url = try buildReleaseByTagUrl(allocator, repo, tag);
     defer allocator.free(url);
 

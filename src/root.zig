@@ -16,6 +16,7 @@ pub const orchestrator = @import("installer/orchestrator.zig");
 pub const manifest = @import("core/manifest.zig");
 pub const paths = @import("core/paths.zig");
 pub const platform = @import("core/platform.zig");
+pub const prereqs = @import("installer/prereqs.zig");
 pub const process = @import("supervisor/process.zig");
 pub const registry = @import("installer/registry.zig");
 pub const server = @import("server.zig");
@@ -46,6 +47,7 @@ test {
     _ = manifest;
     _ = paths;
     _ = platform;
+    _ = prereqs;
     _ = process;
     _ = registry;
     _ = server;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
+const prereqs = @import("prereqs.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,8 @@ pub fn buildBundleAssetUrl(
 /// Creates `dest_dir` if it does not already exist, then runs
 /// `tar -xzf {archive_path} -C {dest_dir}` as a subprocess.
 pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest_dir: []const u8) !void {
+    prereqs.ensureTool(allocator, "tar") catch return error.ExtractionFailed;
+
     // Create dest_dir if it doesn't exist.
     std.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},

@@ -26,6 +26,15 @@ zig build
 
 Opens browser to http://127.0.0.1:9800.
 
+### Runtime Prerequisites
+
+- `curl` is required to fetch releases and binaries.
+- `tar` is required to extract UI module bundles.
+
+When these tools are missing, `nullhub` will try to install them automatically
+via available system package managers (`apt`, `dnf`, `yum`, `pacman`, `zypper`,
+`apk`, `brew`, `winget`, `choco`).
+
 ## CLI Usage
 
 ```

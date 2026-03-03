@@ -1,4 +1,5 @@
 const std = @import("std");
+const prereqs = @import("prereqs.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,8 @@ pub fn computeSha256(allocator: std.mem.Allocator, file_path: []const u8) ![64]u
 /// Uses an atomic write pattern: downloads to `dest_path.tmp`, then renames
 /// to `dest_path`. On POSIX systems, the resulting file is made executable.
 pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []const u8) !void {
+    prereqs.ensureTool(allocator, "curl") catch return error.DownloadFailed;
+
     const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{dest_path});
     defer allocator.free(tmp_path);
 
