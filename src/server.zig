@@ -16,7 +16,7 @@ const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
 
-const version = "0.1.0";
+const version = "2026.3.2";
 const max_request_size: usize = 65_536;
 const ui_build_path = "ui/build";
 
@@ -869,7 +869,7 @@ test "route GET /api/status returns version and platform" {
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("application/json", resp.content_type);
     // Body should contain version
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "0.1.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "2026.3.2") != null);
     // Body should contain platform key
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "platform") != null);
     // Body should contain uptime_seconds

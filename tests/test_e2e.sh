@@ -90,7 +90,7 @@ assert_status "GET /health returns 200" "200" GET "$BASE/health"
 echo ""
 echo "=== Status API ==="
 assert_status "GET /api/status returns 200" "200" GET "$BASE/api/status"
-assert_json_field "Status has hub version" "$BASE/api/status" "['hub']['version']" "0.1.0"
+assert_json_field "Status has hub version" "$BASE/api/status" "['hub']['version']" "2026.3.2"
 
 echo ""
 echo "=== Components API ==="

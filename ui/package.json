@@ -1,6 +1,6 @@
 {
   "name": "nullhub-ui",
-  "version": "0.1.0",
+  "version": "2026.3.2",
   "private": true,
   "scripts": {
     "dev": "vite dev",

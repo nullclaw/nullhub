@@ -6,7 +6,7 @@ const server = root.server;
 const paths_mod = root.paths;
 const manager_mod = root.manager;
 
-const version = "0.1.0";
+const version = "2026.3.2";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

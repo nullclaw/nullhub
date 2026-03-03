@@ -8,7 +8,7 @@ const helpers = @import("helpers.zig");
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
 
-const version = "0.1.0";
+const version = "2026.3.2";
 
 fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8, pid: ?std.process.Child.Id, instance_uptime: ?u64, restart_count: u32, port: u16) !void {
     try buf.appendSlice("{\"version\":\"");
@@ -155,7 +155,7 @@ test "handleStatus returns valid JSON with hub version" {
     );
     defer parsed.deinit();
 
-    try std.testing.expectEqualStrings("0.1.0", parsed.value.hub.version);
+    try std.testing.expectEqualStrings("2026.3.2", parsed.value.hub.version);
     try std.testing.expect(parsed.value.hub.platform.len > 0);
     try std.testing.expectEqual(@as(u64, 3600), parsed.value.hub.uptime_seconds);
 }
