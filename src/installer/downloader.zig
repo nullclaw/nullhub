@@ -68,11 +68,13 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []cons
 
     try std.posix.rename(tmp_path_z, dest_path_z);
 
-    // Set executable permission (rwxr-xr-x).
-    if (std.fs.openFileAbsolute(dest_path, .{ .mode = .read_only })) |f| {
-        defer f.close();
-        f.chmod(0o755) catch {};
-    } else |_| {}
+    if (comptime std.fs.has_executable_bit) {
+        // Set executable permission (rwxr-xr-x) on platforms that support it.
+        if (std.fs.openFileAbsolute(dest_path, .{ .mode = .read_only })) |f| {
+            defer f.close();
+            f.chmod(0o755) catch {};
+        } else |_| {}
+    }
 }
 
 /// Download a file and verify its SHA256 checksum.

@@ -10,6 +10,14 @@ const appendEscaped = helpers.appendEscaped;
 
 const version = "2026.3.2";
 
+fn pidToU64(pid: std.process.Child.Id) u64 {
+    return switch (@typeInfo(@TypeOf(pid))) {
+        .int => @intCast(pid),
+        .pointer => @intFromPtr(pid),
+        else => 0,
+    };
+}
+
 fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8, pid: ?std.process.Child.Id, instance_uptime: ?u64, restart_count: u32, port: u16) !void {
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
@@ -24,7 +32,7 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     if (pid) |p| {
         try buf.appendSlice(",\"pid\":");
         var num_buf: [20]u8 = undefined;
-        const num_str = try std.fmt.bufPrint(&num_buf, "{d}", .{p});
+        const num_str = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(p)});
         try buf.appendSlice(num_str);
     }
     // Instance uptime

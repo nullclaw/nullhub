@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
@@ -256,7 +257,13 @@ pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
 /// Copies config and data from ~/.{component}/ into the nullhub instance directory.
 /// The binary will be downloaded via the normal install flow on first start.
 pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8) ApiResponse {
-    const home = std.posix.getenv("HOME") orelse return helpers.serverError();
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch blk: {
+        if (builtin.os.tag == .windows) {
+            break :blk std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return helpers.serverError();
+        }
+        return helpers.serverError();
+    };
+    defer allocator.free(home);
 
     // 1. Verify standalone dir exists
     const dot_dir = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return helpers.serverError();
@@ -291,11 +298,13 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
             defer allocator.free(dest_bin);
             std.fs.deleteFileAbsolute(dest_bin) catch {};
             std.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
-            // Make executable
-            if (std.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
-                defer f.close();
-                f.chmod(0o755) catch {};
-            } else |_| {}
+            if (comptime std.fs.has_executable_bit) {
+                // Make executable on platforms that support executable bits.
+                if (std.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
+                    defer f.close();
+                    f.chmod(0o755) catch {};
+                } else |_| {}
+            }
             break :blk ver;
         }
         break :blk "standalone";

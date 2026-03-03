@@ -147,10 +147,12 @@ pub fn buildFromSource(
 
     std.fs.copyFileAbsolute(output_path, dest_path, .{}) catch return error.OutputNotFound;
 
-    // Set executable permission (rwxr-xr-x).
-    const dest_path_z = try allocator.dupeZ(u8, dest_path);
-    defer allocator.free(dest_path_z);
-    std.posix.chmod(dest_path_z, 0o755) catch {};
+    if (comptime std.fs.has_executable_bit) {
+        // Set executable permission (rwxr-xr-x) on platforms that support it.
+        const dest_path_z = try allocator.dupeZ(u8, dest_path);
+        defer allocator.free(dest_path_z);
+        std.posix.chmod(dest_path_z, 0o755) catch {};
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

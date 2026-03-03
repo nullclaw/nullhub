@@ -304,10 +304,12 @@ fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component:
     } else |_| {}
 
     std.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
-    if (std.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
-        defer f.close();
-        f.chmod(0o755) catch {};
-    } else |_| {}
+    if (comptime std.fs.has_executable_bit) {
+        if (std.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
+            defer f.close();
+            f.chmod(0o755) catch {};
+        } else |_| {}
+    }
 
     return .{ .version = version, .bin_path = bin_path };
 }

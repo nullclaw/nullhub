@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Directory resolution for all paths under `~/.nullhub/`.
 ///
@@ -27,7 +28,8 @@ pub const Paths = struct {
         if (custom_root) |cr| {
             return .{ .root = try allocator.dupe(u8, cr) };
         }
-        const home = std.posix.getenv("HOME") orelse return error.HomeNotSet;
+        const home = try getHomeDirOwned(allocator);
+        defer allocator.free(home);
         const root = try std.fs.path.join(allocator, &.{ home, ".nullhub" });
         return .{ .root = root };
     }
@@ -128,6 +130,18 @@ pub const Paths = struct {
         }
     }
 };
+
+fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
+    return std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => {
+            if (builtin.os.tag == .windows) {
+                return std.process.getEnvVarOwned(allocator, "USERPROFILE") catch error.HomeNotSet;
+            }
+            return error.HomeNotSet;
+        },
+        else => return err,
+    };
+}
 
 /// Helper: create `{base}/{sub}` as an absolute directory tree.
 fn makeAbsSubpath(base: []const u8, sub: []const u8) !void {
@@ -233,8 +247,8 @@ test "ensureDirs creates all subdirectories" {
 test "init without custom root reads HOME" {
     const allocator = std.testing.allocator;
 
-    // Use the real HOME env var (always available on macOS / Linux in test).
-    const home = std.posix.getenv("HOME") orelse return; // skip if no HOME
+    const home = getHomeDirOwned(allocator) catch return; // skip if no HOME/USERPROFILE
+    defer allocator.free(home);
     const expected_root = try std.fs.path.join(allocator, &.{ home, ".nullhub" });
     defer allocator.free(expected_root);
 
