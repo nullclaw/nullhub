@@ -27,6 +27,7 @@
         name={comp.name}
         displayName={comp.display_name}
         description={comp.description}
+        alpha={Boolean(comp.alpha)}
         installed={comp.installed}
         standalone={comp.standalone}
         instanceCount={comp.instance_count}

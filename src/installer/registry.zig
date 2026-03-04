@@ -14,6 +14,7 @@ pub const KnownComponent = struct {
     display_name: []const u8,
     description: []const u8,
     repo: []const u8,
+    is_alpha: bool = false,
     default_launch_command: []const u8 = "gateway",
     default_health_endpoint: []const u8 = "/health",
     default_port: u16 = 3000,
@@ -37,12 +38,14 @@ pub const known_components = [_]KnownComponent{
         .display_name = "NullBoiler",
         .description = "DAG-based workflow orchestrator. Chains agents into multi-step pipelines with branching, loops, and parallel execution. Turns NullClaw agents into teams.",
         .repo = "nullclaw/NullBoiler",
+        .is_alpha = true,
     },
     .{
         .name = "nulltickets",
         .display_name = "NullTickets",
         .description = "Task and issue tracker for AI agents. Project management that agents can read, create, and update autonomously via API.",
         .repo = "nullclaw/nulltickets",
+        .is_alpha = true,
     },
 };
 

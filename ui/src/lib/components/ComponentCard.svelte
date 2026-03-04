@@ -5,6 +5,7 @@
     name = "",
     displayName = "",
     description = "",
+    alpha = false,
     installed = false,
     standalone = false,
     instanceCount = 0,
@@ -33,17 +34,22 @@
 <a href="/install/{name}" class="component-card">
   <div class="card-header">
     <h3>{displayName}</h3>
-    {#if imported}
-      <span class="installed-badge">Imported</span>
-    {:else if standalone}
-      <button class="import-btn" onclick={handleImport} disabled={importing}>
-        {importing ? "Importing..." : "Import"}
-      </button>
-    {:else if installed}
-      <span class="installed-badge"
-        >{instanceCount} {instanceCount === 1 ? "instance" : "instances"}</span
-      >
-    {/if}
+    <div class="card-actions">
+      {#if alpha}
+        <span class="alpha-badge">&lt;Alpha&gt;</span>
+      {/if}
+      {#if imported}
+        <span class="installed-badge">Imported</span>
+      {:else if standalone}
+        <button class="import-btn" onclick={handleImport} disabled={importing}>
+          {importing ? "Importing..." : "Import"}
+        </button>
+      {:else if installed}
+        <span class="installed-badge"
+          >{instanceCount} {instanceCount === 1 ? "instance" : "instances"}</span
+        >
+      {/if}
+    </div>
   </div>
   <p>{description}</p>
 </a>
@@ -77,6 +83,12 @@
     padding-bottom: 0.75rem;
   }
 
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   h3 {
     font-size: 1.125rem;
     font-weight: 700;
@@ -97,6 +109,19 @@
     letter-spacing: 1px;
     font-weight: bold;
     box-shadow: inset 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .alpha-badge {
+    font-size: 0.7rem;
+    background: color-mix(in srgb, #ffb84d 18%, transparent);
+    color: #ffb84d;
+    border: 1px solid color-mix(in srgb, #ffb84d 65%, #000 35%);
+    padding: 0.25rem 0.45rem;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 700;
+    box-shadow: inset 0 0 4px color-mix(in srgb, #ffb84d 35%, transparent);
   }
 
   .import-btn {
