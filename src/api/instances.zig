@@ -189,6 +189,32 @@ fn classifyProbeFailure(status_code: ?u16, stdout: []const u8, stderr: []const u
     return .{ .live_ok = false, .reason = "auth_check_failed" };
 }
 
+fn canonicalProbeReason(raw: ?[]const u8, live_ok: bool) []const u8 {
+    const reason = raw orelse (if (live_ok) "ok" else "auth_check_failed");
+
+    if (std.mem.eql(u8, reason, "ok")) return "ok";
+    if (std.mem.eql(u8, reason, "invalid_api_key")) return "invalid_api_key";
+    if (std.mem.eql(u8, reason, "missing_api_key")) return "missing_api_key";
+    if (std.mem.eql(u8, reason, "provider_not_detected")) return "provider_not_detected";
+    if (std.mem.eql(u8, reason, "instance_not_running")) return "instance_not_running";
+    if (std.mem.eql(u8, reason, "rate_limited")) return "rate_limited";
+    if (std.mem.eql(u8, reason, "forbidden")) return "forbidden";
+    if (std.mem.eql(u8, reason, "provider_unavailable")) return "provider_unavailable";
+    if (std.mem.eql(u8, reason, "network_error")) return "network_error";
+    if (std.mem.eql(u8, reason, "provider_rejected")) return "provider_rejected";
+    if (std.mem.eql(u8, reason, "probe_exec_failed")) return "probe_exec_failed";
+    if (std.mem.eql(u8, reason, "probe_request_failed")) return "probe_request_failed";
+    if (std.mem.eql(u8, reason, "config_load_failed")) return "config_load_failed";
+    if (std.mem.eql(u8, reason, "component_binary_missing")) return "component_binary_missing";
+    if (std.mem.eql(u8, reason, "component_probe_failed")) return "component_probe_failed";
+    if (std.mem.eql(u8, reason, "probe_timeout")) return "probe_timeout";
+    if (std.mem.eql(u8, reason, "probe_home_path_failed")) return "probe_home_path_failed";
+    if (std.mem.eql(u8, reason, "invalid_probe_response")) return "invalid_probe_response";
+    if (std.mem.eql(u8, reason, "auth_check_failed")) return "auth_check_failed";
+
+    return if (live_ok) "ok" else "auth_check_failed";
+}
+
 const ComponentHealthProbePayload = struct {
     live_ok: bool = false,
     reason: ?[]const u8 = null,
@@ -229,7 +255,7 @@ fn probeProviderViaComponentHealth(
     defer parsed.deinit();
 
     const payload = parsed.value;
-    const reason = payload.reason orelse (if (payload.live_ok) "ok" else "auth_check_failed");
+    const reason = canonicalProbeReason(payload.reason, payload.live_ok);
     if (!result.success and payload.reason == null and !payload.live_ok) {
         const status_code = payload.status_code orelse parseAnyHttpStatusCode(result.stderr) orelse parseAnyHttpStatusCode(result.stdout);
         return classifyProbeFailure(status_code, result.stdout, result.stderr);
@@ -328,7 +354,6 @@ const TOKEN_USAGE_LEDGER_FILENAME = "llm_token_usage.jsonl";
 const LEGACY_USAGE_LEDGER_FILENAME = "llm_usage.jsonl";
 const USAGE_CACHE_VERSION: u32 = 1;
 const USAGE_CACHE_MAX_LEDGER_BYTES: usize = 128 * 1024 * 1024;
-const USAGE_CACHE_REBUILD_MIN_SECS: i64 = 30;
 const USAGE_HOURLY_RETENTION_SECS: i64 = 14 * 24 * 60 * 60;
 const USAGE_DAILY_RETENTION_SECS: i64 = 730 * 24 * 60 * 60;
 const HOUR_SECS: i64 = 60 * 60;
@@ -1089,7 +1114,7 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
         if (!has_cache) {
             should_rebuild = true;
         } else if (snapshot.ledger_size != ledger_size or snapshot.ledger_mtime_ns != ledger_mtime_ns) {
-            should_rebuild = (now_ts - snapshot.generated_at) >= USAGE_CACHE_REBUILD_MIN_SECS;
+            should_rebuild = true;
         }
     }
 
@@ -1457,6 +1482,13 @@ test "classifyProbeFailure maps stderr hints" {
     try std.testing.expectEqualStrings("network_error", network.reason);
 }
 
+test "canonicalProbeReason keeps stable reason slices" {
+    try std.testing.expectEqualStrings("ok", canonicalProbeReason("ok", true));
+    try std.testing.expectEqualStrings("invalid_api_key", canonicalProbeReason("invalid_api_key", false));
+    try std.testing.expectEqualStrings("auth_check_failed", canonicalProbeReason("unexpected_reason", false));
+    try std.testing.expectEqualStrings("ok", canonicalProbeReason("unexpected_reason", true));
+}
+
 test "parsePath: rejects bare /api/instances/" {
     try std.testing.expect(parsePath("/api/instances/") == null);
 }
@@ -1797,6 +1829,57 @@ test "handleUsage aggregates provider/model rows" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"provider\":\"openrouter\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"total_tokens\":180") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"requests\":2") != null);
+}
+
+test "handleUsage refreshes cache immediately when ledger changes" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "usage-agent-cache", .{ .version = "1.0.0" });
+
+    try mctx.paths.ensureDirs();
+    const comp_dir = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw" });
+    defer allocator.free(comp_dir);
+    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "usage-agent-cache");
+    defer allocator.free(inst_dir);
+    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    const ledger_path = try std.fs.path.join(allocator, &.{ inst_dir, TOKEN_USAGE_LEDGER_FILENAME });
+    defer allocator.free(ledger_path);
+    var ledger = try std.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
+    defer ledger.close();
+    var writer_buf: [512]u8 = undefined;
+    var fw = ledger.writer(&writer_buf);
+    const w = &fw.interface;
+    try w.writeAll("{\"ts\":1700001000,\"provider\":\"openrouter\",\"model\":\"anthropic/claude-sonnet-4\",\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2,\"success\":true}\n");
+    try w.flush();
+
+    const first = handleUsage(allocator, &s, mctx.paths, "nullclaw", "usage-agent-cache", "/api/instances/nullclaw/usage-agent-cache/usage?window=all");
+    defer allocator.free(first.body);
+    try std.testing.expectEqualStrings("200 OK", first.status);
+    try std.testing.expect(std.mem.indexOf(u8, first.body, "\"requests\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first.body, "\"total_tokens\":2") != null);
+
+    // Append one more row and verify the next read reflects it immediately.
+    try ledger.seekFromEnd(0);
+    try w.writeAll("{\"ts\":1700001001,\"provider\":\"openrouter\",\"model\":\"anthropic/claude-sonnet-4\",\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3,\"success\":true}\n");
+    try w.flush();
+
+    const second = handleUsage(allocator, &s, mctx.paths, "nullclaw", "usage-agent-cache", "/api/instances/nullclaw/usage-agent-cache/usage?window=all");
+    defer allocator.free(second.body);
+    try std.testing.expectEqualStrings("200 OK", second.status);
+    try std.testing.expect(std.mem.indexOf(u8, second.body, "\"requests\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second.body, "\"total_tokens\":5") != null);
 }
 
 test "dispatch routes GET usage action" {
