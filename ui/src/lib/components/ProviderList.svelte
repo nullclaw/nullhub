@@ -6,6 +6,7 @@
     value = "[]",
     onchange = (v: string) => {},
     component = "",
+    validationResults = [] as Array<{ provider: string; live_ok: boolean; reason: string }>,
   } = $props();
 
   const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli"];
@@ -97,6 +98,12 @@
     <div class="provider-row">
       <div class="provider-row-header">
         <span class="provider-number">{i + 1}.</span>
+        {#each [validationResults.find((r: any) => r.provider === entry.provider)] as result}
+          {#if result}
+            <span class="status-dot" class:ok={result.live_ok} class:error={!result.live_ok}
+              title={result.reason}></span>
+          {/if}
+        {/each}
         <select
           value={entry.provider}
           onchange={(e) => updateEntry(i, "provider", e.currentTarget.value)}
@@ -315,6 +322,21 @@
     letter-spacing: 1px;
     cursor: pointer;
     transition: all 0.2s ease;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .status-dot.ok {
+    background: var(--success, #4a4);
+    box-shadow: 0 0 6px var(--success, #4a4);
+  }
+  .status-dot.error {
+    background: var(--error, #e55);
+    box-shadow: 0 0 6px var(--error, #e55);
   }
 
   .add-btn:hover {

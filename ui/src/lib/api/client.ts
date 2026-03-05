@@ -74,4 +74,16 @@ export const api = {
   getAvailableUiModules: () => request<{ name: string; repo: string; component: string }[]>('/ui-modules/available'),
   installUiModule: (name: string) => request<any>(`/ui-modules/${name}/install`, { method: 'POST' }),
   uninstallUiModule: (name: string) => request<any>(`/ui-modules/${name}`, { method: 'DELETE' }),
+
+  validateProviders: (component: string, providers: any[]) =>
+    request<any>(`/wizard/${component}/validate-providers`, {
+      method: 'POST',
+      body: JSON.stringify({ providers }),
+    }),
+
+  validateChannels: (component: string, channels: Record<string, any>) =>
+    request<any>(`/wizard/${component}/validate-channels`, {
+      method: 'POST',
+      body: JSON.stringify({ channels }),
+    }),
 };

@@ -42,6 +42,22 @@ pub fn extractComponentName(target: []const u8) ?[]const u8 {
         return component;
     }
 
+    const validate_providers_suffix = "/validate-providers";
+    if (std.mem.endsWith(u8, rest, validate_providers_suffix)) {
+        const component = rest[0 .. rest.len - validate_providers_suffix.len];
+        if (component.len == 0) return null;
+        if (std.mem.indexOfScalar(u8, component, '/') != null) return null;
+        return component;
+    }
+
+    const validate_channels_suffix = "/validate-channels";
+    if (std.mem.endsWith(u8, rest, validate_channels_suffix)) {
+        const component = rest[0 .. rest.len - validate_channels_suffix.len];
+        if (component.len == 0) return null;
+        if (std.mem.indexOfScalar(u8, component, '/') != null) return null;
+        return component;
+    }
+
     // Reject paths with other additional segments
     if (std.mem.indexOfScalar(u8, rest, '/') != null) return null;
 
@@ -61,6 +77,16 @@ pub fn isModelsPath(target: []const u8) bool {
 /// Check if this is a versions request path.
 pub fn isVersionsPath(target: []const u8) bool {
     return std.mem.endsWith(u8, stripQuery(target), "/versions");
+}
+
+/// Check if this is a validate-providers request path.
+pub fn isValidateProvidersPath(target: []const u8) bool {
+    return std.mem.endsWith(u8, stripQuery(target), "/validate-providers");
+}
+
+/// Check if this is a validate-channels request path.
+pub fn isValidateChannelsPath(target: []const u8) bool {
+    return std.mem.endsWith(u8, stripQuery(target), "/validate-channels");
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -344,6 +370,248 @@ fn buildErrorResponse(allocator: std.mem.Allocator, err: orchestrator.InstallErr
     return buf.toOwnedSlice() catch null;
 }
 
+/// Handle POST /api/wizard/{component}/validate-providers
+pub fn handleValidateProviders(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    body: []const u8,
+    paths: paths_mod.Paths,
+) ?[]const u8 {
+    if (registry.findKnownComponent(component_name) == null) return null;
+
+    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse
+        return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
+    defer allocator.free(bin_path);
+
+    const parsed = std.json.parseFromSlice(struct {
+        providers: []const struct {
+            provider: []const u8,
+            api_key: []const u8 = "",
+            model: []const u8 = "",
+            base_url: []const u8 = "",
+        },
+    }, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
+    defer parsed.deinit();
+
+    // Create temp directory for probes
+    const timestamp = @abs(std.time.milliTimestamp());
+    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-wizard-validate-{d}", .{timestamp}) catch return null;
+    defer {
+        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        allocator.free(tmp_dir);
+    }
+    std.fs.makeDirAbsolute(tmp_dir) catch return null;
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    buf.appendSlice("{\"results\":[") catch return null;
+
+    for (parsed.value.providers, 0..) |prov, idx| {
+        if (idx > 0) buf.append(',') catch return null;
+
+        writeMinimalProviderConfig(allocator, tmp_dir, prov.provider, prov.api_key, prov.base_url) catch {
+            appendProviderResult(&buf, prov.provider, false, "config_write_failed") catch return null;
+            continue;
+        };
+
+        const result = probeProviderViaComponentBinary(allocator, bin_path, tmp_dir, prov.provider, prov.model);
+        appendProviderResult(&buf, prov.provider, result.live_ok, result.reason) catch return null;
+    }
+
+    buf.appendSlice("]}") catch return null;
+    return buf.toOwnedSlice() catch null;
+}
+
+fn writeMinimalProviderConfig(
+    allocator: std.mem.Allocator,
+    dir: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+) !void {
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{dir});
+    defer allocator.free(config_path);
+
+    var cfg_buf = std.array_list.Managed(u8).init(allocator);
+    defer cfg_buf.deinit();
+
+    try cfg_buf.appendSlice("{\"models\":{\"providers\":{\"");
+    try appendEscaped(&cfg_buf, provider);
+    try cfg_buf.appendSlice("\":{\"api_key\":\"");
+    try appendEscaped(&cfg_buf, api_key);
+    try cfg_buf.appendSlice("\"");
+    if (base_url.len > 0) {
+        try cfg_buf.appendSlice(",\"base_url\":\"");
+        try appendEscaped(&cfg_buf, base_url);
+        try cfg_buf.appendSlice("\"");
+    }
+    try cfg_buf.appendSlice("}}}}");
+
+    const file = try std.fs.createFileAbsolute(config_path, .{});
+    defer file.close();
+    try file.writeAll(cfg_buf.items);
+}
+
+fn probeProviderViaComponentBinary(
+    allocator: std.mem.Allocator,
+    binary_path: []const u8,
+    instance_home: []const u8,
+    provider: []const u8,
+    model: []const u8,
+) struct { live_ok: bool, reason: []const u8 } {
+    const args: []const []const u8 = if (model.len > 0)
+        &.{ "--probe-provider-health", "--provider", provider, "--model", model, "--timeout-secs", "10" }
+    else
+        &.{ "--probe-provider-health", "--provider", provider, "--timeout-secs", "10" };
+
+    const result = component_cli.runWithNullclawHome(
+        allocator,
+        binary_path,
+        args,
+        null,
+        instance_home,
+    ) catch return .{ .live_ok = false, .reason = "probe_exec_failed" };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const probe_parsed = std.json.parseFromSlice(struct {
+        live_ok: bool = false,
+        reason: ?[]const u8 = null,
+    }, allocator, result.stdout, .{
+        .allocate = .alloc_if_needed,
+        .ignore_unknown_fields = true,
+    }) catch return .{
+        .live_ok = false,
+        .reason = if (result.success) "invalid_probe_response" else "probe_exec_failed",
+    };
+    defer probe_parsed.deinit();
+
+    const reason = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "auth_check_failed");
+    return .{ .live_ok = probe_parsed.value.live_ok, .reason = reason };
+}
+
+fn appendProviderResult(buf: *std.array_list.Managed(u8), provider: []const u8, live_ok: bool, reason: []const u8) !void {
+    try buf.appendSlice("{\"provider\":\"");
+    try appendEscaped(buf, provider);
+    try buf.appendSlice("\",\"live_ok\":");
+    try buf.appendSlice(if (live_ok) "true" else "false");
+    try buf.appendSlice(",\"reason\":\"");
+    try appendEscaped(buf, reason);
+    try buf.appendSlice("\"}");
+}
+
+/// Handle POST /api/wizard/{component}/validate-channels
+pub fn handleValidateChannels(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    body: []const u8,
+    paths: paths_mod.Paths,
+) ?[]const u8 {
+    if (registry.findKnownComponent(component_name) == null) return null;
+
+    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse
+        return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
+    defer allocator.free(bin_path);
+
+    const timestamp = @abs(std.time.milliTimestamp());
+    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-wizard-validate-ch-{d}", .{timestamp}) catch return null;
+    defer {
+        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        allocator.free(tmp_dir);
+    }
+    std.fs.makeDirAbsolute(tmp_dir) catch return null;
+
+    // Write the full body as config (it contains {"channels": {...}})
+    const config_path = std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp_dir}) catch return null;
+    defer allocator.free(config_path);
+    {
+        const file = std.fs.createFileAbsolute(config_path, .{}) catch return null;
+        defer file.close();
+        file.writeAll(body) catch return null;
+    }
+
+    // Parse body to iterate channels and accounts
+    var tree = std.json.parseFromSlice(std.json.Value, allocator, body, .{ .allocate = .alloc_always }) catch
+        return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
+    defer tree.deinit();
+
+    const channels_val = switch (tree.value) {
+        .object => |obj| obj.get("channels") orelse return allocator.dupe(u8, "{\"error\":\"missing channels field\"}") catch null,
+        else => return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null,
+    };
+    const channels_map = switch (channels_val) {
+        .object => |obj| obj,
+        else => return allocator.dupe(u8, "{\"error\":\"channels must be an object\"}") catch null,
+    };
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    buf.appendSlice("{\"results\":[") catch return null;
+
+    var first = true;
+    var ch_it = channels_map.iterator();
+    while (ch_it.next()) |ch_entry| {
+        const channel_type = ch_entry.key_ptr.*;
+        const accounts = switch (ch_entry.value_ptr.*) {
+            .object => |obj| obj,
+            else => continue,
+        };
+
+        var acc_it = accounts.iterator();
+        while (acc_it.next()) |acc_entry| {
+            const account_name = acc_entry.key_ptr.*;
+            if (!first) buf.append(',') catch return null;
+            first = false;
+
+            const ch_result = component_cli.runWithNullclawHome(
+                allocator,
+                bin_path,
+                &.{ "--probe-channel-health", "--channel", channel_type, "--account", account_name, "--timeout-secs", "10" },
+                null,
+                tmp_dir,
+            ) catch {
+                appendChannelResult(&buf, channel_type, account_name, false, "probe_exec_failed") catch return null;
+                continue;
+            };
+            defer allocator.free(ch_result.stdout);
+            defer allocator.free(ch_result.stderr);
+
+            const probe_parsed = std.json.parseFromSlice(struct {
+                live_ok: bool = false,
+                reason: ?[]const u8 = null,
+            }, allocator, ch_result.stdout, .{
+                .allocate = .alloc_if_needed,
+                .ignore_unknown_fields = true,
+            }) catch {
+                appendChannelResult(&buf, channel_type, account_name, false, "invalid_probe_response") catch return null;
+                continue;
+            };
+            defer probe_parsed.deinit();
+
+            const reason = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "probe_failed");
+            appendChannelResult(&buf, channel_type, account_name, probe_parsed.value.live_ok, reason) catch return null;
+        }
+    }
+
+    buf.appendSlice("]}") catch return null;
+    return buf.toOwnedSlice() catch null;
+}
+
+fn appendChannelResult(buf: *std.array_list.Managed(u8), channel: []const u8, account: []const u8, live_ok: bool, reason: []const u8) !void {
+    try buf.appendSlice("{\"channel\":\"");
+    try appendEscaped(buf, channel);
+    try buf.appendSlice("\",\"account\":\"");
+    try appendEscaped(buf, account);
+    try buf.appendSlice("\",\"live_ok\":");
+    try buf.appendSlice(if (live_ok) "true" else "false");
+    try buf.appendSlice(",\"reason\":\"");
+    try appendEscaped(buf, reason);
+    try buf.appendSlice("\"}");
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test "extractComponentName parses wizard paths correctly" {
@@ -382,6 +650,8 @@ test "isWizardPath identifies wizard paths" {
     try std.testing.expect(isWizardPath("/api/wizard/nullboiler"));
     try std.testing.expect(isWizardPath("/api/wizard/nullclaw/models"));
     try std.testing.expect(isWizardPath("/api/wizard/nullclaw/versions"));
+    try std.testing.expect(isWizardPath("/api/wizard/nullclaw/validate-providers"));
+    try std.testing.expect(isWizardPath("/api/wizard/nullclaw/validate-channels"));
     try std.testing.expect(!isWizardPath("/api/wizard/"));
     try std.testing.expect(!isWizardPath("/api/wizard"));
     try std.testing.expect(!isWizardPath("/api/components/nullclaw"));
@@ -477,4 +747,28 @@ test "handlePostWizard returns error for known component without binary" {
     try std.testing.expect(json != null);
     defer allocator.free(json.?);
     try std.testing.expect(std.mem.indexOf(u8, json.?, "\"error\":\"") != null);
+}
+
+test "isValidateProvidersPath detects validate-providers suffix" {
+    try std.testing.expect(isValidateProvidersPath("/api/wizard/nullclaw/validate-providers"));
+    try std.testing.expect(!isValidateProvidersPath("/api/wizard/nullclaw"));
+    try std.testing.expect(!isValidateProvidersPath("/api/wizard/nullclaw/models"));
+}
+
+test "isValidateChannelsPath detects validate-channels suffix" {
+    try std.testing.expect(isValidateChannelsPath("/api/wizard/nullclaw/validate-channels"));
+    try std.testing.expect(!isValidateChannelsPath("/api/wizard/nullclaw"));
+    try std.testing.expect(!isValidateChannelsPath("/api/wizard/nullclaw/models"));
+}
+
+test "extractComponentName parses validate-providers path" {
+    const name = extractComponentName("/api/wizard/nullclaw/validate-providers");
+    try std.testing.expect(name != null);
+    try std.testing.expectEqualStrings("nullclaw", name.?);
+}
+
+test "extractComponentName parses validate-channels path" {
+    const name = extractComponentName("/api/wizard/nullclaw/validate-channels");
+    try std.testing.expect(name != null);
+    try std.testing.expectEqualStrings("nullclaw", name.?);
 }

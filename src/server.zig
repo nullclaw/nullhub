@@ -482,6 +482,50 @@ pub const Server = struct {
             };
         }
 
+        // Validate Providers API — POST /api/wizard/{component}/validate-providers
+        if (std.mem.eql(u8, method, "POST") and wizard_api.isValidateProvidersPath(target)) {
+            if (wizard_api.extractComponentName(target)) |comp_name| {
+                if (wizard_api.handleValidateProviders(allocator, comp_name, body, self.paths)) |json| {
+                    const status = if (std.mem.indexOf(u8, json, "\"error\"") != null)
+                        "400 Bad Request"
+                    else
+                        "200 OK";
+                    return .{
+                        .status = status,
+                        .content_type = "application/json",
+                        .body = json,
+                    };
+                }
+                return .{
+                    .status = "404 Not Found",
+                    .content_type = "application/json",
+                    .body = "{\"error\":\"component not found\"}",
+                };
+            }
+        }
+
+        // Validate Channels API — POST /api/wizard/{component}/validate-channels
+        if (std.mem.eql(u8, method, "POST") and wizard_api.isValidateChannelsPath(target)) {
+            if (wizard_api.extractComponentName(target)) |comp_name| {
+                if (wizard_api.handleValidateChannels(allocator, comp_name, body, self.paths)) |json| {
+                    const status = if (std.mem.indexOf(u8, json, "\"error\"") != null)
+                        "400 Bad Request"
+                    else
+                        "200 OK";
+                    return .{
+                        .status = status,
+                        .content_type = "application/json",
+                        .body = json,
+                    };
+                }
+                return .{
+                    .status = "404 Not Found",
+                    .content_type = "application/json",
+                    .body = "{\"error\":\"component not found\"}",
+                };
+            }
+        }
+
         // Versions API — GET /api/wizard/{component}/versions
         if (std.mem.eql(u8, method, "GET") and wizard_api.isVersionsPath(target)) {
             if (wizard_api.extractComponentName(target)) |comp_name| {
