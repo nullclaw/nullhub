@@ -51,9 +51,9 @@ COPY --from=ui-builder /ui/build /opt/nullhub/ui/build
 
 ENV HOME=/nullhub-data
 WORKDIR /opt/nullhub
-EXPOSE 9800
+EXPOSE 19800
 ENTRYPOINT ["nullhub"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "9800"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "19800"]
 
 # Optional autonomous mode (explicit opt-in):
 #   docker build --target release-root -t nullhub:root .

@@ -1,9 +1,15 @@
 <script>
   import '../app.css';
+  import { onMount } from 'svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import TopBar from '$lib/components/TopBar.svelte';
+  import { redirectToPreferredOrigin } from '$lib/nullhubAccess';
 
   let { children } = $props();
+
+  onMount(() => {
+    void redirectToPreferredOrigin(window.location);
+  });
 </script>
 
 <div class="app-layout">

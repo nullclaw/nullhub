@@ -25,7 +25,16 @@ zig build
 ./zig-out/bin/nullhub
 ```
 
-Opens browser to http://127.0.0.1:9800.
+Opens browser to [http://nullhub.localhost:19800](http://nullhub.localhost:19800).
+
+Local access chain:
+
+- `http://nullhub.local:19800`
+- `http://nullhub.localhost:19800`
+- `http://127.0.0.1:19800`
+
+`nullhub` prefers the first address that resolves locally and falls back to the
+next one automatically.
 
 ### Runtime Prerequisites
 

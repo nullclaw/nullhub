@@ -6,6 +6,7 @@
   let status = $state<any>(null);
   let error = $state<string | null>(null);
   let interval: ReturnType<typeof setInterval>;
+  let access = $derived(status?.hub?.access ?? null);
 
   async function refresh() {
     try {
@@ -35,6 +36,24 @@
   {/if}
 
   {#if status}
+    {#if access}
+      <div class="access-banner">
+        <div class="access-copy">
+          <span class="access-label">Hub Access</span>
+          <code>{access.browser_open_url}</code>
+        </div>
+        {#if access.local_alias_chain}
+          <div class="access-chain">
+            <a href={access.public_alias_url}>nullhub.local</a>
+            <span>&rarr;</span>
+            <a href={access.canonical_url}>nullhub.localhost</a>
+            <span>&rarr;</span>
+            <a href={access.fallback_url}>127.0.0.1</a>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <div class="instance-grid">
       {#each Object.entries(status.instances || {}) as [component, instances]}
         {#each Object.entries(instances as Record<string, any>) as [name, info]}
@@ -118,6 +137,53 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 1.5rem;
+  }
+  .access-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--bg-surface) 80%, transparent), color-mix(in srgb, var(--accent) 8%, transparent));
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .access-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .access-label {
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .access-copy code,
+  .access-chain a {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    text-shadow: var(--text-glow);
+  }
+  .access-chain {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .access-chain a:hover {
+    text-decoration: none;
+  }
+  .access-chain span {
+    color: var(--fg-dim);
+  }
+  @media (max-width: 720px) {
+    .access-banner {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
   .empty-state {
     text-align: center;

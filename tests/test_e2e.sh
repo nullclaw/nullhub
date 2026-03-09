@@ -113,7 +113,7 @@ assert_status "GET /api/updates returns 200" "200" GET "$BASE/api/updates"
 echo ""
 echo "=== Settings API ==="
 assert_status "GET /api/settings returns 200" "200" GET "$BASE/api/settings"
-assert_status "PUT /api/settings returns 200" "200" PUT "$BASE/api/settings" '{"port":9800}'
+assert_status "PUT /api/settings returns 200" "200" PUT "$BASE/api/settings" '{"port":19800}'
 
 echo ""
 echo "=== Service API ==="

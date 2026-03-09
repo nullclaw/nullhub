@@ -5,6 +5,7 @@ const cli = root.cli;
 const server = root.server;
 const paths_mod = root.paths;
 const manager_mod = root.manager;
+const access = root.access;
 
 const version = "2026.3.2";
 
@@ -99,15 +100,13 @@ fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) void 
 }
 
 fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16) void {
-    const url = std.fmt.allocPrint(allocator, "http://{s}:{d}", .{ host, port }) catch return;
-    defer allocator.free(url);
+    var urls = access.buildAccessUrls(allocator, host, port) catch return;
+    defer urls.deinit(allocator);
 
-    const open_cmd = comptime switch (builtin.os.tag) {
-        .macos => "open",
-        .windows => "start",
-        else => "xdg-open",
+    var child = switch (builtin.os.tag) {
+        .macos => std.process.Child.init(&.{ "open", urls.browser_open_url }, allocator),
+        .windows => std.process.Child.init(&.{ "cmd", "/c", "start", "", urls.browser_open_url }, allocator),
+        else => std.process.Child.init(&.{ "xdg-open", urls.browser_open_url }, allocator),
     };
-
-    var child = std.process.Child.init(&.{ open_cmd, url }, allocator);
     _ = child.spawnAndWait() catch return;
 }

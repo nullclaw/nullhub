@@ -8,6 +8,7 @@ const logs_api = @import("api/logs.zig");
 const status_api = @import("api/status.zig");
 const settings_api = @import("api/settings.zig");
 const updates_api = @import("api/updates.zig");
+const access = @import("access.zig");
 const state_mod = @import("core/state.zig");
 const paths_mod = @import("core/paths.zig");
 const manager_mod = @import("supervisor/manager.zig");
@@ -58,7 +59,7 @@ pub const Server = struct {
         return .{
             .allocator = allocator,
             .host = "127.0.0.1",
-            .port = 9800,
+            .port = access.default_port,
             .state = state,
             .paths = paths,
             .manager = manager,
@@ -232,6 +233,15 @@ pub const Server = struct {
         defer listener.deinit();
 
         std.debug.print("listening on http://{s}:{d}\n", .{ self.host, self.port });
+        var urls = access.buildAccessUrls(self.allocator, self.host, self.port) catch null;
+        defer if (urls) |*u| u.deinit(self.allocator);
+        if (urls) |u| {
+            if (u.local_alias_chain) {
+                std.debug.print("access chain: {s} -> {s} -> {s}\n", .{ u.public_alias_url.?, u.canonical_url, u.fallback_url });
+            } else {
+                std.debug.print("access url: {s}\n", .{u.browser_open_url});
+            }
+        }
 
         while (true) {
             const conn = listener.accept() catch |err| {
@@ -306,7 +316,7 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/status")) {
                 const now = std.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
-                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime);
+                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port);
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (std.mem.eql(u8, target, "/api/components")) {
@@ -398,7 +408,7 @@ pub const Server = struct {
         // Settings API
         if (std.mem.eql(u8, target, "/api/settings")) {
             if (std.mem.eql(u8, method, "GET")) {
-                if (settings_api.handleGetSettings(allocator)) |json| {
+                if (settings_api.handleGetSettings(allocator, self.host, self.port)) |json| {
                     return jsonResponse(json);
                 } else |_| {
                     return .{
@@ -747,7 +757,8 @@ fn readBody(raw: []const u8, n: usize, stream: std.net.Stream, alloc: std.mem.Al
 
 fn sendResponse(stream: std.net.Stream, response: Response) !void {
     var buf: [4096]u8 = undefined;
-    const header = try std.fmt.bufPrint(&buf,
+    const header = try std.fmt.bufPrint(
+        &buf,
         "HTTP/1.1 {s}\r\n" ++
             "Content-Type: {s}\r\n" ++
             "Content-Length: {d}\r\n" ++
@@ -1091,15 +1102,16 @@ test "route GET /api/settings returns defaults" {
     const resp = ctx.route(std.testing.allocator, "GET", "/api/settings", "");
     defer std.testing.allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"port\":9800") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"port\":19800") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"host\":\"127.0.0.1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"browser_open_url\":\"http://nullhub.localhost:19800\"") != null);
 }
 
 test "route PUT /api/settings returns ok" {
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
-    const resp = ctx.route(std.testing.allocator, "PUT", "/api/settings", "{\"port\":9801}");
+    const resp = ctx.route(std.testing.allocator, "PUT", "/api/settings", "{\"port\":19801}");
     defer std.testing.allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"ok\"") != null);
@@ -1159,10 +1171,10 @@ test "Server init sets fields" {
     var mgr = manager_mod.Manager.init(std.testing.allocator, paths);
     defer mgr.deinit();
     var mutex = std.Thread.Mutex{};
-    var s = try Server.init(std.testing.allocator, "127.0.0.1", 9800, &mgr, &mutex);
+    var s = try Server.init(std.testing.allocator, "127.0.0.1", access.default_port, &mgr, &mutex);
     defer s.deinit();
     try std.testing.expectEqualStrings("127.0.0.1", s.host);
-    try std.testing.expectEqual(@as(u16, 9800), s.port);
+    try std.testing.expectEqual(access.default_port, s.port);
     try std.testing.expect(s.start_time > 0);
 }
 

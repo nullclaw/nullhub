@@ -1,17 +1,25 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const access = @import("../access.zig");
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/settings — return hub configuration defaults.
 /// Caller owns the returned memory.
-pub fn handleGetSettings(allocator: std.mem.Allocator) ![]const u8 {
+pub fn handleGetSettings(allocator: std.mem.Allocator, host: []const u8, port: u16) ![]const u8 {
+    var urls = try access.buildAccessUrls(allocator, host, port);
+    defer urls.deinit(allocator);
+
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
-    try buf.appendSlice(
-        "{\"port\":9800,\"host\":\"127.0.0.1\",\"auth_token\":null,\"auto_update_check\":true}",
-    );
+    try buf.appendSlice("{\"port\":");
+    try buf.writer().print("{d}", .{port});
+    try buf.appendSlice(",\"host\":\"");
+    try buf.appendSlice(host);
+    try buf.appendSlice("\",\"auth_token\":null,\"auto_update_check\":true,");
+    try appendAccessJson(&buf, urls);
+    try buf.append('}');
 
     return try buf.toOwnedSlice();
 }
@@ -85,12 +93,35 @@ pub fn handleServiceStatus(allocator: std.mem.Allocator) ![]const u8 {
     return try buf.toOwnedSlice();
 }
 
+fn appendAccessJson(buf: *std.array_list.Managed(u8), urls: access.AccessUrls) !void {
+    try buf.appendSlice("\"access\":{");
+    try buf.appendSlice("\"browser_open_url\":\"");
+    try buf.appendSlice(urls.browser_open_url);
+    try buf.appendSlice("\",\"direct_url\":\"");
+    try buf.appendSlice(urls.direct_url);
+    try buf.appendSlice("\",\"canonical_url\":\"");
+    try buf.appendSlice(urls.canonical_url);
+    try buf.appendSlice("\",\"fallback_url\":\"");
+    try buf.appendSlice(urls.fallback_url);
+    try buf.appendSlice("\",\"local_alias_chain\":");
+    try buf.appendSlice(if (urls.local_alias_chain) "true" else "false");
+    try buf.appendSlice(",\"public_alias_url\":");
+    if (urls.public_alias_url) |url| {
+        try buf.append('"');
+        try buf.appendSlice(url);
+        try buf.append('"');
+    } else {
+        try buf.appendSlice("null");
+    }
+    try buf.append('}');
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 test "handleGetSettings returns valid JSON with defaults" {
     const allocator = std.testing.allocator;
 
-    const json = try handleGetSettings(allocator);
+    const json = try handleGetSettings(allocator, access.default_bind_host, access.default_port);
     defer allocator.free(json);
 
     const parsed = try std.json.parseFromSlice(
@@ -99,6 +130,14 @@ test "handleGetSettings returns valid JSON with defaults" {
             host: []const u8,
             auth_token: ?[]const u8,
             auto_update_check: bool,
+            access: struct {
+                browser_open_url: []const u8,
+                direct_url: []const u8,
+                canonical_url: []const u8,
+                fallback_url: []const u8,
+                local_alias_chain: bool,
+                public_alias_url: ?[]const u8,
+            },
         },
         allocator,
         json,
@@ -106,22 +145,25 @@ test "handleGetSettings returns valid JSON with defaults" {
     );
     defer parsed.deinit();
 
-    try std.testing.expectEqual(@as(u16, 9800), parsed.value.port);
-    try std.testing.expectEqualStrings("127.0.0.1", parsed.value.host);
+    try std.testing.expectEqual(access.default_port, parsed.value.port);
+    try std.testing.expectEqualStrings(access.default_bind_host, parsed.value.host);
     try std.testing.expect(parsed.value.auth_token == null);
     try std.testing.expect(parsed.value.auto_update_check == true);
+    try std.testing.expect(parsed.value.access.local_alias_chain);
+    try std.testing.expectEqualStrings("http://nullhub.localhost:19800", parsed.value.access.browser_open_url);
+    try std.testing.expectEqualStrings("http://nullhub.local:19800", parsed.value.access.public_alias_url.?);
 }
 
 test "handlePutSettings returns ok status" {
     const allocator = std.testing.allocator;
 
-    const body = "{\"port\":9801,\"host\":\"0.0.0.0\"}";
+    const body = "{\"port\":19801,\"host\":\"0.0.0.0\"}";
     const json = try handlePutSettings(allocator, body);
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"ok\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"settings\":") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"port\":9801") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"port\":19801") != null);
 }
 
 test "handlePutSettings rejects invalid JSON" {

@@ -1,10 +1,11 @@
 const std = @import("std");
+const access = @import("access.zig");
 
 // ─── Option Types ────────────────────────────────────────────────────────────
 
 pub const ServeOptions = struct {
-    port: u16 = 9800,
-    host: []const u8 = "127.0.0.1",
+    port: u16 = access.default_port,
+    host: []const u8 = access.default_bind_host,
     no_open: bool = false,
 };
 
@@ -169,7 +170,7 @@ fn parseServe(args: *std.process.ArgIterator) Command {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--port")) {
             if (args.next()) |val| {
-                opts.port = std.fmt.parseInt(u16, val, 10) catch 9800;
+                opts.port = std.fmt.parseInt(u16, val, 10) catch access.default_port;
             }
         } else if (std.mem.eql(u8, arg, "--host")) {
             if (args.next()) |val| {
@@ -367,8 +368,8 @@ test "ServiceCommand.fromStr invalid returns null" {
 
 test "ServeOptions defaults" {
     const opts = ServeOptions{};
-    try std.testing.expectEqual(@as(u16, 9800), opts.port);
-    try std.testing.expectEqualStrings("127.0.0.1", opts.host);
+    try std.testing.expectEqual(access.default_port, opts.port);
+    try std.testing.expectEqualStrings(access.default_bind_host, opts.host);
     try std.testing.expect(!opts.no_open);
 }
 
