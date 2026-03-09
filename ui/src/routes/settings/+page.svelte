@@ -69,9 +69,13 @@
           </div>
         </div>
         <p class="hint">
-          NullHub prefers <code>nullhub.local</code>, upgrades to
-          <code>nullhub.localhost</code> when available, and keeps
-          <code>127.0.0.1</code> as the hard fallback.
+          {#if settings.access.public_alias_active}
+            <code>nullhub.local</code> is active via {settings.access.public_alias_provider}.
+          {:else}
+            <code>nullhub.local</code> is not active on this machine, so NullHub uses
+            <code>nullhub.localhost</code> first and keeps <code>127.0.0.1</code>
+            as the hard fallback.
+          {/if}
         </p>
       {/if}
     </div>

@@ -41,6 +41,13 @@
         <div class="access-copy">
           <span class="access-label">Hub Access</span>
           <code>{access.browser_open_url}</code>
+          <span class="access-state">
+            {#if access.public_alias_active}
+              alias active via {access.public_alias_provider}
+            {:else}
+              alias unavailable, using fallback chain
+            {/if}
+          </span>
         </div>
         {#if access.local_alias_chain}
           <div class="access-chain">
@@ -165,6 +172,12 @@
     font-family: var(--font-mono);
     color: var(--accent);
     text-shadow: var(--text-glow);
+  }
+  .access-state {
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
   }
   .access-chain {
     display: flex;

@@ -6,6 +6,7 @@ const server = root.server;
 const paths_mod = root.paths;
 const manager_mod = root.manager;
 const access = root.access;
+const mdns_mod = root.mdns;
 
 const version = "2026.3.2";
 
@@ -35,13 +36,16 @@ pub fn main() !void {
 
             var srv = try server.Server.init(allocator, opts.host, opts.port, &mgr, &mutex);
             defer srv.deinit();
+            var mdns = try mdns_mod.Publisher.init(allocator, paths, opts.host, opts.port);
+            defer mdns.deinit();
+            srv.setAccessOptions(mdns.accessOptions());
 
             const sup_thread = try std.Thread.spawn(.{}, supervisorLoop, .{ &mgr, &mutex });
             sup_thread.detach();
 
             srv.autoStartAll();
 
-            if (!opts.no_open) openBrowser(allocator, opts.host, opts.port);
+            if (!opts.no_open) openBrowser(allocator, opts.host, opts.port, mdns.accessOptions());
 
             try srv.run();
         },
@@ -99,8 +103,8 @@ fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) void 
     }
 }
 
-fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16) void {
-    var urls = access.buildAccessUrls(allocator, host, port) catch return;
+fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16, access_options: access.Options) void {
+    var urls = access.buildAccessUrlsWithOptions(allocator, host, port, access_options) catch return;
     defer urls.deinit(allocator);
 
     var child = switch (builtin.os.tag) {

@@ -25,6 +25,7 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     host: []const u8,
     port: u16,
+    access_options: access.Options = .{},
     auth_token: ?[]const u8 = null,
     state: *state_mod.State,
     paths: paths_mod.Paths,
@@ -46,6 +47,7 @@ pub const Server = struct {
             .allocator = allocator,
             .host = host,
             .port = port,
+            .access_options = .{},
             .state = state,
             .paths = paths,
             .manager = manager,
@@ -60,6 +62,7 @@ pub const Server = struct {
             .allocator = allocator,
             .host = "127.0.0.1",
             .port = access.default_port,
+            .access_options = .{},
             .state = state,
             .paths = paths,
             .manager = manager,
@@ -72,6 +75,10 @@ pub const Server = struct {
         self.state.deinit();
         self.allocator.destroy(self.state);
         self.paths.deinit(self.allocator);
+    }
+
+    pub fn setAccessOptions(self: *Server, options: access.Options) void {
+        self.access_options = options;
     }
 
     /// Start all instances that have auto_start enabled.
@@ -233,10 +240,12 @@ pub const Server = struct {
         defer listener.deinit();
 
         std.debug.print("listening on http://{s}:{d}\n", .{ self.host, self.port });
-        var urls = access.buildAccessUrls(self.allocator, self.host, self.port) catch null;
+        var urls = access.buildAccessUrlsWithOptions(self.allocator, self.host, self.port, self.access_options) catch null;
         defer if (urls) |*u| u.deinit(self.allocator);
         if (urls) |u| {
-            if (u.local_alias_chain) {
+            if (u.local_alias_chain and u.public_alias_active) {
+                std.debug.print("access chain: {s} -> {s} -> {s} (alias via {s})\n", .{ u.public_alias_url.?, u.canonical_url, u.fallback_url, u.public_alias_provider });
+            } else if (u.local_alias_chain) {
                 std.debug.print("access chain: {s} -> {s} -> {s}\n", .{ u.public_alias_url.?, u.canonical_url, u.fallback_url });
             } else {
                 std.debug.print("access url: {s}\n", .{u.browser_open_url});
@@ -316,7 +325,7 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/status")) {
                 const now = std.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
-                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port);
+                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.access_options);
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (std.mem.eql(u8, target, "/api/components")) {
@@ -408,7 +417,7 @@ pub const Server = struct {
         // Settings API
         if (std.mem.eql(u8, target, "/api/settings")) {
             if (std.mem.eql(u8, method, "GET")) {
-                if (settings_api.handleGetSettings(allocator, self.host, self.port)) |json| {
+                if (settings_api.handleGetSettings(allocator, self.host, self.port, self.access_options)) |json| {
                     return jsonResponse(json);
                 } else |_| {
                     return .{

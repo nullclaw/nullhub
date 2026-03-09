@@ -33,8 +33,9 @@ Local access chain:
 - `http://nullhub.localhost:19800`
 - `http://127.0.0.1:19800`
 
-`nullhub` prefers the first address that resolves locally and falls back to the
-next one automatically.
+`nullhub` tries to publish `nullhub.local` through `dns-sd`/Bonjour or
+`avahi-publish` when those tools are available, and otherwise falls back to
+`nullhub.localhost` and finally `127.0.0.1`.
 
 ### Runtime Prerequisites
 

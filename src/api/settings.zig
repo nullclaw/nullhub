@@ -6,8 +6,8 @@ const access = @import("../access.zig");
 
 /// GET /api/settings — return hub configuration defaults.
 /// Caller owns the returned memory.
-pub fn handleGetSettings(allocator: std.mem.Allocator, host: []const u8, port: u16) ![]const u8 {
-    var urls = try access.buildAccessUrls(allocator, host, port);
+pub fn handleGetSettings(allocator: std.mem.Allocator, host: []const u8, port: u16, access_options: access.Options) ![]const u8 {
+    var urls = try access.buildAccessUrlsWithOptions(allocator, host, port, access_options);
     defer urls.deinit(allocator);
 
     var buf = std.array_list.Managed(u8).init(allocator);
@@ -105,6 +105,11 @@ fn appendAccessJson(buf: *std.array_list.Managed(u8), urls: access.AccessUrls) !
     try buf.appendSlice(urls.fallback_url);
     try buf.appendSlice("\",\"local_alias_chain\":");
     try buf.appendSlice(if (urls.local_alias_chain) "true" else "false");
+    try buf.appendSlice(",\"public_alias_active\":");
+    try buf.appendSlice(if (urls.public_alias_active) "true" else "false");
+    try buf.appendSlice(",\"public_alias_provider\":\"");
+    try buf.appendSlice(urls.public_alias_provider);
+    try buf.append('"');
     try buf.appendSlice(",\"public_alias_url\":");
     if (urls.public_alias_url) |url| {
         try buf.append('"');
@@ -121,7 +126,7 @@ fn appendAccessJson(buf: *std.array_list.Managed(u8), urls: access.AccessUrls) !
 test "handleGetSettings returns valid JSON with defaults" {
     const allocator = std.testing.allocator;
 
-    const json = try handleGetSettings(allocator, access.default_bind_host, access.default_port);
+    const json = try handleGetSettings(allocator, access.default_bind_host, access.default_port, .{});
     defer allocator.free(json);
 
     const parsed = try std.json.parseFromSlice(
@@ -136,6 +141,8 @@ test "handleGetSettings returns valid JSON with defaults" {
                 canonical_url: []const u8,
                 fallback_url: []const u8,
                 local_alias_chain: bool,
+                public_alias_active: bool,
+                public_alias_provider: []const u8,
                 public_alias_url: ?[]const u8,
             },
         },
@@ -150,6 +157,8 @@ test "handleGetSettings returns valid JSON with defaults" {
     try std.testing.expect(parsed.value.auth_token == null);
     try std.testing.expect(parsed.value.auto_update_check == true);
     try std.testing.expect(parsed.value.access.local_alias_chain);
+    try std.testing.expect(!parsed.value.access.public_alias_active);
+    try std.testing.expectEqualStrings("none", parsed.value.access.public_alias_provider);
     try std.testing.expectEqualStrings("http://nullhub.localhost:19800", parsed.value.access.browser_open_url);
     try std.testing.expectEqualStrings("http://nullhub.local:19800", parsed.value.access.public_alias_url.?);
 }

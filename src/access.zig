@@ -6,8 +6,15 @@ pub const public_alias_host = "nullhub.local";
 pub const canonical_local_host = "nullhub.localhost";
 pub const fallback_local_host = "127.0.0.1";
 
+pub const Options = struct {
+    public_alias_active: bool = false,
+    public_alias_provider: []const u8 = "none",
+};
+
 pub const AccessUrls = struct {
     local_alias_chain: bool,
+    public_alias_active: bool,
+    public_alias_provider: []const u8,
     direct_url: []const u8,
     browser_open_url: []const u8,
     canonical_url: []const u8,
@@ -34,6 +41,10 @@ pub fn isLocalBindHost(host: []const u8) bool {
 }
 
 pub fn buildAccessUrls(allocator: std.mem.Allocator, host: []const u8, port: u16) !AccessUrls {
+    return buildAccessUrlsWithOptions(allocator, host, port, .{});
+}
+
+pub fn buildAccessUrlsWithOptions(allocator: std.mem.Allocator, host: []const u8, port: u16, options: Options) !AccessUrls {
     if (isLocalBindHost(host)) {
         const public_alias_url = try buildUrl(allocator, public_alias_host, port);
         errdefer allocator.free(public_alias_url);
@@ -44,7 +55,8 @@ pub fn buildAccessUrls(allocator: std.mem.Allocator, host: []const u8, port: u16
         const fallback_url = try buildUrl(allocator, fallback_local_host, port);
         errdefer allocator.free(fallback_url);
 
-        const browser_open_url = try buildUrl(allocator, canonical_local_host, port);
+        const browser_open_host = if (options.public_alias_active) public_alias_host else canonical_local_host;
+        const browser_open_url = try buildUrl(allocator, browser_open_host, port);
         errdefer allocator.free(browser_open_url);
 
         const direct_url = try buildUrl(allocator, fallback_local_host, port);
@@ -52,6 +64,8 @@ pub fn buildAccessUrls(allocator: std.mem.Allocator, host: []const u8, port: u16
 
         return .{
             .local_alias_chain = true,
+            .public_alias_active = options.public_alias_active,
+            .public_alias_provider = options.public_alias_provider,
             .direct_url = direct_url,
             .browser_open_url = browser_open_url,
             .canonical_url = canonical_url,
@@ -74,6 +88,8 @@ pub fn buildAccessUrls(allocator: std.mem.Allocator, host: []const u8, port: u16
 
     return .{
         .local_alias_chain = false,
+        .public_alias_active = false,
+        .public_alias_provider = "none",
         .direct_url = direct_url,
         .browser_open_url = browser_open_url,
         .canonical_url = canonical_url,
@@ -91,6 +107,8 @@ test "buildAccessUrls uses nullhub local chain for loopback binds" {
     defer urls.deinit(std.testing.allocator);
 
     try std.testing.expect(urls.local_alias_chain);
+    try std.testing.expect(!urls.public_alias_active);
+    try std.testing.expectEqualStrings("none", urls.public_alias_provider);
     try std.testing.expectEqualStrings("http://nullhub.local:19800", urls.public_alias_url.?);
     try std.testing.expectEqualStrings("http://nullhub.localhost:19800", urls.browser_open_url);
     try std.testing.expectEqualStrings("http://nullhub.localhost:19800", urls.canonical_url);
@@ -106,4 +124,16 @@ test "buildAccessUrls keeps direct host for non-local binds" {
     try std.testing.expect(urls.public_alias_url == null);
     try std.testing.expectEqualStrings("http://192.168.1.50:22000", urls.browser_open_url);
     try std.testing.expectEqualStrings("http://192.168.1.50:22000", urls.direct_url);
+}
+
+test "buildAccessUrls prefers public alias when it is active" {
+    var urls = try buildAccessUrlsWithOptions(std.testing.allocator, "127.0.0.1", default_port, .{
+        .public_alias_active = true,
+        .public_alias_provider = "dns-sd",
+    });
+    defer urls.deinit(std.testing.allocator);
+
+    try std.testing.expect(urls.public_alias_active);
+    try std.testing.expectEqualStrings("dns-sd", urls.public_alias_provider);
+    try std.testing.expectEqualStrings("http://nullhub.local:19800", urls.browser_open_url);
 }
