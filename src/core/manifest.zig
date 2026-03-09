@@ -57,12 +57,14 @@ pub const WizardStep = struct {
     id: []const u8,
     title: []const u8,
     description: []const u8 = "",
-    @"type": StepType,
+    type: StepType,
     required: bool = true,
     options: []const StepOption = &.{},
     default_value: []const u8 = "",
     dynamic_source: ?DynamicSource = null,
     condition: ?StepCondition = null,
+    advanced: bool = false,
+    group: ?[]const u8 = null,
 };
 
 pub const StepType = enum {
@@ -210,14 +212,14 @@ test "parse manifest with wizard steps and conditions" {
 
     const step0 = m.wizard.steps[0];
     try std.testing.expectEqualStrings("provider", step0.id);
-    try std.testing.expectEqual(StepType.select, step0.@"type");
+    try std.testing.expectEqual(StepType.select, step0.type);
     try std.testing.expectEqual(@as(usize, 2), step0.options.len);
     try std.testing.expectEqualStrings("openai", step0.options[0].value);
     try std.testing.expect(step0.condition == null);
 
     const step1 = m.wizard.steps[1];
     try std.testing.expectEqualStrings("api_key", step1.id);
-    try std.testing.expectEqual(StepType.secret, step1.@"type");
+    try std.testing.expectEqual(StepType.secret, step1.type);
     try std.testing.expectEqualStrings("Your provider API key", step1.description);
     try std.testing.expect(step1.condition != null);
     try std.testing.expectEqualStrings("provider", step1.condition.?.step);
@@ -252,4 +254,43 @@ test "parse manifest with unknown fields succeeds" {
 
     try std.testing.expectEqualStrings("testcomp", parsed.value.name);
     try std.testing.expectEqualStrings("run", parsed.value.launch.command);
+}
+
+test "parse manifest preserves advanced wizard metadata" {
+    const json =
+        \\{
+        \\  "schema_version": 1,
+        \\  "name": "testcomp",
+        \\  "display_name": "Test",
+        \\  "description": "desc",
+        \\  "icon": "ic",
+        \\  "repo": "r/r",
+        \\  "platforms": {},
+        \\  "launch": { "command": "run" },
+        \\  "health": { "endpoint": "/h", "port_from_config": "p" },
+        \\  "ports": [],
+        \\  "wizard": {
+        \\    "steps": [
+        \\      {
+        \\        "id": "tracker_poll_interval_ms",
+        \\        "title": "Tracker Poll Interval",
+        \\        "type": "number",
+        \\        "advanced": true,
+        \\        "group": "tracker"
+        \\      }
+        \\    ]
+        \\  },
+        \\  "depends_on": [],
+        \\  "connects_to": []
+        \\}
+    ;
+
+    const parsed = try parseManifest(std.testing.allocator, json);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.wizard.steps.len);
+    const step = parsed.value.wizard.steps[0];
+    try std.testing.expect(step.advanced);
+    try std.testing.expect(step.group != null);
+    try std.testing.expectEqualStrings("tracker", step.group.?);
 }

@@ -30,8 +30,6 @@
   let channelValidationResults = $state<any[]>([]);
   let validationError = $state("");
 
-  const PAGE_LABELS = ["Setup", "Channels", "Settings"];
-
   // Auto-generate instance name on mount
   $effect(() => {
     if (component && !instanceName) {
@@ -137,6 +135,21 @@
   let showAdvanced = $state(false);
 
   let providerStep = $derived(steps.find((s) => s.id === "provider"));
+  let hasChannelsPage = $derived(component === "nullclaw");
+  let pageKinds = $derived(
+    hasChannelsPage ? ["setup", "channels", "settings"] : ["setup", "settings"],
+  );
+  let pageLabels = $derived(
+    pageKinds.map((kind) =>
+      kind === "setup" ? "Setup" : kind === "channels" ? "Channels" : "Settings",
+    ),
+  );
+
+  $effect(() => {
+    if (currentPage >= pageKinds.length) {
+      currentPage = pageKinds.length - 1;
+    }
+  });
 
   async function validateProviders(): Promise<boolean> {
     validating = true;
@@ -186,18 +199,22 @@
   }
 
   async function handleNext() {
-    if (currentPage === 0) {
-      const valid = await validateProviders();
-      if (valid) {
-        currentPage = 1;
-        validationError = "";
+    const page = pageKinds[currentPage];
+    if (page === "setup") {
+      if (providerStep) {
+        const valid = await validateProviders();
+        if (!valid) return;
       }
-    } else if (currentPage === 1) {
+      currentPage += 1;
+      validationError = "";
+      return;
+    }
+
+    if (page === "channels") {
       const valid = await validateChannels();
-      if (valid) {
-        currentPage = 2;
-        validationError = "";
-      }
+      if (!valid) return;
+      currentPage += 1;
+      validationError = "";
     }
   }
 
@@ -246,8 +263,8 @@
 <div class="wizard">
   <div class="wizard-header">
     <h2>Install {component}</h2>
-    <div class="step-indicator">
-      {#each PAGE_LABELS as label, i}
+      <div class="step-indicator">
+      {#each pageLabels as label, i}
         <button
           class="step-dot"
           class:active={currentPage === i}
@@ -258,7 +275,7 @@
           <span class="step-num">{i + 1}</span>
           <span class="step-label">{label}</span>
         </button>
-        {#if i < PAGE_LABELS.length - 1}
+        {#if i < pageLabels.length - 1}
           <div class="step-line" class:completed={currentPage > i}></div>
         {/if}
       {/each}
@@ -266,7 +283,7 @@
   </div>
 
   <div class="wizard-body">
-    {#if currentPage === 0}
+    {#if pageKinds[currentPage] === "setup"}
       <div class="name-step">
         <label for={instanceNameId}>Instance Name</label>
         <p class="name-hint">Name doesn't matter, just needs to be unique</p>
@@ -301,7 +318,7 @@
           validationResults={providerValidationResults}
         />
       {/if}
-    {:else if currentPage === 1}
+    {:else if pageKinds[currentPage] === "channels"}
       <ChannelList
         value={channels}
         onchange={(v) => (channels = v)}
@@ -352,7 +369,7 @@
       </button>
     {/if}
     <div class="footer-spacer"></div>
-    {#if currentPage < 2}
+    {#if currentPage < pageKinds.length - 1}
       <button
         class="primary-btn"
         onclick={handleNext}

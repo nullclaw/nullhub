@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { api } from "$lib/api/client";
   import ConfigEditorUI from "./ConfigEditorUI.svelte";
+  import StructuredConfigEditor from "./StructuredConfigEditor.svelte";
+  import { supportsStructuredConfig } from "./componentConfigSchemas";
 
   let { component = "", name = "" } = $props();
   let configObj = $state<any>({});
@@ -11,6 +13,15 @@
   let message = $state("");
   let error = $state(false);
   let loaded = $state(false);
+  let supportsUi = $derived(
+    component === "nullclaw" || supportsStructuredConfig(component),
+  );
+
+  $effect(() => {
+    if (!supportsUi && mode === "ui") {
+      mode = "raw";
+    }
+  });
 
   async function load() {
     try {
@@ -77,10 +88,16 @@
 
 <div class="config-editor">
   <div class="editor-header">
-    <div class="mode-toggle">
-      <button class="mode-btn" class:active={mode === 'ui'} onclick={() => switchMode('ui')}>UI</button>
-      <button class="mode-btn" class:active={mode === 'raw'} onclick={() => switchMode('raw')}>Raw</button>
-    </div>
+    {#if supportsUi}
+      <div class="mode-toggle">
+        <button class="mode-btn" class:active={mode === 'ui'} onclick={() => switchMode('ui')}>UI</button>
+        <button class="mode-btn" class:active={mode === 'raw'} onclick={() => switchMode('raw')}>Raw</button>
+      </div>
+    {:else}
+      <div class="mode-toggle">
+        <button class="mode-btn active">Raw</button>
+      </div>
+    {/if}
     <button class="save-btn" onclick={save} disabled={saving}>
       {saving ? 'Saving...' : 'Save'}
     </button>
@@ -89,9 +106,13 @@
     <div class="message" class:error>{message}</div>
   {/if}
   {#if loaded}
-    {#if mode === 'ui'}
+    {#if supportsUi && mode === 'ui'}
       <div class="ui-content">
-        <ConfigEditorUI bind:config={configObj} onchange={onUiChange} />
+        {#if component === 'nullclaw'}
+          <ConfigEditorUI bind:config={configObj} onchange={onUiChange} />
+        {:else}
+          <StructuredConfigEditor {component} bind:config={configObj} onchange={onUiChange} />
+        {/if}
       </div>
     {:else}
       <textarea class="raw-editor" bind:value={configText} spellcheck="false"></textarea>
