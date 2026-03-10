@@ -79,6 +79,12 @@
     }
   });
 
+  $effect(() => {
+    if (component === "nullboiler" && (answers["tracker_instance"] || "").length > 0) {
+      answers["tracker_enabled"] = "true";
+    }
+  });
+
   // Initialize default provider entry when provider step exists
   $effect(() => {
     if (!("_providers" in answers)) {

@@ -38,14 +38,24 @@ pub fn main() !void {
             defer srv.deinit();
             var mdns = try mdns_mod.Publisher.init(allocator, paths, opts.host, opts.port);
             defer mdns.deinit();
+            mdns.start(opts.port);
             srv.setAccessOptions(mdns.accessOptions());
+            srv.setAccessPublisher(&mdns);
 
             const sup_thread = try std.Thread.spawn(.{}, supervisorLoop, .{ &mgr, &mutex });
             sup_thread.detach();
 
             srv.autoStartAll();
 
-            if (!opts.no_open) openBrowser(allocator, opts.host, opts.port, mdns.accessOptions());
+            if (!opts.no_open) {
+                const browser_thread = try std.Thread.spawn(.{}, delayedOpenBrowser, .{
+                    allocator,
+                    opts.host,
+                    opts.port,
+                    &mdns,
+                });
+                browser_thread.detach();
+            }
 
             try srv.run();
         },
@@ -113,4 +123,14 @@ fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16, access
         else => std.process.Child.init(&.{ "xdg-open", urls.browser_open_url }, allocator),
     };
     _ = child.spawnAndWait() catch return;
+}
+
+fn delayedOpenBrowser(
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    port: u16,
+    publisher: *const mdns_mod.Publisher,
+) void {
+    std.Thread.sleep(750 * std.time.ns_per_ms);
+    openBrowser(allocator, host, port, publisher.accessOptions());
 }

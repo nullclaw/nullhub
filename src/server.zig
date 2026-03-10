@@ -9,6 +9,7 @@ const status_api = @import("api/status.zig");
 const settings_api = @import("api/settings.zig");
 const updates_api = @import("api/updates.zig");
 const access = @import("access.zig");
+const mdns_mod = @import("mdns.zig");
 const state_mod = @import("core/state.zig");
 const paths_mod = @import("core/paths.zig");
 const manager_mod = @import("supervisor/manager.zig");
@@ -26,6 +27,7 @@ pub const Server = struct {
     host: []const u8,
     port: u16,
     access_options: access.Options = .{},
+    access_publisher: ?*const mdns_mod.Publisher = null,
     auth_token: ?[]const u8 = null,
     state: *state_mod.State,
     paths: paths_mod.Paths,
@@ -79,6 +81,17 @@ pub const Server = struct {
 
     pub fn setAccessOptions(self: *Server, options: access.Options) void {
         self.access_options = options;
+    }
+
+    pub fn setAccessPublisher(self: *Server, publisher: *const mdns_mod.Publisher) void {
+        self.access_publisher = publisher;
+    }
+
+    fn currentAccessOptions(self: *const Server) access.Options {
+        if (self.access_publisher) |publisher| {
+            return publisher.accessOptions();
+        }
+        return self.access_options;
     }
 
     /// Start all instances that have auto_start enabled.
@@ -240,7 +253,7 @@ pub const Server = struct {
         defer listener.deinit();
 
         std.debug.print("listening on http://{s}:{d}\n", .{ self.host, self.port });
-        var urls = access.buildAccessUrlsWithOptions(self.allocator, self.host, self.port, self.access_options) catch null;
+        var urls = access.buildAccessUrlsWithOptions(self.allocator, self.host, self.port, self.currentAccessOptions()) catch null;
         defer if (urls) |*u| u.deinit(self.allocator);
         if (urls) |u| {
             if (u.local_alias_chain and u.public_alias_active) {
@@ -307,9 +320,13 @@ pub const Server = struct {
         }
 
         // Route dispatch (lock mutex so supervisor thread doesn't race)
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        const response = self.route(alloc, method, target, body);
+        const response = if (instances_api.isIntegrationPath(target))
+            self.route(alloc, method, target, body)
+        else blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk self.route(alloc, method, target, body);
+        };
         try sendResponse(conn.stream, response);
     }
 
@@ -325,7 +342,7 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/status")) {
                 const now = std.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
-                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.access_options);
+                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.currentAccessOptions());
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (std.mem.eql(u8, target, "/api/components")) {
@@ -417,7 +434,7 @@ pub const Server = struct {
         // Settings API
         if (std.mem.eql(u8, target, "/api/settings")) {
             if (std.mem.eql(u8, method, "GET")) {
-                if (settings_api.handleGetSettings(allocator, self.host, self.port, self.access_options)) |json| {
+                if (settings_api.handleGetSettings(allocator, self.host, self.port, self.currentAccessOptions())) |json| {
                     return jsonResponse(json);
                 } else |_| {
                     return .{
@@ -698,7 +715,7 @@ pub const Server = struct {
                     .body = "{\"error\":\"method not allowed\"}",
                 };
             }
-            if (instances_api.dispatch(allocator, self.state, self.manager, self.paths, method, target, body)) |api_resp| {
+            if (instances_api.dispatch(allocator, self.state, self.manager, self.mutex, self.paths, method, target, body)) |api_resp| {
                 return .{ .status = api_resp.status, .content_type = api_resp.content_type, .body = api_resp.body };
             }
         }

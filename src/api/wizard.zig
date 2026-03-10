@@ -303,6 +303,35 @@ fn prepareWizardBody(
     return std.json.Stringify.valueAlloc(allocator, parsed.value, .{}) catch return null;
 }
 
+fn validateWizardBodyForInstall(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    body: []const u8,
+) ?[]const u8 {
+    if (!std.mem.eql(u8, component_name, "nullboiler")) return null;
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
+
+    const tracker_enabled = if (parsed.value.object.get("tracker_enabled")) |value|
+        value == .string and std.mem.eql(u8, value.string, "true")
+    else
+        false;
+    if (!tracker_enabled) return null;
+
+    const pipeline_id = if (parsed.value.object.get("tracker_pipeline_id")) |value|
+        value == .string and value.string.len > 0
+    else
+        false;
+    if (pipeline_id) return null;
+
+    return allocator.dupe(u8, "{\"error\":\"tracker_pipeline_id is required when tracker mode is enabled\"}") catch null;
+}
+
 fn stripQuery(target: []const u8) []const u8 {
     const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return target;
     return target[0..qmark];
@@ -416,6 +445,10 @@ pub fn handlePostWizard(
 
     const effective_body = prepareWizardBody(allocator, component_name, body, paths) orelse body;
     defer if (effective_body.ptr != body.ptr) allocator.free(effective_body);
+
+    if (validateWizardBodyForInstall(allocator, component_name, effective_body)) |json| {
+        return json;
+    }
 
     // Call orchestrator to perform the install
     const result = orchestrator.install(allocator, .{

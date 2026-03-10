@@ -17,6 +17,9 @@ const notFound = helpers.notFound;
 const badRequest = helpers.badRequest;
 const methodNotAllowed = helpers.methodNotAllowed;
 
+const default_tracker_prompt_template =
+    "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}";
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Read a port value from an instance's config.json using a dot-separated key
@@ -87,6 +90,39 @@ fn fetchJsonValue(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?
 
 fn buildInstanceUrl(allocator: std.mem.Allocator, port: u16, path: []const u8) ?[]const u8 {
     return std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}{s}", .{ port, path }) catch null;
+}
+
+fn getStatusLocked(
+    mutex: *std.Thread.Mutex,
+    manager: *manager_mod.Manager,
+    component: []const u8,
+    name: []const u8,
+) ?manager_mod.InstanceStatus {
+    mutex.lock();
+    defer mutex.unlock();
+    return manager.getStatus(component, name);
+}
+
+fn listNullTicketsLocked(
+    allocator: std.mem.Allocator,
+    mutex: *std.Thread.Mutex,
+    state: *state_mod.State,
+    paths: paths_mod.Paths,
+) ![]integration_mod.NullTicketsConfig {
+    mutex.lock();
+    defer mutex.unlock();
+    return integration_mod.listNullTickets(allocator, state, paths);
+}
+
+fn listNullBoilersLocked(
+    allocator: std.mem.Allocator,
+    mutex: *std.Thread.Mutex,
+    state: *state_mod.State,
+    paths: paths_mod.Paths,
+) ![]integration_mod.NullBoilerConfig {
+    mutex.lock();
+    defer mutex.unlock();
+    return integration_mod.listNullBoilers(allocator, state, paths);
 }
 
 const PipelineSummary = struct {
@@ -241,6 +277,54 @@ fn ensurePath(path: []const u8) !void {
         error.PathAlreadyExists => {},
         else => return err,
     };
+}
+
+fn ensureObjectField(
+    allocator: std.mem.Allocator,
+    parent: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.ObjectMap {
+    if (parent.getPtr(key)) |value_ptr| {
+        if (value_ptr.* != .object) {
+            value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        }
+        return &value_ptr.object;
+    }
+
+    try parent.put(key, .{ .object = std.json.ObjectMap.init(allocator) });
+    return &parent.getPtr(key).?.object;
+}
+
+fn resolvePathFromConfig(allocator: std.mem.Allocator, config_path: []const u8, value: []const u8) ![]const u8 {
+    if (value.len == 0 or std.fs.path.isAbsolute(value)) return allocator.dupe(u8, value);
+    const config_dir = std.fs.path.dirname(config_path) orelse return error.InvalidPath;
+    return std.fs.path.resolve(allocator, &.{ config_dir, value });
+}
+
+fn isNullHubManagedWorkflow(
+    allocator: std.mem.Allocator,
+    workflow_path: []const u8,
+) bool {
+    const file = std.fs.openFileAbsolute(workflow_path, .{}) catch return false;
+    defer file.close();
+
+    const bytes = file.readToEndAlloc(allocator, 1024 * 1024) catch return false;
+    defer allocator.free(bytes);
+
+    const parsed = std.json.parseFromSlice(struct {
+        id: []const u8 = "",
+        execution: []const u8 = "",
+        prompt_template: ?[]const u8 = null,
+    }, allocator, bytes, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+
+    return std.mem.startsWith(u8, parsed.value.id, "wf-") and
+        std.mem.eql(u8, parsed.value.execution, "subprocess") and
+        parsed.value.prompt_template != null and
+        std.mem.eql(u8, parsed.value.prompt_template.?, default_tracker_prompt_template);
 }
 
 const ProviderHealthConfig = struct {
@@ -1549,6 +1633,7 @@ fn handleIntegrationGet(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     manager: *manager_mod.Manager,
+    mutex: *std.Thread.Mutex,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
@@ -1556,7 +1641,7 @@ fn handleIntegrationGet(
     if (std.mem.eql(u8, component, "nullboiler")) {
         var boiler_cfg = integration_mod.loadNullBoilerConfig(allocator, paths, name) catch null orelse return notFound();
         defer integration_mod.deinitNullBoilerConfig(allocator, &boiler_cfg);
-        const trackers = integration_mod.listNullTickets(allocator, s, paths) catch return helpers.serverError();
+        const trackers = listNullTicketsLocked(allocator, mutex, s, paths) catch return helpers.serverError();
         defer integration_mod.deinitNullTicketsConfigs(allocator, trackers);
         const linked = integration_mod.matchNullTicketsTarget(boiler_cfg, trackers);
 
@@ -1570,7 +1655,7 @@ fn handleIntegrationGet(
 
         for (trackers) |tracker| {
             const is_running = blk: {
-                const status = manager.getStatus("nulltickets", tracker.name) orelse break :blk false;
+                const status = getStatusLocked(mutex, manager, "nulltickets", tracker.name) orelse break :blk false;
                 break :blk status.status == .running;
             };
             const pipelines = blk: {
@@ -1588,7 +1673,7 @@ fn handleIntegrationGet(
         }
 
         const tracker_status = blk: {
-            const status = manager.getStatus("nullboiler", name) orelse break :blk null;
+            const status = getStatusLocked(mutex, manager, "nullboiler", name) orelse break :blk null;
             if (status.status != .running) break :blk null;
             const url = buildInstanceUrl(allocator, boiler_cfg.port, "/tracker/status") orelse break :blk null;
             defer allocator.free(url);
@@ -1597,7 +1682,7 @@ fn handleIntegrationGet(
 
         const queue_status = blk: {
             const linked_tracker = linked orelse break :blk null;
-            const status = manager.getStatus("nulltickets", linked_tracker.name) orelse break :blk null;
+            const status = getStatusLocked(mutex, manager, "nulltickets", linked_tracker.name) orelse break :blk null;
             if (status.status != .running) break :blk null;
             const url = buildInstanceUrl(allocator, linked_tracker.port, "/ops/queue") orelse break :blk null;
             defer allocator.free(url);
@@ -1629,7 +1714,7 @@ fn handleIntegrationGet(
     if (std.mem.eql(u8, component, "nulltickets")) {
         var tickets_cfg = integration_mod.loadNullTicketsConfig(allocator, paths, name) catch null orelse return notFound();
         defer integration_mod.deinitNullTicketsConfig(allocator, &tickets_cfg);
-        const boilers = integration_mod.listNullBoilers(allocator, s, paths) catch return helpers.serverError();
+        const boilers = listNullBoilersLocked(allocator, mutex, s, paths) catch return helpers.serverError();
         defer integration_mod.deinitNullBoilerConfigs(allocator, boilers);
 
         var linked_boilers = std.ArrayListUnmanaged(struct {
@@ -1643,7 +1728,7 @@ fn handleIntegrationGet(
             const linked = integration_mod.matchNullTicketsTarget(boiler, &.{tickets_cfg}) orelse continue;
             _ = linked;
             const tracker_value = blk: {
-                const status = manager.getStatus("nullboiler", boiler.name) orelse break :blk null;
+                const status = getStatusLocked(mutex, manager, "nullboiler", boiler.name) orelse break :blk null;
                 if (status.status != .running) break :blk null;
                 const url = buildInstanceUrl(allocator, boiler.port, "/tracker/status") orelse break :blk null;
                 defer allocator.free(url);
@@ -1657,7 +1742,7 @@ fn handleIntegrationGet(
         }
 
         const queue = blk: {
-            const status = manager.getStatus("nulltickets", name) orelse break :blk null;
+            const status = getStatusLocked(mutex, manager, "nulltickets", name) orelse break :blk null;
             if (status.status != .running) break :blk null;
             const url = buildInstanceUrl(allocator, tickets_cfg.port, "/ops/queue") orelse break :blk null;
             defer allocator.free(url);
@@ -1679,6 +1764,7 @@ fn handleIntegrationPost(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     manager: *manager_mod.Manager,
+    mutex: *std.Thread.Mutex,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
@@ -1733,7 +1819,7 @@ fn handleIntegrationPost(
     var existing = integration_mod.loadNullBoilerConfig(allocator, paths, name) catch null orelse return notFound();
     defer integration_mod.deinitNullBoilerConfig(allocator, &existing);
 
-    const tracker_runtime = manager.getStatus("nulltickets", tracker_cfg.tickets.name);
+    const tracker_runtime = getStatusLocked(mutex, manager, "nulltickets", tracker_cfg.tickets.name);
     if (tracker_runtime != null and tracker_runtime.?.status == .running) {
         const pipelines_url = buildInstanceUrl(allocator, tracker_cfg.tickets.port, "/pipelines") orelse return helpers.serverError();
         defer allocator.free(pipelines_url);
@@ -1771,20 +1857,37 @@ fn handleIntegrationPost(
     defer parsed_config.deinit();
     if (parsed_config.value != .object) return helpers.serverError();
 
-    var tracker_map = std.json.ObjectMap.init(allocator);
+    const tracker_map = ensureObjectField(allocator, &parsed_config.value.object, "tracker") catch return helpers.serverError();
     const tracker_url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{tracker_cfg.tickets.port}) catch return helpers.serverError();
     tracker_map.put("url", .{ .string = tracker_url }) catch return helpers.serverError();
-    if (tracker_cfg.tickets.api_token) |token| tracker_map.put("api_token", .{ .string = token }) catch return helpers.serverError();
-    tracker_map.put("agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
-    tracker_map.put("workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
-    tracker_map.put("poll_interval_ms", .{ .integer = 5000 }) catch return helpers.serverError();
-    tracker_map.put("lease_ttl_ms", .{ .integer = 120000 }) catch return helpers.serverError();
-    tracker_map.put("heartbeat_interval_ms", .{ .integer = 30000 }) catch return helpers.serverError();
-    var concurrency_map = std.json.ObjectMap.init(allocator);
-    concurrency_map.put("max_concurrent_tasks", .{ .integer = tracker_cfg.max_concurrent_tasks orelse if (existing.tracker) |tracker| tracker.max_concurrent_tasks else 1 }) catch return helpers.serverError();
-    tracker_map.put("concurrency", .{ .object = concurrency_map }) catch return helpers.serverError();
+    if (tracker_cfg.tickets.api_token) |token| {
+        tracker_map.put("api_token", .{ .string = token }) catch return helpers.serverError();
+    } else {
+        _ = tracker_map.swapRemove("api_token");
+    }
+    if (jsonString(tracker_map.*, "agent_id")) |agent_id| {
+        if (agent_id.len == 0) {
+            tracker_map.put("agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
+        }
+    } else {
+        tracker_map.put("agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
+    }
+    if (jsonString(tracker_map.*, "workflows_dir")) |workflows_dir| {
+        if (workflows_dir.len == 0) {
+            tracker_map.put("workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
+        }
+    } else {
+        tracker_map.put("workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
+    }
 
-    parsed_config.value.object.put("tracker", .{ .object = tracker_map }) catch return helpers.serverError();
+    const concurrency_map = ensureObjectField(allocator, tracker_map, "concurrency") catch return helpers.serverError();
+    if (tracker_cfg.max_concurrent_tasks) |max_concurrent_tasks| {
+        concurrency_map.put("max_concurrent_tasks", .{ .integer = max_concurrent_tasks }) catch return helpers.serverError();
+    } else if (concurrency_map.get("max_concurrent_tasks") == null) {
+        concurrency_map.put("max_concurrent_tasks", .{ .integer = if (existing.tracker) |tracker| tracker.max_concurrent_tasks else 1 }) catch return helpers.serverError();
+    }
+
+    const workflows_dir_value = jsonStringOrEmpty(tracker_map.*, "workflows_dir");
     const rendered = std.json.Stringify.valueAlloc(allocator, parsed_config.value, .{
         .whitespace = .indent_2,
         .emit_null_optional_fields = false,
@@ -1796,17 +1899,23 @@ fn handleIntegrationPost(
     out.writeAll(rendered) catch return helpers.serverError();
     out.writeAll("\n") catch return helpers.serverError();
 
+    const workflows_dir = resolvePathFromConfig(allocator, config_path, workflows_dir_value) catch return helpers.serverError();
+    defer allocator.free(workflows_dir);
+
     ensureTrackerWorkflowFile(
         allocator,
-        paths,
-        name,
+        config_path,
+        workflows_dir,
+        if (existing.tracker) |tracker| if (tracker.workflow) |workflow| workflow.file_name else null else null,
         tracker_cfg.pipeline_id,
         tracker_cfg.claim_role,
         tracker_cfg.success_trigger,
     ) catch return helpers.serverError();
 
-    if (manager.getStatus("nullboiler", name)) |status| {
+    if (getStatusLocked(mutex, manager, "nullboiler", name)) |status| {
         if (status.status == .running) {
+            mutex.lock();
+            defer mutex.unlock();
             return handleRestart(allocator, s, manager, paths, "nullboiler", name, "");
         }
     }
@@ -1816,37 +1925,35 @@ fn handleIntegrationPost(
 
 fn ensureTrackerWorkflowFile(
     allocator: std.mem.Allocator,
-    paths: paths_mod.Paths,
-    boiler_name: []const u8,
+    config_path: []const u8,
+    workflows_dir: []const u8,
+    previous_workflow_file: ?[]const u8,
     pipeline_id: []const u8,
     claim_role: []const u8,
     success_trigger: []const u8,
 ) !void {
-    const inst_dir = try paths.instanceDir(allocator, "nullboiler", boiler_name);
-    defer allocator.free(inst_dir);
-    const workflows_dir = try std.fs.path.join(allocator, &.{ inst_dir, "workflows" });
-    defer allocator.free(workflows_dir);
     try ensurePath(workflows_dir);
 
-    var dir = try std.fs.openDirAbsolute(workflows_dir, .{ .iterate = true });
-    defer dir.close();
-
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
-        dir.deleteFile(entry.name) catch {};
+    if (previous_workflow_file) |file_name| {
+        if (!std.mem.eql(u8, file_name, integration_mod.managed_workflow_file_name)) {
+            const previous_path = try std.fs.path.join(allocator, &.{ workflows_dir, file_name });
+            defer allocator.free(previous_path);
+            if (isNullHubManagedWorkflow(allocator, previous_path)) {
+                std.fs.deleteFileAbsolute(previous_path) catch {};
+            }
+        }
     }
 
-    const legacy_path = try std.fs.path.join(allocator, &.{ inst_dir, "tracker-workflow.json" });
+    const config_dir = std.fs.path.dirname(config_path) orelse return error.InvalidPath;
+    const legacy_path = try std.fs.path.join(allocator, &.{ config_dir, integration_mod.legacy_workflow_file_name });
     defer allocator.free(legacy_path);
     std.fs.deleteFileAbsolute(legacy_path) catch {};
 
-    const workflow_basename = try sanitizeFileComponentAlloc(allocator, pipeline_id);
-    defer allocator.free(workflow_basename);
-    const workflow_file = try std.fmt.allocPrint(allocator, "{s}.json", .{workflow_basename});
-    defer allocator.free(workflow_file);
-    const workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, workflow_file });
+    const legacy_workflows_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.legacy_workflow_file_name });
+    defer allocator.free(legacy_workflows_path);
+    std.fs.deleteFileAbsolute(legacy_workflows_path) catch {};
+
+    const workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.managed_workflow_file_name });
     defer allocator.free(workflow_path);
 
     const rendered = try std.json.Stringify.valueAlloc(allocator, .{
@@ -1854,7 +1961,7 @@ fn ensureTrackerWorkflowFile(
         .pipeline_id = pipeline_id,
         .claim_roles = &.{claim_role},
         .execution = "subprocess",
-        .prompt_template = "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}",
+        .prompt_template = default_tracker_prompt_template,
         .on_success = .{
             .transition_to = success_trigger,
         },
@@ -1870,23 +1977,26 @@ fn ensureTrackerWorkflowFile(
     try file_out.writeAll("\n");
 }
 
-fn sanitizeFileComponentAlloc(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, value.len);
-    for (out, value) |*dst, ch| {
-        dst.* = if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.')
-            ch
-        else
-            '_';
-    }
-    return out;
-}
-
 // ─── Top-level dispatcher ────────────────────────────────────────────────────
+
+pub fn isIntegrationPath(target: []const u8) bool {
+    const parsed = parsePath(target) orelse return false;
+    return parsed.action != null and std.mem.eql(u8, parsed.action.?, "integration");
+}
 
 /// Route an `/api/instances` request. Called from server.zig.
 /// `method` is the HTTP verb, `target` is the full request path,
 /// `body` is the (possibly empty) request body.
-pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, method: []const u8, target: []const u8, body: []const u8) ?ApiResponse {
+pub fn dispatch(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    manager: *manager_mod.Manager,
+    mutex: *std.Thread.Mutex,
+    paths: paths_mod.Paths,
+    method: []const u8,
+    target: []const u8,
+    body: []const u8,
+) ?ApiResponse {
     // Exact match for the collection endpoint.
     if (std.mem.eql(u8, stripQuery(target), "/api/instances")) {
         if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager);
@@ -1905,8 +2015,8 @@ pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *man
             return handleUsage(allocator, s, paths, parsed.component, parsed.name, target);
         }
         if (std.mem.eql(u8, action, "integration")) {
-            if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, paths, parsed.component, parsed.name);
-            if (std.mem.eql(u8, method, "POST")) return handleIntegrationPost(allocator, s, manager, paths, parsed.component, parsed.name, body);
+            if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, mutex, paths, parsed.component, parsed.name);
+            if (std.mem.eql(u8, method, "POST")) return handleIntegrationPost(allocator, s, manager, mutex, paths, parsed.component, parsed.name, body);
             return methodNotAllowed();
         }
 
@@ -1937,6 +2047,7 @@ pub fn dispatch(allocator: std.mem.Allocator, s: *state_mod.State, manager: *man
 
 const TestManagerCtx = struct {
     manager: manager_mod.Manager,
+    mutex: std.Thread.Mutex = .{},
     paths: paths_mod.Paths,
 
     fn init(allocator: std.mem.Allocator) TestManagerCtx {
@@ -1944,6 +2055,7 @@ const TestManagerCtx = struct {
         return .{
             .paths = p,
             .manager = manager_mod.Manager.init(allocator, p),
+            .mutex = .{},
         };
     }
 
@@ -2332,7 +2444,7 @@ test "dispatch routes GET /api/instances" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/instances", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances", "").?;
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -2349,7 +2461,7 @@ test "dispatch routes POST start action" {
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
     // Binary doesn't exist so start returns 500
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/start", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/start", "").?;
     try std.testing.expectEqualStrings("500 Internal Server Error", resp.status);
 }
 
@@ -2363,7 +2475,7 @@ test "dispatch routes GET provider-health action" {
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
     // No config file exists in this test fixture, so health action returns 404.
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/provider-health", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/provider-health", "").?;
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
 }
 
@@ -2389,7 +2501,7 @@ test "dispatch routes GET integration action for linked nullboiler" {
     );
     try writeTestTrackerWorkflow(allocator, mctx.paths, "boiler-a", "dev-tasks.json", "pipe-dev", "reviewer", "complete");
 
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/instances/nullboiler/boiler-a/integration", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullboiler/boiler-a/integration", "").?;
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -2429,6 +2541,7 @@ test "dispatch routes POST integration action for nullboiler" {
         allocator,
         &s,
         &mctx.manager,
+        &mctx.mutex,
         mctx.paths,
         "POST",
         "/api/instances/nullboiler/boiler-a/integration",
@@ -2456,7 +2569,7 @@ test "dispatch routes POST integration action for nullboiler" {
     const concurrency = tracker.get("concurrency").?.object;
     try std.testing.expectEqual(@as(i64, 3), concurrency.get("max_concurrent_tasks").?.integer);
 
-    const workflow_path = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullboiler", "boiler-a", "workflows", "pipe-dev.json" });
+    const workflow_path = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullboiler", "boiler-a", "workflows", integration_mod.managed_workflow_file_name });
     defer allocator.free(workflow_path);
     const workflow_file = try std.fs.openFileAbsolute(workflow_path, .{});
     defer workflow_file.close();
@@ -2471,6 +2584,126 @@ test "dispatch routes POST integration action for nullboiler" {
     try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(legacy_workflow_path, .{}));
 }
 
+test "dispatch integration relink preserves advanced tracker config and custom workflows" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
+    try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
+
+    try writeTestInstanceConfig(allocator, mctx.paths, "nulltickets", "tracker-a", "{\"port\":7711,\"api_token\":\"admin-token\"}");
+    try writeTestInstanceConfig(
+        allocator,
+        mctx.paths,
+        "nullboiler",
+        "boiler-a",
+        "{\"port\":8811,\"tracker\":{\"url\":\"http://127.0.0.1:7701\",\"api_token\":\"stale-token\",\"agent_id\":\"custom-agent\",\"workflows_dir\":\"custom-workflows\",\"poll_interval_ms\":9000,\"lease_ttl_ms\":222000,\"heartbeat_interval_ms\":44000,\"workspace\":{\"root\":\"../workspaces\"},\"subprocess\":{\"base_port\":9300},\"concurrency\":{\"max_concurrent_tasks\":7,\"per_pipeline\":{\"pipe-old\":2}}}}",
+    );
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullboiler", "boiler-a");
+    defer allocator.free(inst_dir);
+    const workflows_dir = try std.fs.path.join(allocator, &.{ inst_dir, "custom-workflows" });
+    defer allocator.free(workflows_dir);
+    try ensurePath(workflows_dir);
+
+    const custom_workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, "manual.json" });
+    defer allocator.free(custom_workflow_path);
+    {
+        const file = try std.fs.createFileAbsolute(custom_workflow_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(
+            \\{
+            \\  "id": "wf-manual",
+            \\  "pipeline_id": "pipe-manual",
+            \\  "claim_roles": ["reviewer"],
+            \\  "execution": "subprocess",
+            \\  "prompt_template": "Manual workflow",
+            \\  "on_success": { "transition_to": "approved" }
+            \\}
+            \\
+        );
+    }
+
+    const generated_workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, "pipe-old.json" });
+    defer allocator.free(generated_workflow_path);
+    {
+        const rendered = try std.json.Stringify.valueAlloc(allocator, .{
+            .id = "wf-pipe-old-coder",
+            .pipeline_id = "pipe-old",
+            .claim_roles = &.{"coder"},
+            .execution = "subprocess",
+            .prompt_template = default_tracker_prompt_template,
+            .on_success = .{
+                .transition_to = "complete",
+            },
+        }, .{
+            .whitespace = .indent_2,
+            .emit_null_optional_fields = false,
+        });
+        defer allocator.free(rendered);
+
+        const file = try std.fs.createFileAbsolute(generated_workflow_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(rendered);
+        try file.writeAll("\n");
+    }
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullboiler/boiler-a/integration",
+        "{\"tracker_instance\":\"tracker-a\",\"pipeline_id\":\"pipe-dev\",\"claim_role\":\"reviewer\",\"success_trigger\":\"complete\"}",
+    ).?;
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const config_path = try mctx.paths.instanceConfig(allocator, "nullboiler", "boiler-a");
+    defer allocator.free(config_path);
+    const file = try std.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const config_bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(config_bytes);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, config_bytes, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    const tracker = parsed.value.object.get("tracker").?.object;
+    try std.testing.expectEqualStrings("http://127.0.0.1:7711", tracker.get("url").?.string);
+    try std.testing.expectEqualStrings("admin-token", tracker.get("api_token").?.string);
+    try std.testing.expectEqualStrings("custom-agent", tracker.get("agent_id").?.string);
+    try std.testing.expectEqualStrings("custom-workflows", tracker.get("workflows_dir").?.string);
+    try std.testing.expectEqual(@as(i64, 9000), tracker.get("poll_interval_ms").?.integer);
+    try std.testing.expectEqual(@as(i64, 222000), tracker.get("lease_ttl_ms").?.integer);
+    try std.testing.expectEqual(@as(i64, 44000), tracker.get("heartbeat_interval_ms").?.integer);
+    try std.testing.expect(tracker.get("workspace") != null);
+    try std.testing.expect(tracker.get("subprocess") != null);
+
+    const concurrency = tracker.get("concurrency").?.object;
+    try std.testing.expectEqual(@as(i64, 7), concurrency.get("max_concurrent_tasks").?.integer);
+    try std.testing.expect(concurrency.get("per_pipeline") != null);
+
+    const managed_workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.managed_workflow_file_name });
+    defer allocator.free(managed_workflow_path);
+    const managed_file = try std.fs.openFileAbsolute(managed_workflow_path, .{});
+    managed_file.close();
+
+    const custom_file = try std.fs.openFileAbsolute(custom_workflow_path, .{});
+    custom_file.close();
+
+    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(generated_workflow_path, .{}));
+}
+
 test "dispatch provider-health rejects POST" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -2480,7 +2713,7 @@ test "dispatch provider-health rejects POST" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/provider-health", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/provider-health", "").?;
     try std.testing.expectEqualStrings("405 Method Not Allowed", resp.status);
 }
 
@@ -2587,7 +2820,7 @@ test "dispatch routes GET usage action" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
-    const resp = dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/usage?window=all", "").?;
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/usage?window=all", "").?;
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"rows\":[]") != null);
@@ -2600,5 +2833,5 @@ test "dispatch returns null for non-matching path" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    try std.testing.expect(dispatch(allocator, &s, &mctx.manager, mctx.paths, "GET", "/api/other", "") == null);
+    try std.testing.expect(dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/other", "") == null);
 }

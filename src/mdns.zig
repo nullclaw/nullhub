@@ -23,36 +23,49 @@ pub const Provider = enum {
 pub const Publisher = struct {
     allocator: std.mem.Allocator,
     provider: Provider = .none,
-    alias_active: bool = false,
+    alias_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     log_path: ?[]u8 = null,
     children: [2]?std.process.Child = .{ null, null },
+    verify_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    verify_thread: ?std.Thread = null,
 
     pub fn init(allocator: std.mem.Allocator, paths: paths_mod.Paths, host: []const u8, port: u16) !Publisher {
+        _ = port;
         var self = Publisher{ .allocator = allocator };
         if (!access.isLocalBindHost(host) or builtin.is_test) return self;
 
         self.log_path = try std.fs.path.join(allocator, &.{ paths.root, "cache", "mdns.log" });
         errdefer if (self.log_path) |path| allocator.free(path);
-
-        self.activate(port);
         return self;
     }
 
+    pub fn start(self: *Publisher, port: u16) void {
+        if (!self.activate(port)) return;
+        self.verify_thread = std.Thread.spawn(.{}, verifyAliasLoop, .{ self, port }) catch null;
+    }
+
     pub fn deinit(self: *Publisher) void {
+        self.verify_shutdown.store(true, .release);
+        if (self.verify_thread) |thread| {
+            thread.join();
+            self.verify_thread = null;
+        }
         self.stopChildren();
         if (self.log_path) |path| self.allocator.free(path);
     }
 
     pub fn accessOptions(self: *const Publisher) access.Options {
+        const alias_active = self.alias_active.load(.acquire);
         return .{
-            .public_alias_active = self.alias_active,
-            .public_alias_provider = self.provider.toString(),
+            .public_alias_active = alias_active,
+            .public_alias_provider = if (alias_active) self.provider.toString() else Provider.none.toString(),
         };
     }
 
-    fn activate(self: *Publisher, port: u16) void {
-        if (self.tryDnsSd(port)) return;
-        if (self.tryAvahi(port)) return;
+    fn activate(self: *Publisher, port: u16) bool {
+        if (self.tryDnsSd(port)) return true;
+        if (self.tryAvahi(port)) return true;
+        return false;
     }
 
     fn tryDnsSd(self: *Publisher, port: u16) bool {
@@ -75,7 +88,6 @@ pub const Publisher = struct {
         }) catch return false;
 
         self.children[0] = result.child;
-        self.alias_active = true;
         self.provider = .dns_sd;
         return true;
     }
@@ -106,12 +118,12 @@ pub const Publisher = struct {
         };
         self.children[1] = service_child.child;
 
-        self.alias_active = true;
         self.provider = .avahi;
         return true;
     }
 
     fn stopChildren(self: *Publisher) void {
+        self.alias_active.store(false, .release);
         for (&self.children) |*entry| {
             if (entry.*) |*child| {
                 process_mod.terminate(child.id) catch {};
@@ -120,6 +132,24 @@ pub const Publisher = struct {
                 entry.* = null;
             }
         }
+    }
+
+    fn verifyAliasLoop(self: *Publisher, port: u16) void {
+        while (!self.verify_shutdown.load(.acquire)) {
+            if (self.aliasReachable(port)) {
+                self.alias_active.store(true, .release);
+            } else {
+                self.alias_active.store(false, .release);
+            }
+            std.Thread.sleep(500 * std.time.ns_per_ms);
+        }
+    }
+
+    fn aliasReachable(self: *Publisher, port: u16) bool {
+        _ = self;
+        const stream = std.net.tcpConnectToHost(std.heap.page_allocator, access.public_alias_host, port) catch return false;
+        defer stream.close();
+        return true;
     }
 };
 

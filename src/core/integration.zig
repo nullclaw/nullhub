@@ -15,6 +15,9 @@ pub const NullBoilerWorkflowConfig = struct {
     success_trigger: []const u8,
 };
 
+pub const managed_workflow_file_name = "nullhub-tracker-workflow.json";
+pub const legacy_workflow_file_name = "tracker-workflow.json";
+
 pub const NullBoilerTrackerConfig = struct {
     url: []const u8,
     api_token: ?[]const u8 = null,
@@ -199,6 +202,13 @@ fn loadPrimaryWorkflowConfig(allocator: std.mem.Allocator, workflows_dir: []cons
     var dir = std.fs.openDirAbsolute(workflows_dir, .{ .iterate = true }) catch return null;
     defer dir.close();
 
+    const managed_path = try std.fs.path.join(allocator, &.{ workflows_dir, managed_workflow_file_name });
+    defer allocator.free(managed_path);
+    if (std.fs.openFileAbsolute(managed_path, .{})) |managed_file| {
+        managed_file.close();
+        return loadWorkflowConfigFromFile(allocator, workflows_dir, managed_workflow_file_name);
+    } else |_| {}
+
     var best_name: ?[]const u8 = null;
     defer if (best_name) |value| allocator.free(value);
 
@@ -213,9 +223,13 @@ fn loadPrimaryWorkflowConfig(allocator: std.mem.Allocator, workflows_dir: []cons
     }
 
     const file_name = best_name orelse return null;
+    return loadWorkflowConfigFromFile(allocator, workflows_dir, file_name);
+}
+
+fn loadWorkflowConfigFromFile(allocator: std.mem.Allocator, workflows_dir: []const u8, file_name: []const u8) !?NullBoilerWorkflowConfig {
     const workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, file_name });
     defer allocator.free(workflow_path);
-    const file = try std.fs.openFileAbsolute(workflow_path, .{});
+    const file = std.fs.openFileAbsolute(workflow_path, .{}) catch return null;
     defer file.close();
 
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
