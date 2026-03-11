@@ -77,6 +77,35 @@
     };
   }
 
+  function passwordFieldKeys(type: string): string[] {
+    return (channelSchemas[type]?.fields || [])
+      .filter((field) => field.type === "password")
+      .map((field) => field.key);
+  }
+
+  function blankPasswordFields(type: string, config: Record<string, any>) {
+    const nextConfig = { ...config };
+    for (const key of passwordFieldKeys(type)) {
+      if (key in nextConfig) nextConfig[key] = "";
+    }
+    return nextConfig;
+  }
+
+  function buildEffectiveEditConfig() {
+    const effectiveConfig = { ...editForm.config };
+    for (const key of passwordFieldKeys(editChannelType)) {
+      const nextValue = effectiveConfig[key];
+      if (nextValue === "" || nextValue === undefined || nextValue === null) {
+        if (editOriginalConfig[key] !== undefined) {
+          effectiveConfig[key] = editOriginalConfig[key];
+        } else {
+          delete effectiveConfig[key];
+        }
+      }
+    }
+    return effectiveConfig;
+  }
+
   async function handleAdd() {
     addValidating = true;
     addError = "";
@@ -112,7 +141,7 @@
         editForm = {
           name: revealed.name || "",
           account: revealed.account || "",
-          config: { ...(revealed.config || {}) },
+          config: blankPasswordFields(c.channel_type, revealed.config || {}),
         };
       } else {
         error = "Channel could not be loaded for editing";
@@ -136,9 +165,10 @@
       const payload: any = {};
       if (editForm.name) payload.name = editForm.name;
       if (editForm.account && editForm.account !== editOriginalAccount) payload.account = editForm.account;
-      const configChanged = JSON.stringify(editForm.config, Object.keys(editForm.config).sort())
+      const effectiveConfig = buildEffectiveEditConfig();
+      const configChanged = JSON.stringify(effectiveConfig, Object.keys(effectiveConfig).sort())
         !== JSON.stringify(editOriginalConfig, Object.keys(editOriginalConfig).sort());
-      if (configChanged) payload.config = editForm.config;
+      if (configChanged) payload.config = effectiveConfig;
       await api.updateSavedChannel(id, payload);
       editingId = null;
       message = "Channel updated";

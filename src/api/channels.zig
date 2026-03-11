@@ -132,10 +132,9 @@ pub fn handleCreate(
 
     // Serialize config object to JSON string
     const config_val = root_obj.get("config");
-    const config_json: []const u8 = if (config_val) |cv| blk: {
-        const serialized = std.json.Stringify.valueAlloc(allocator, cv, .{}) catch
-            break :blk "";
-        break :blk serialized;
+    const config_json: []const u8 = if (config_val) |cv| switch (cv) {
+        .object => try std.json.Stringify.valueAlloc(allocator, cv, .{}),
+        else => return try allocator.dupe(u8, "{\"error\":\"config must be an object\"}"),
     } else "";
     defer if (config_json.len > 0) allocator.free(config_json);
 
@@ -217,10 +216,9 @@ pub fn handleUpdate(
 
     // Serialize config object if present
     const config_val = root_obj.get("config");
-    const new_config: ?[]const u8 = if (config_val) |cv| blk: {
-        const serialized = std.json.Stringify.valueAlloc(allocator, cv, .{}) catch
-            break :blk null;
-        break :blk serialized;
+    const new_config: ?[]const u8 = if (config_val) |cv| switch (cv) {
+        .object => try std.json.Stringify.valueAlloc(allocator, cv, .{}),
+        else => return try allocator.dupe(u8, "{\"error\":\"config must be an object\"}"),
     } else null;
     defer if (new_config) |c| if (c.len > 0) allocator.free(c);
 
@@ -617,6 +615,57 @@ test "handleDelete returns error for unknown id" {
     const json = try handleDelete(allocator, 99, &s);
     defer allocator.free(json);
     try std.testing.expectEqualStrings("{\"error\":\"channel not found\"}", json);
+}
+
+test "handleCreate rejects non-object config" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/nullhub-channel-test-create-invalid.json";
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+
+    var paths = try paths_mod.Paths.init(allocator, "/tmp/nullhub-channel-test-create-invalid-root");
+    defer paths.deinit(allocator);
+
+    const json = try handleCreate(
+        allocator,
+        "{\"channel_type\":\"telegram\",\"account\":\"default\",\"config\":null}",
+        &s,
+        paths,
+    );
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings("{\"error\":\"config must be an object\"}", json);
+}
+
+test "handleUpdate rejects non-object config" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-channel-test-update-invalid";
+    std.fs.deleteTreeAbsolute(tmp) catch {};
+    try std.fs.makeDirAbsolute(tmp);
+    defer std.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(path);
+
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+    try s.addSavedChannel(.{
+        .channel_type = "telegram",
+        .account = "default",
+        .config = "{\"bot_token\":\"abc\"}",
+    });
+
+    var paths = try paths_mod.Paths.init(allocator, tmp);
+    defer paths.deinit(allocator);
+
+    const json = try handleUpdate(
+        allocator,
+        1,
+        "{\"config\":false}",
+        &s,
+        paths,
+    );
+    defer allocator.free(json);
+    try std.testing.expectEqualStrings("{\"error\":\"config must be an object\"}", json);
 }
 
 test "writeChannelConfig escapes channel type and account" {
