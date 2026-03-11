@@ -29,6 +29,7 @@
   let providerValidationResults = $state<any[]>([]);
   let channelValidationResults = $state<any[]>([]);
   let validationError = $state("");
+  let validationWarning = $state("");
   let existingInstanceNames = $state<string[]>([]);
 
   // Auto-generate instance name on mount
@@ -178,6 +179,7 @@
   async function validateProviders(): Promise<boolean> {
     validating = true;
     validationError = "";
+    validationWarning = "";
     providerValidationResults = [];
 
     try {
@@ -188,6 +190,7 @@
       }
       const result = await api.validateProviders(component, providers);
       providerValidationResults = result.results || [];
+      validationWarning = result.saved_providers_warning || "";
       return providerValidationResults.every((r: any) => r.live_ok);
     } catch (e) {
       validationError = `Validation failed: ${(e as Error).message}`;
@@ -200,6 +203,7 @@
   async function validateChannels(): Promise<boolean> {
     validating = true;
     validationError = "";
+    validationWarning = "";
     channelValidationResults = [];
 
     const hasNonDefaultChannels = Object.keys(channels).some(
@@ -387,6 +391,10 @@
 
   {#if validationError}
     <div class="validation-error">{validationError}</div>
+  {/if}
+
+  {#if validationWarning}
+    <div class="validation-warning">{validationWarning}</div>
   {/if}
 
   {#if installMessage}
@@ -594,6 +602,17 @@
     color: var(--error, #e55);
     border-top: 1px dashed color-mix(in srgb, var(--error, #e55) 30%, transparent);
     background: color-mix(in srgb, var(--error, #e55) 5%, transparent);
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .validation-warning {
+    padding: 0.75rem 1.5rem;
+    font-size: 0.8125rem;
+    color: var(--warning, #ca0);
+    border-top: 1px dashed color-mix(in srgb, var(--warning, #ca0) 30%, transparent);
+    background: color-mix(in srgb, var(--warning, #ca0) 5%, transparent);
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;

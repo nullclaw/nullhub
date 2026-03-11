@@ -77,8 +77,9 @@ pub fn handleCreate(
     defer parsed.deinit();
 
     // Find an installed component binary
-    const component_name = findAnyInstalledComponent(allocator, state, paths) orelse
-        return try allocator.dupe(u8, "{\"error\":\"Install a component first to validate providers\"}");
+    const component_name = findProviderProbeComponent(allocator, state) orelse
+        return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
+    defer allocator.free(component_name);
 
     const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
         return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
@@ -147,8 +148,9 @@ pub fn handleUpdate(
 
     if (credentials_changed) {
         // Re-validate
-        const component_name = findAnyInstalledComponent(allocator, state, paths) orelse
-            return try allocator.dupe(u8, "{\"error\":\"Install a component first to validate providers\"}");
+        const component_name = findProviderProbeComponent(allocator, state) orelse
+            return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
+        defer allocator.free(component_name);
 
         const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
             return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
@@ -209,8 +211,9 @@ pub fn handleValidate(
 ) ![]const u8 {
     const existing = state.getSavedProvider(id) orelse return try allocator.dupe(u8, "{\"error\":\"provider not found\"}");
 
-    const component_name = findAnyInstalledComponent(allocator, state, paths) orelse
-        return try allocator.dupe(u8, "{\"error\":\"Install a component first to validate providers\"}");
+    const component_name = findProviderProbeComponent(allocator, state) orelse
+        return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
+    defer allocator.free(component_name);
 
     const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
         return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
@@ -237,20 +240,15 @@ pub fn handleValidate(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn findAnyInstalledComponent(allocator: std.mem.Allocator, state: *state_mod.State, paths: paths_mod.Paths) ?[]const u8 {
-    _ = paths;
-    const keys = state.componentNames() catch return null;
-    defer allocator.free(keys);
-    if (keys.len == 0) return null;
-
-    // Sort alphabetically and return first
-    std.mem.sort([]const u8, keys, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
+fn findProviderProbeComponent(allocator: std.mem.Allocator, state: *state_mod.State) ?[]const u8 {
+    const names = state.instanceNames("nullclaw") catch return null;
+    defer if (names) |list| allocator.free(list);
+    if (names) |list| {
+        if (list.len > 0) {
+            return allocator.dupe(u8, "nullclaw") catch null;
         }
-    }.lessThan);
-
-    return keys[0];
+    }
+    return null;
 }
 
 fn probeProvider(
@@ -397,6 +395,30 @@ test "handleList reveals api_key when requested" {
     const json = try handleList(allocator, &s, true);
     defer allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "sk-or-1234567890abcdef") != null);
+}
+
+test "findProviderProbeComponent prefers installed nullclaw" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/nullhub-provider-test-probe-component.json";
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "instance-1", .{ .version = "v2026.3.8" });
+
+    const component = findProviderProbeComponent(allocator, &s) orelse @panic("expected nullclaw probe component");
+    defer allocator.free(component);
+    try std.testing.expectEqualStrings("nullclaw", component);
+}
+
+test "findProviderProbeComponent returns null without nullclaw instances" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/nullhub-provider-test-probe-component-empty.json";
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addInstance("nullboiler", "worker-a", .{ .version = "v1.0.0" });
+
+    try std.testing.expect(findProviderProbeComponent(allocator, &s) == null);
 }
 
 test "handleDelete removes provider" {

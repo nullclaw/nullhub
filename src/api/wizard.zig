@@ -552,6 +552,7 @@ pub fn handleValidateProviders(
     const ProbeResult = struct { live_ok: bool };
     var probe_results = std.array_list.Managed(ProbeResult).init(allocator);
     defer probe_results.deinit();
+    var saved_providers_warning: ?[]const u8 = null;
 
     for (parsed.value.providers, 0..) |prov, idx| {
         if (idx > 0) buf.append(',') catch return null;
@@ -567,7 +568,7 @@ pub fn handleValidateProviders(
         probe_results.append(.{ .live_ok = result.live_ok }) catch return null;
     }
 
-    buf.appendSlice("]}") catch return null;
+    buf.appendSlice("]") catch return null;
 
     // Auto-save validated providers
     var did_save = false;
@@ -579,14 +580,21 @@ pub fn handleValidateProviders(
                     .api_key = prov.api_key,
                     .model = prov.model,
                     .validated_with = component_name,
-                }) catch continue;
+                }) catch {
+                    saved_providers_warning = "validated providers could not be saved";
+                    continue;
+                };
                 // Set validated_at on the just-added provider
                 const providers_list = state.savedProviders();
                 if (providers_list.len > 0) {
                     const new_id = providers_list[providers_list.len - 1].id;
                     const now = providers_api.nowIso8601(allocator) catch "";
                     if (now.len > 0) {
-                        _ = state.updateSavedProvider(new_id, .{ .validated_at = now }) catch {};
+                        _ = state.updateSavedProvider(new_id, .{ .validated_at = now }) catch {
+                            saved_providers_warning = "validated providers could not be fully saved";
+                            allocator.free(now);
+                            continue;
+                        };
                         allocator.free(now);
                     }
                 }
@@ -594,7 +602,18 @@ pub fn handleValidateProviders(
             }
         }
     }
-    if (did_save) state.save() catch {};
+    if (did_save) {
+        state.save() catch {
+            saved_providers_warning = "validated providers could not be persisted";
+        };
+    }
+
+    if (saved_providers_warning) |warning| {
+        buf.appendSlice(",\"saved_providers_warning\":\"") catch return null;
+        appendEscaped(&buf, warning) catch return null;
+        buf.appendSlice("\"") catch return null;
+    }
+    buf.appendSlice("}") catch return null;
 
     return buf.toOwnedSlice() catch null;
 }

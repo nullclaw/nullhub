@@ -241,6 +241,16 @@ pub fn install(
         return error.ConfigGenerationFailed;
     };
 
+    // Use the generated config as the source of truth for health checks and
+    // supervisor state after the component has rendered its final config.
+    const runtime_port = readConfiguredInstancePort(
+        allocator,
+        p,
+        opts.component,
+        opts.instance_name,
+        version,
+    ) orelse port;
+
     // 6. Register in state.json
     s.addInstance(opts.component, opts.instance_name, .{
         .version = version,
@@ -257,7 +267,7 @@ pub fn install(
         opts.instance_name,
         bin_path,
         launch_args,
-        port,
+        runtime_port,
         health_endpoint,
         inst_dir,
         "",
@@ -450,6 +460,15 @@ fn injectPortFields(
     }
     if (overwrite or root.get("gateway_port") == null) {
         try root.put("gateway_port", .{ .integer = @as(i64, port) });
+    }
+    if (root.getPtr("gateway")) |gateway_value| {
+        if (gateway_value.* == .object and (overwrite or gateway_value.object.get("port") == null)) {
+            try gateway_value.object.put("port", .{ .integer = @as(i64, port) });
+        }
+    } else {
+        var gateway_obj = std.json.ObjectMap.init(allocator);
+        try gateway_obj.put("port", .{ .integer = @as(i64, port) });
+        try root.put("gateway", .{ .object = gateway_obj });
     }
 
     return std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
@@ -770,13 +789,14 @@ test "injectPortFields fills missing port fields" {
 
     try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("port").?.integer);
     try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("gateway_port").?.integer);
+    try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("gateway").?.object.get("port").?.integer);
 }
 
 test "injectPortFields overwrites existing port fields when requested" {
     const allocator = std.testing.allocator;
     const rendered = try injectPortFields(
         allocator,
-        "{\"instance_name\":\"instance-2\",\"port\":3000,\"gateway_port\":3000}",
+        "{\"instance_name\":\"instance-2\",\"port\":3000,\"gateway_port\":3000,\"gateway\":{\"port\":3000}}",
         3002,
         true,
     );
@@ -790,6 +810,7 @@ test "injectPortFields overwrites existing port fields when requested" {
 
     try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("port").?.integer);
     try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("gateway_port").?.integer);
+    try std.testing.expectEqual(@as(i64, 3002), parsed.value.object.get("gateway").?.object.get("port").?.integer);
 }
 
 test "writeFile creates file with correct content" {

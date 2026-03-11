@@ -14,13 +14,37 @@
 
   let savedProviders = $state<any[]>([]);
   let showSavedDropdown = $state(false);
+  let savedProvidersRevealed = $state(false);
+  let loadingSavedProviders = $state(false);
 
   onMount(async () => {
     try {
-      const data = await api.getSavedProviders(true);
+      const data = await api.getSavedProviders();
       savedProviders = data.providers || [];
     } catch {}
   });
+
+  async function toggleSavedDropdown() {
+    if (showSavedDropdown) {
+      showSavedDropdown = false;
+      return;
+    }
+
+    if (!savedProvidersRevealed && savedProviders.length > 0) {
+      loadingSavedProviders = true;
+      try {
+        const data = await api.getSavedProviders(true);
+        savedProviders = data.providers || [];
+        savedProvidersRevealed = true;
+      } catch {
+        loadingSavedProviders = false;
+        return;
+      }
+      loadingSavedProviders = false;
+    }
+
+    showSavedDropdown = true;
+  }
 
   function isPlaceholderEntry(entry: { provider: string; api_key: string; model: string }) {
     return entry.api_key.trim().length === 0 && entry.model.trim().length === 0;
@@ -199,8 +223,8 @@
     <button class="add-btn" onclick={addEntry}>+ Add Provider</button>
     {#if savedProviders.length > 0}
       <div class="saved-dropdown-container">
-        <button class="add-btn saved-btn" onclick={() => (showSavedDropdown = !showSavedDropdown)}>
-          Use Saved
+        <button class="add-btn saved-btn" onclick={toggleSavedDropdown} disabled={loadingSavedProviders}>
+          {loadingSavedProviders ? "Loading..." : "Use Saved"}
         </button>
         {#if showSavedDropdown}
           <div class="saved-dropdown">
