@@ -13,6 +13,9 @@
   } = $props();
   let loading = $state(false);
   let localStatus = $state("stopped");
+  let displayVersion = $derived(
+    !version ? "-" : version.startsWith("v") || version.startsWith("dev-") ? version : `v${version}`,
+  );
 
   // Sync localStatus when prop changes (from poll)
   $effect(() => {
@@ -57,7 +60,7 @@
   </div>
   <div class="card-meta">
     <span class="component-tag">{component}</span>
-    <span class="version">v{version}</span>
+    <span class="version">{displayVersion}</span>
   </div>
   {#if localStatus === "running" && port > 0}
     <div class="gateway-addr">

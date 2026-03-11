@@ -51,6 +51,10 @@
     {/each}
   </div>
 
+  <div class="nav-section">
+    <a href="/providers" class:active={currentPath === "/providers"}>Providers</a>
+  </div>
+
   <div class="nav-bottom">
     <a href="/settings" class:active={currentPath === "/settings"}>Settings</a>
   </div>

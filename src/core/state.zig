@@ -8,11 +8,62 @@ pub const InstanceEntry = struct {
     launch_mode: []const u8 = "gateway",
 };
 
+pub const SavedProvider = struct {
+    id: u32,
+    name: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+    model: []const u8 = "",
+    validated_at: []const u8 = "",
+    validated_with: []const u8 = "",
+};
+
+pub const SavedProviderInput = struct {
+    provider: []const u8,
+    api_key: []const u8,
+    model: []const u8 = "",
+    validated_with: []const u8 = "",
+};
+
+pub const SavedProviderUpdate = struct {
+    name: ?[]const u8 = null,
+    api_key: ?[]const u8 = null,
+    model: ?[]const u8 = null,
+    validated_at: ?[]const u8 = null,
+    validated_with: ?[]const u8 = null,
+};
+
+fn providerLabel(provider: []const u8) []const u8 {
+    const map = .{
+        .{ "openrouter", "OpenRouter" },
+        .{ "anthropic", "Anthropic" },
+        .{ "openai", "OpenAI" },
+        .{ "google", "Google" },
+        .{ "mistral", "Mistral" },
+        .{ "groq", "Groq" },
+        .{ "deepseek", "DeepSeek" },
+        .{ "cohere", "Cohere" },
+        .{ "ollama", "Ollama" },
+        .{ "lm-studio", "LM Studio" },
+        .{ "claude-cli", "Claude CLI" },
+        .{ "codex-cli", "Codex CLI" },
+        .{ "together", "Together" },
+        .{ "fireworks", "Fireworks" },
+        .{ "perplexity", "Perplexity" },
+        .{ "xai", "xAI" },
+    };
+    inline for (map) |pair| {
+        if (std.mem.eql(u8, provider, pair[0])) return pair[1];
+    }
+    return provider;
+}
+
 /// JSON-compatible shape used for serialization / deserialization.
 /// `std.json.ArrayHashMap` carries `jsonStringify` and `jsonParse` so we can
 /// round-trip through `std.json` without custom hooks.
 const JsonState = struct {
     instances: std.json.ArrayHashMap(std.json.ArrayHashMap(InstanceEntry)),
+    saved_providers: []const SavedProvider = &.{},
 };
 
 /// Inner map type: instance-name → InstanceEntry.
@@ -27,6 +78,7 @@ pub const State = struct {
     allocator: std.mem.Allocator,
     /// instances[component][name] = InstanceEntry
     instances: ComponentMap,
+    saved_providers: std.array_list.Managed(SavedProvider),
     path: []const u8,
 
     /// Create an empty State that will persist to `path`.
@@ -34,12 +86,27 @@ pub const State = struct {
         return .{
             .allocator = allocator,
             .instances = ComponentMap.init(allocator),
+            .saved_providers = std.array_list.Managed(SavedProvider).init(allocator),
             .path = allocator.dupe(u8, path) catch @panic("OOM"),
         };
     }
 
+    fn freeSavedProviderStrings(self: *State, sp: SavedProvider) void {
+        self.allocator.free(sp.name);
+        self.allocator.free(sp.provider);
+        self.allocator.free(sp.api_key);
+        if (sp.model.len > 0) self.allocator.free(sp.model);
+        if (sp.validated_at.len > 0) self.allocator.free(sp.validated_at);
+        if (sp.validated_with.len > 0) self.allocator.free(sp.validated_with);
+    }
+
     /// Free all owned strings and hashmaps.
     pub fn deinit(self: *State) void {
+        for (self.saved_providers.items) |sp| {
+            self.freeSavedProviderStrings(sp);
+        }
+        self.saved_providers.deinit();
+
         var comp_it = self.instances.iterator();
         while (comp_it.next()) |comp_entry| {
             var inst_it = comp_entry.value_ptr.iterator();
@@ -112,6 +179,31 @@ pub const State = struct {
             try state.instances.put(comp_name, inner);
         }
 
+        for (parsed.value.saved_providers) |sp| {
+            const owned_name = try allocator.dupe(u8, sp.name);
+            errdefer allocator.free(owned_name);
+            const owned_provider = try allocator.dupe(u8, sp.provider);
+            errdefer allocator.free(owned_provider);
+            const owned_api_key = try allocator.dupe(u8, sp.api_key);
+            errdefer allocator.free(owned_api_key);
+            const owned_model = if (sp.model.len > 0) try allocator.dupe(u8, sp.model) else @as([]const u8, "");
+            errdefer if (owned_model.len > 0) allocator.free(@constCast(owned_model));
+            const owned_validated_at = if (sp.validated_at.len > 0) try allocator.dupe(u8, sp.validated_at) else @as([]const u8, "");
+            errdefer if (owned_validated_at.len > 0) allocator.free(@constCast(owned_validated_at));
+            const owned_validated_with = if (sp.validated_with.len > 0) try allocator.dupe(u8, sp.validated_with) else @as([]const u8, "");
+            errdefer if (owned_validated_with.len > 0) allocator.free(@constCast(owned_validated_with));
+
+            try state.saved_providers.append(.{
+                .id = sp.id,
+                .name = owned_name,
+                .provider = owned_provider,
+                .api_key = owned_api_key,
+                .model = owned_model,
+                .validated_at = owned_validated_at,
+                .validated_with = owned_validated_with,
+            });
+        }
+
         return state;
     }
 
@@ -142,7 +234,10 @@ pub const State = struct {
             try json_outer.map.put(self.allocator, comp_entry.key_ptr.*, json_inner);
         }
 
-        const json_state = JsonState{ .instances = json_outer };
+        const json_state = JsonState{
+            .instances = json_outer,
+            .saved_providers = self.saved_providers.items,
+        };
         const json_bytes = try std.json.Stringify.valueAlloc(
             self.allocator,
             json_state,
@@ -259,6 +354,138 @@ pub const State = struct {
         const result = try self.allocator.alloc([]const u8, keys.len);
         @memcpy(result, keys);
         return result;
+    }
+
+    pub fn savedProviders(self: *State) []const SavedProvider {
+        return self.saved_providers.items;
+    }
+
+    pub fn getSavedProvider(self: *State, id: u32) ?SavedProvider {
+        for (self.saved_providers.items) |sp| {
+            if (sp.id == id) return sp;
+        }
+        return null;
+    }
+
+    pub fn addSavedProvider(self: *State, input: SavedProviderInput) !void {
+        const id = self.nextProviderId();
+        const name = try self.generateProviderName(input.provider);
+        errdefer self.allocator.free(name);
+        const provider = try self.allocator.dupe(u8, input.provider);
+        errdefer self.allocator.free(provider);
+        const api_key = try self.allocator.dupe(u8, input.api_key);
+        errdefer self.allocator.free(api_key);
+        const model = if (input.model.len > 0) try self.allocator.dupe(u8, input.model) else @as([]const u8, "");
+        errdefer if (model.len > 0) self.allocator.free(@constCast(model));
+        const validated_with = if (input.validated_with.len > 0) try self.allocator.dupe(u8, input.validated_with) else @as([]const u8, "");
+        errdefer if (validated_with.len > 0) self.allocator.free(@constCast(validated_with));
+
+        try self.saved_providers.append(.{
+            .id = id,
+            .name = name,
+            .provider = provider,
+            .api_key = api_key,
+            .model = model,
+            .validated_at = "",
+            .validated_with = validated_with,
+        });
+    }
+
+    pub fn updateSavedProvider(self: *State, id: u32, update: SavedProviderUpdate) !bool {
+        for (self.saved_providers.items) |*sp| {
+            if (sp.id == id) {
+                // Dupe all new values first (can fail)
+                const new_name = if (update.name) |name| try self.allocator.dupe(u8, name) else null;
+                errdefer if (new_name) |n| self.allocator.free(n);
+                const new_api_key = if (update.api_key) |api_key| try self.allocator.dupe(u8, api_key) else null;
+                errdefer if (new_api_key) |k| self.allocator.free(k);
+                const new_model = if (update.model) |model|
+                    if (model.len > 0) try self.allocator.dupe(u8, model) else @as([]const u8, "")
+                else
+                    null;
+                errdefer if (new_model) |m| if (m.len > 0) self.allocator.free(@constCast(m));
+                const new_validated_at = if (update.validated_at) |validated_at|
+                    if (validated_at.len > 0) try self.allocator.dupe(u8, validated_at) else @as([]const u8, "")
+                else
+                    null;
+                errdefer if (new_validated_at) |t| if (t.len > 0) self.allocator.free(@constCast(t));
+                const new_validated_with = if (update.validated_with) |validated_with|
+                    if (validated_with.len > 0) try self.allocator.dupe(u8, validated_with) else @as([]const u8, "")
+                else
+                    null;
+                // No errdefer needed for the last one - nothing after can fail
+
+                // Apply all at once (no more failures possible)
+                if (update.name != null) {
+                    const n = new_name.?;
+                    self.allocator.free(sp.name);
+                    sp.name = n;
+                }
+                if (update.api_key != null) {
+                    const k = new_api_key.?;
+                    self.allocator.free(sp.api_key);
+                    sp.api_key = k;
+                }
+                if (update.model != null) {
+                    const m = new_model.?;
+                    if (sp.model.len > 0) self.allocator.free(sp.model);
+                    sp.model = m;
+                }
+                if (update.validated_at != null) {
+                    const t = new_validated_at.?;
+                    if (sp.validated_at.len > 0) self.allocator.free(sp.validated_at);
+                    sp.validated_at = t;
+                }
+                if (update.validated_with != null) {
+                    const w = new_validated_with.?;
+                    if (sp.validated_with.len > 0) self.allocator.free(sp.validated_with);
+                    sp.validated_with = w;
+                }
+
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn removeSavedProvider(self: *State, id: u32) bool {
+        for (self.saved_providers.items, 0..) |sp, i| {
+            if (sp.id == id) {
+                self.freeSavedProviderStrings(sp);
+                _ = self.saved_providers.orderedRemove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn hasSavedProvider(self: *State, provider: []const u8, api_key: []const u8, model: []const u8) bool {
+        for (self.saved_providers.items) |sp| {
+            if (std.mem.eql(u8, sp.provider, provider) and
+                std.mem.eql(u8, sp.api_key, api_key) and
+                std.mem.eql(u8, sp.model, model))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn nextProviderId(self: *State) u32 {
+        var max_id: u32 = 0;
+        for (self.saved_providers.items) |sp| {
+            if (sp.id > max_id) max_id = sp.id;
+        }
+        return max_id + 1;
+    }
+
+    fn generateProviderName(self: *State, provider: []const u8) ![]const u8 {
+        const label = providerLabel(provider);
+        var count: u32 = 0;
+        for (self.saved_providers.items) |sp| {
+            if (std.mem.eql(u8, sp.provider, provider)) count += 1;
+        }
+        return std.fmt.allocPrint(self.allocator, "{s} #{d}", .{ label, count + 1 });
     }
 };
 
@@ -558,4 +785,203 @@ test "remove last instance removes component" {
     // Component should be gone entirely.
     try std.testing.expectEqual(@as(usize, 0), s.instances.count());
     try std.testing.expect(s.getInstance("comp", "only") == null);
+}
+
+test "add saved provider, save, load, verify round-trip" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addSavedProvider(.{
+            .provider = "openrouter",
+            .api_key = "sk-or-xxx",
+            .model = "anthropic/claude-sonnet-4",
+            .validated_with = "nullclaw",
+        });
+
+        const providers = s.savedProviders();
+        try std.testing.expectEqual(@as(usize, 1), providers.len);
+        try std.testing.expectEqualStrings("openrouter", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-or-xxx", providers[0].api_key);
+        try std.testing.expectEqualStrings("anthropic/claude-sonnet-4", providers[0].model);
+        try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+        try std.testing.expectEqual(@as(u32, 1), providers[0].id);
+
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        const providers = s.savedProviders();
+        try std.testing.expectEqual(@as(usize, 1), providers.len);
+        try std.testing.expectEqualStrings("openrouter", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-or-xxx", providers[0].api_key);
+        try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+        try std.testing.expectEqual(@as(u32, 1), providers[0].id);
+    }
+}
+
+test "auto-generated name increments per provider type" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key2" });
+    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key3" });
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqual(@as(usize, 3), providers.len);
+    try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+    try std.testing.expectEqualStrings("OpenRouter #2", providers[1].name);
+    try std.testing.expectEqualStrings("Anthropic #1", providers[2].name);
+}
+
+test "update saved provider name only" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+    const updated = try s.updateSavedProvider(1, .{ .name = "My Work Key" });
+    try std.testing.expect(updated);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("My Work Key", providers[0].name);
+}
+
+test "update saved provider api_key" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "old-key" });
+    const updated = try s.updateSavedProvider(1, .{ .api_key = "new-key" });
+    try std.testing.expect(updated);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("new-key", providers[0].api_key);
+}
+
+test "update saved provider clears model" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "openrouter",
+        .api_key = "key1",
+        .model = "anthropic/claude-sonnet-4",
+    });
+    const updated = try s.updateSavedProvider(1, .{ .model = "" });
+    try std.testing.expect(updated);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("", providers[0].model);
+}
+
+test "remove saved provider" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key2" });
+
+    try std.testing.expect(s.removeSavedProvider(1));
+    try std.testing.expect(!s.removeSavedProvider(99));
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqual(@as(usize, 1), providers.len);
+    try std.testing.expectEqualStrings("anthropic", providers[0].provider);
+}
+
+test "find saved provider by id" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key2" });
+
+    const found = s.getSavedProvider(2);
+    try std.testing.expect(found != null);
+    try std.testing.expectEqualStrings("anthropic", found.?.provider);
+
+    try std.testing.expect(s.getSavedProvider(99) == null);
+}
+
+test "saved providers coexist with instances in save/load" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addInstance("nullclaw", "bot1", .{ .version = "1.0.0" });
+        try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        try std.testing.expect(s.getInstance("nullclaw", "bot1") != null);
+        try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
+    }
+}
+
+test "next provider id after removals" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" }); // id=1
+    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key2" }); // id=2
+    _ = s.removeSavedProvider(1);
+    try s.addSavedProvider(.{ .provider = "ollama", .api_key = "" }); // id=3 (not 1)
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqual(@as(usize, 2), providers.len);
+    try std.testing.expectEqual(@as(u32, 2), providers[0].id);
+    try std.testing.expectEqual(@as(u32, 3), providers[1].id);
 }

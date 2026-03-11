@@ -29,6 +29,8 @@
   let providerValidationResults = $state<any[]>([]);
   let channelValidationResults = $state<any[]>([]);
   let validationError = $state("");
+  let validationWarning = $state("");
+  let existingInstanceNames = $state<string[]>([]);
 
   // Auto-generate instance name on mount
   $effect(() => {
@@ -38,15 +40,26 @@
         .then((data: any) => {
           const existing = data?.instances?.[component] || {};
           const names = Object.keys(existing);
+          existingInstanceNames = names;
           let id = 1;
           while (names.includes(`instance-${id}`)) id++;
           instanceName = `instance-${id}`;
         })
         .catch(() => {
+          existingInstanceNames = [];
           instanceName = "instance-1";
         });
     }
   });
+
+  let trimmedInstanceName = $derived(instanceName.trim());
+  let instanceNameError = $derived(
+    !trimmedInstanceName
+      ? "Instance name is required"
+      : existingInstanceNames.includes(trimmedInstanceName)
+        ? "Instance name must be unique for this component"
+        : "",
+  );
 
   // Fetch available versions
   $effect(() => {
@@ -157,9 +170,16 @@
     }
   });
 
+  $effect(() => {
+    component;
+    steps;
+    showAdvanced = false;
+  });
+
   async function validateProviders(): Promise<boolean> {
     validating = true;
     validationError = "";
+    validationWarning = "";
     providerValidationResults = [];
 
     try {
@@ -170,6 +190,7 @@
       }
       const result = await api.validateProviders(component, providers);
       providerValidationResults = result.results || [];
+      validationWarning = result.saved_providers_warning || "";
       return providerValidationResults.every((r: any) => r.live_ok);
     } catch (e) {
       validationError = `Validation failed: ${(e as Error).message}`;
@@ -182,6 +203,7 @@
   async function validateChannels(): Promise<boolean> {
     validating = true;
     validationError = "";
+    validationWarning = "";
     channelValidationResults = [];
 
     const hasNonDefaultChannels = Object.keys(channels).some(
@@ -207,6 +229,10 @@
   async function handleNext() {
     const page = pageKinds[currentPage];
     if (page === "setup") {
+      if (instanceNameError) {
+        validationError = instanceNameError;
+        return;
+      }
       if (providerStep) {
         const valid = await validateProviders();
         if (!valid) return;
@@ -237,7 +263,7 @@
     try {
       const { _providers, ...rest } = answers;
       const payload: any = {
-        instance_name: instanceName,
+        instance_name: trimmedInstanceName,
         version: selectedVersion,
         ...rest,
       };
@@ -299,6 +325,9 @@
           bind:value={instanceName}
           placeholder="instance-1"
         />
+        {#if instanceNameError}
+          <p class="name-error">{instanceNameError}</p>
+        {/if}
       </div>
 
       {#if versions.length > 1}
@@ -364,6 +393,10 @@
     <div class="validation-error">{validationError}</div>
   {/if}
 
+  {#if validationWarning}
+    <div class="validation-warning">{validationWarning}</div>
+  {/if}
+
   {#if installMessage}
     <div class="install-message">{installMessage}</div>
   {/if}
@@ -379,7 +412,7 @@
       <button
         class="primary-btn"
         onclick={handleNext}
-        disabled={validating || !instanceName}
+        disabled={validating || !!instanceNameError}
       >
         {validating ? "Validating..." : "Next"}
       </button>
@@ -387,7 +420,7 @@
       <button
         class="primary-btn"
         onclick={submit}
-        disabled={installing || !instanceName}
+        disabled={installing || !!instanceNameError}
       >
         {installing ? "Installing..." : "Install"}
       </button>
@@ -523,6 +556,13 @@
     box-shadow: 0 0 8px var(--border-glow);
   }
 
+  .name-error {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--error, #e55);
+    font-family: var(--font-mono);
+  }
+
   .advanced-toggle {
     display: flex;
     align-items: center;
@@ -562,6 +602,17 @@
     color: var(--error, #e55);
     border-top: 1px dashed color-mix(in srgb, var(--error, #e55) 30%, transparent);
     background: color-mix(in srgb, var(--error, #e55) 5%, transparent);
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .validation-warning {
+    padding: 0.75rem 1.5rem;
+    font-size: 0.8125rem;
+    color: var(--warning, #ca0);
+    border-top: 1px dashed color-mix(in srgb, var(--warning, #ca0) 30%, transparent);
+    background: color-mix(in srgb, var(--warning, #ca0) 5%, transparent);
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;

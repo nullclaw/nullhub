@@ -93,4 +93,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ channels }),
     }),
+
+  // Saved providers
+  getSavedProviders: (reveal = false) =>
+    request<any>(`/providers${reveal ? '?reveal=true' : ''}`),
+  createSavedProvider: (data: { provider: string; api_key: string; model?: string }) =>
+    request<any>('/providers', { method: 'POST', body: JSON.stringify(data) }),
+  updateSavedProvider: (id: string, data: { name?: string; api_key?: string; model?: string }) =>
+    request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSavedProvider: (id: string) =>
+    request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'DELETE' }),
+  revalidateSavedProvider: (id: string) =>
+    request<any>(`/providers/${id.replace('sp_', '')}/validate`, { method: 'POST' }),
 };

@@ -29,6 +29,7 @@ pub const ui_modules = @import("installer/ui_modules.zig");
 pub const updates_api = @import("api/updates.zig");
 pub const versions = @import("installer/versions.zig");
 pub const wizard_api = @import("api/wizard.zig");
+pub const providers_api = @import("api/providers.zig");
 
 test {
     _ = auth;
@@ -62,4 +63,5 @@ test {
     _ = updates_api;
     _ = versions;
     _ = wizard_api;
+    _ = providers_api;
 }

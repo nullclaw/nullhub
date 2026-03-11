@@ -1518,17 +1518,81 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
 
 /// DELETE /api/instances/{component}/{name}
 pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    if (s.getInstance(component, name) == null) return notFound();
-    manager.stopInstance(component, name) catch {};
-    if (!s.removeInstance(component, name)) return notFound();
-    s.save() catch return helpers.serverError();
+    const existing = s.getInstance(component, name) orelse return notFound();
+    const rollback_version = allocator.dupe(u8, existing.version) catch return helpers.serverError();
+    defer allocator.free(rollback_version);
+    const rollback_launch_mode = allocator.dupe(u8, existing.launch_mode) catch return helpers.serverError();
+    defer allocator.free(rollback_launch_mode);
 
-    // Remove instance directory from disk
-    const inst_dir = paths.instanceDir(allocator, component, name) catch return jsonOk("{\"status\":\"deleted\"}");
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
     defer allocator.free(inst_dir);
-    std.fs.deleteTreeAbsolute(inst_dir) catch {};
+
+    manager.stopInstance(component, name) catch {};
+    const hidden_inst_dir = hideInstanceDirForDelete(allocator, inst_dir) catch return helpers.serverError();
+    defer if (hidden_inst_dir) |path| allocator.free(path);
+
+    if (!s.removeInstance(component, name)) {
+        if (hidden_inst_dir) |path| {
+            std.fs.renameAbsolute(path, inst_dir) catch {};
+        }
+        return notFound();
+    }
+    s.save() catch {
+        _ = s.addInstance(component, name, .{
+            .version = rollback_version,
+            .auto_start = existing.auto_start,
+            .launch_mode = rollback_launch_mode,
+        }) catch {};
+        _ = s.save() catch {};
+        if (hidden_inst_dir) |path| {
+            std.fs.renameAbsolute(path, inst_dir) catch {};
+        }
+        return helpers.serverError();
+    };
+
+    if (hidden_inst_dir) |path| {
+        std.fs.deleteTreeAbsolute(path) catch |err| {
+            std.log.warn("deleted instance {s}/{s} but failed to clean hidden dir '{s}': {s}", .{
+                component,
+                name,
+                path,
+                @errorName(err),
+            });
+        };
+    }
 
     return jsonOk("{\"status\":\"deleted\"}");
+}
+
+fn hideInstanceDirForDelete(allocator: std.mem.Allocator, inst_dir: []const u8) !?[]const u8 {
+    std.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+
+    const parent = std.fs.path.dirname(inst_dir) orelse return error.InvalidPath;
+    const base = std.fs.path.basename(inst_dir);
+    const ts = @as(u64, @intCast(@max(0, std.time.milliTimestamp())));
+
+    var attempt: u32 = 0;
+    while (attempt < 1024) : (attempt += 1) {
+        const hidden_path = try std.fmt.allocPrint(allocator, "{s}/.{s}.deleted-{d}-{d}", .{
+            parent,
+            base,
+            ts,
+            attempt,
+        });
+        errdefer allocator.free(hidden_path);
+
+        std.fs.renameAbsolute(inst_dir, hidden_path) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            error.PathAlreadyExists => continue,
+            else => return err,
+        };
+        return hidden_path;
+    }
+
+    return error.PathAlreadyExists;
 }
 
 /// POST /api/instances/{component}/import — import a standalone installation.
@@ -2358,6 +2422,61 @@ test "handleDelete removes instance" {
 
     // Verify it was actually removed.
     try std.testing.expect(s.getInstance("nullclaw", "my-agent") == null);
+}
+
+test "handleDelete removes instance directory from active path" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-delete-path.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+
+    const resp = handleDelete(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    std.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    @panic("expected instance directory to be removed");
+}
+
+test "handleDelete restores instance when state save fails" {
+    const allocator = std.testing.allocator;
+    const bad_state_root = "/tmp/nullhub-test-instances-api-delete-rollback";
+    std.fs.deleteTreeAbsolute(bad_state_root) catch {};
+    defer std.fs.deleteTreeAbsolute(bad_state_root) catch {};
+
+    const bad_state_path = try std.fmt.allocPrint(allocator, "{s}/missing/state.json", .{bad_state_root});
+    defer allocator.free(bad_state_path);
+
+    var s = state_mod.State.init(allocator, bad_state_path);
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+
+    const resp = handleDelete(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
+    try std.testing.expectEqualStrings("500 Internal Server Error", resp.status);
+    try std.testing.expect(s.getInstance("nullclaw", "my-agent") != null);
+    try std.fs.accessAbsolute(inst_dir, .{});
 }
 
 test "handleDelete returns 404 for missing instance" {

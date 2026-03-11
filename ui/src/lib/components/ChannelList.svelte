@@ -81,7 +81,7 @@
 <div class="channel-list">
   <div class="step-title">Channels</div>
   <p class="step-description">
-    Configure communication channels. WEB and CLI are enabled by default.
+    Where would you like to talk to your bot? Web and CLI are available by default.
   </p>
 
   {#each DEFAULT_CHANNELS as ch}
