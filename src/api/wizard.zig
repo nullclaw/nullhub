@@ -704,6 +704,7 @@ pub fn handleValidateChannels(
     component_name: []const u8,
     body: []const u8,
     paths: paths_mod.Paths,
+    state: *state_mod.State,
 ) ?[]const u8 {
     if (registry.findKnownComponent(component_name) == null) return null;
 
@@ -745,6 +746,11 @@ pub fn handleValidateChannels(
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     buf.appendSlice("{\"results\":[") catch return null;
+
+    const ValidatedPair = struct { channel_type: []const u8, account: []const u8 };
+    var validated_pairs = std.array_list.Managed(ValidatedPair).init(allocator);
+    defer validated_pairs.deinit();
+    var saved_channels_warning: ?[]const u8 = null;
 
     var first = true;
     var ch_it = channels_map.iterator();
@@ -788,11 +794,53 @@ pub fn handleValidateChannels(
             defer probe_parsed.deinit();
 
             const reason = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "probe_failed");
+            if (probe_parsed.value.live_ok) {
+                validated_pairs.append(.{ .channel_type = channel_type, .account = account_name }) catch {};
+            }
             appendChannelResult(&buf, channel_type, account_name, probe_parsed.value.live_ok, reason) catch return null;
         }
     }
 
-    buf.appendSlice("]}") catch return null;
+    // Auto-save validated channels
+    var did_save = false;
+    for (validated_pairs.items) |pair| {
+        const accs = switch (channels_map.get(pair.channel_type) orelse continue) {
+            .object => |obj| obj,
+            else => continue,
+        };
+        const acc_val = accs.get(pair.account) orelse continue;
+        const config_str = std.json.Stringify.valueAlloc(allocator, acc_val, .{}) catch continue;
+        defer allocator.free(config_str);
+
+        if (!state.hasSavedChannel(pair.channel_type, pair.account, config_str)) {
+            const now = providers_api.nowIso8601(allocator) catch "";
+            defer if (now.len > 0) allocator.free(now);
+            state.addSavedChannel(.{
+                .channel_type = pair.channel_type,
+                .account = pair.account,
+                .config = config_str,
+                .validated_with = component_name,
+                .validated_at = now,
+            }) catch {
+                saved_channels_warning = "validated channels could not be saved";
+                continue;
+            };
+            did_save = true;
+        }
+    }
+    if (did_save) {
+        state.save() catch {
+            saved_channels_warning = "validated channels could not be persisted";
+        };
+    }
+
+    buf.appendSlice("]") catch return null;
+    if (saved_channels_warning) |warning| {
+        buf.appendSlice(",\"saved_channels_warning\":\"") catch return null;
+        appendEscaped(&buf, warning) catch return null;
+        buf.appendSlice("\"") catch return null;
+    }
+    buf.appendSlice("}") catch return null;
     return buf.toOwnedSlice() catch null;
 }
 

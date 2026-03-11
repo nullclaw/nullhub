@@ -217,6 +217,7 @@
     try {
       const result = await api.validateChannels(component, channels);
       channelValidationResults = result.results || [];
+      validationWarning = result.saved_channels_warning || "";
       return channelValidationResults.every((r: any) => r.live_ok);
     } catch (e) {
       validationError = `Validation failed: ${(e as Error).message}`;
