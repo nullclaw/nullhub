@@ -105,4 +105,16 @@ export const api = {
     request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'DELETE' }),
   revalidateSavedProvider: (id: string) =>
     request<any>(`/providers/${id.replace('sp_', '')}/validate`, { method: 'POST' }),
+
+  // Saved channels
+  getSavedChannels: (reveal = false) =>
+    request<any>(`/channels${reveal ? '?reveal=true' : ''}`),
+  createSavedChannel: (data: { channel_type: string; account: string; config: Record<string, any> }) =>
+    request<any>('/channels', { method: 'POST', body: JSON.stringify(data) }),
+  updateSavedChannel: (id: string, data: { name?: string; account?: string; config?: Record<string, any> }) =>
+    request<any>(`/channels/${id.replace('sc_', '')}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSavedChannel: (id: string) =>
+    request<any>(`/channels/${id.replace('sc_', '')}`, { method: 'DELETE' }),
+  revalidateSavedChannel: (id: string) =>
+    request<any>(`/channels/${id.replace('sc_', '')}/validate`, { method: 'POST' }),
 };

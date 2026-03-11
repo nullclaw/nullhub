@@ -15,6 +15,7 @@ const paths_mod = @import("core/paths.zig");
 const manager_mod = @import("supervisor/manager.zig");
 const wizard_api = @import("api/wizard.zig");
 const providers_api = @import("api/providers.zig");
+const channels_api = @import("api/channels.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
@@ -544,7 +545,7 @@ pub const Server = struct {
         // Validate Channels API — POST /api/wizard/{component}/validate-channels
         if (std.mem.eql(u8, method, "POST") and wizard_api.isValidateChannelsPath(target)) {
             if (wizard_api.extractComponentName(target)) |comp_name| {
-                if (wizard_api.handleValidateChannels(allocator, comp_name, body, self.paths)) |json| {
+                if (wizard_api.handleValidateChannels(allocator, comp_name, body, self.paths, self.state)) |json| {
                     const status = if (std.mem.indexOf(u8, json, "\"error\"") != null)
                         "400 Bad Request"
                     else
@@ -695,6 +696,63 @@ pub const Server = struct {
                 }
                 if (std.mem.eql(u8, method, "DELETE")) {
                     if (providers_api.handleDelete(allocator, id, self.state)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "404 Not Found" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+            }
+        }
+
+        // Channels API — /api/channels[/{id}[/validate]]
+        if (channels_api.isChannelsPath(target)) {
+            if (std.mem.eql(u8, target, "/api/channels") or std.mem.startsWith(u8, target, "/api/channels?")) {
+                if (std.mem.eql(u8, method, "GET")) {
+                    const reveal = channels_api.hasRevealParam(target);
+                    if (channels_api.handleList(allocator, self.state, reveal)) |json| {
+                        return jsonResponse(json);
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                if (std.mem.eql(u8, method, "POST")) {
+                    if (channels_api.handleCreate(allocator, body, self.state, self.paths)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "422 Unprocessable Entity" else "201 Created";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+            }
+            if (channels_api.extractChannelId(target)) |id| {
+                if (channels_api.isValidatePath(target)) {
+                    if (std.mem.eql(u8, method, "POST")) {
+                        if (channels_api.handleValidate(allocator, id, self.state, self.paths)) |json| {
+                            const status = if (std.mem.indexOf(u8, json, "\"error\"") != null or
+                                std.mem.indexOf(u8, json, "\"live_ok\":false") != null)
+                                "422 Unprocessable Entity"
+                            else
+                                "200 OK";
+                            return .{ .status = status, .content_type = "application/json", .body = json };
+                        } else |_| {
+                            return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                        }
+                    }
+                    return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+                }
+                if (std.mem.eql(u8, method, "PUT")) {
+                    if (channels_api.handleUpdate(allocator, id, body, self.state, self.paths)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "422 Unprocessable Entity" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                if (std.mem.eql(u8, method, "DELETE")) {
+                    if (channels_api.handleDelete(allocator, id, self.state)) |json| {
                         const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "404 Not Found" else "200 OK";
                         return .{ .status = status, .content_type = "application/json", .body = json };
                     } else |_| {

@@ -5,17 +5,26 @@
   import StructuredConfigEditor from "./StructuredConfigEditor.svelte";
   import { supportsStructuredConfig } from "./componentConfigSchemas";
 
-  let { component = "", name = "" } = $props();
+  let {
+    component = "",
+    name = "",
+    onAction = async () => {},
+  }: {
+    component?: string;
+    name?: string;
+    onAction?: () => void | Promise<void>;
+  } = $props();
   let configObj = $state<any>({});
   let configText = $state("");
   let mode = $state<"ui" | "raw">("ui");
-  let saving = $state(false);
+  let action = $state<"save" | "save-restart" | null>(null);
   let message = $state("");
   let error = $state(false);
   let loaded = $state(false);
   let supportsUi = $derived(
     component === "nullclaw" || supportsStructuredConfig(component),
   );
+  let busy = $derived(action !== null);
 
   $effect(() => {
     if (!supportsUi && mode === "ui") {
@@ -61,25 +70,43 @@
     message = "";
   }
 
-  async function save() {
-    saving = true;
+  function currentConfig() {
+    if (mode === "raw") {
+      const parsed = JSON.parse(configText);
+      configObj = parsed;
+      return parsed;
+    }
+    configText = JSON.stringify(configObj, null, 2);
+    return configObj;
+  }
+
+  async function save(restartAfterSave = false) {
+    action = restartAfterSave ? "save-restart" : "save";
+    let saved = false;
     try {
-      let toSave: any;
-      if (mode === "raw") {
-        toSave = JSON.parse(configText);
-        configObj = toSave;
-      } else {
-        toSave = configObj;
-        configText = JSON.stringify(configObj, null, 2);
-      }
+      const toSave = currentConfig();
       await api.putConfig(component, name, toSave);
-      message = "Config saved";
+      saved = true;
+
+      if (restartAfterSave) {
+        await api.restartInstance(component, name);
+        message = "Config saved. Instance restarting";
+      } else {
+        message = "Config saved";
+      }
+
       error = false;
+      await onAction();
     } catch (e) {
-      message = `Error: ${(e as Error).message}`;
+      const err = (e as Error).message;
+      if (saved && restartAfterSave) {
+        message = `Config saved, but restart failed: ${err}`;
+      } else {
+        message = `Error: ${err}`;
+      }
       error = true;
     } finally {
-      saving = false;
+      action = null;
     }
   }
 
@@ -98,9 +125,14 @@
         <button class="mode-btn active">Raw</button>
       </div>
     {/if}
-    <button class="save-btn" onclick={save} disabled={saving}>
-      {saving ? 'Saving...' : 'Save'}
-    </button>
+    <div class="action-buttons">
+      <button class="save-btn" onclick={() => save()} disabled={busy}>
+        {action === "save" ? "Saving..." : "Save"}
+      </button>
+      <button class="save-btn secondary" onclick={() => save(true)} disabled={busy}>
+        {action === "save-restart" ? "Restarting..." : "Save & Restart"}
+      </button>
+    </div>
   </div>
   {#if message}
     <div class="message" class:error>{message}</div>
@@ -131,10 +163,17 @@
     align-items: center;
     padding: 0.5rem 0;
     margin-bottom: 0.5rem;
+    gap: 1rem;
   }
   .mode-toggle {
     display: flex;
     gap: 0;
+  }
+  .action-buttons {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .mode-btn {
     padding: 0.5rem 1rem;
@@ -193,6 +232,18 @@
     box-shadow: none;
     border-color: var(--border);
     color: var(--fg-dim);
+  }
+  .save-btn.secondary {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
+    color: var(--warning, #f59e0b);
+    border-color: color-mix(in srgb, var(--warning, #f59e0b) 65%, var(--border));
+    box-shadow: inset 0 0 8px color-mix(in srgb, var(--warning, #f59e0b) 25%, transparent);
+  }
+  .save-btn.secondary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--warning, #f59e0b) 24%, transparent);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--warning, #f59e0b) 20%, transparent),
+      inset 0 0 10px color-mix(in srgb, var(--warning, #f59e0b) 40%, transparent);
+    text-shadow: 0 0 5px color-mix(in srgb, var(--warning, #f59e0b) 70%, transparent);
   }
   .ui-content {
     max-height: 600px;

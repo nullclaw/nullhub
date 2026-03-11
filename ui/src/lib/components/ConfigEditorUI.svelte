@@ -98,6 +98,10 @@
     return text.split('\n').map(s => s.trim()).filter(Boolean);
   }
 
+  function fieldId(path: string): string {
+    return `cfg-${path.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+  }
+
   let availableChannels = $derived(
     Object.entries(channelSchemas)
       .filter(([key]) => !configuredChannels.includes(key))
@@ -115,10 +119,12 @@
     {#if openSections['models']}
       <div class="accordion-body">
         {#each staticSections[0].fields as field}
+          {@const inputId = fieldId(field.key)}
           {#if field.type === 'number'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="number"
                 value={getPath(config, field.key) ?? field.default ?? ''}
                 step={field.step}
@@ -132,8 +138,9 @@
             </div>
           {:else if field.type === 'text'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="text"
                 value={getPath(config, field.key) ?? ''}
                 oninput={(e) => updateField(field.key, e.currentTarget.value)}
@@ -147,11 +154,13 @@
 
         <!-- Dynamic provider API keys -->
         {#each providers as provider}
+          {@const apiKeyId = fieldId(`models.providers.${provider}.api_key`)}
           <div class="provider-row">
             <div class="provider-name">{provider}</div>
             <div class="field">
-              <label>API Key</label>
+              <label for={apiKeyId}>API Key</label>
               <input
+                id={apiKeyId}
                 type="password"
                 value={getPath(config, `models.providers.${provider}.api_key`) ?? ''}
                 oninput={(e) => updateField(`models.providers.${provider}.api_key`, e.currentTarget.value)}
@@ -162,8 +171,9 @@
 
         <!-- Model Fallbacks -->
         <div class="field">
-          <label>Model Fallbacks</label>
+          <label for={fieldId('reliability.model_fallbacks')}>Model Fallbacks</label>
           <textarea
+            id={fieldId('reliability.model_fallbacks')}
             value={parseList(modelFallbacks)}
             oninput={(e) => updateField('reliability.model_fallbacks', toList(e.currentTarget.value))}
             rows="3"
@@ -173,8 +183,9 @@
 
         <!-- Fallback Providers -->
         <div class="field">
-          <label>Fallback Providers</label>
+          <label for={fieldId('reliability.fallback_providers')}>Fallback Providers</label>
           <textarea
+            id={fieldId('reliability.fallback_providers')}
             value={parseList(fallbackProviders)}
             oninput={(e) => updateField('reliability.fallback_providers', toList(e.currentTarget.value))}
             rows="3"
@@ -213,6 +224,7 @@
                 {#each schema.fields as field}
                   {@const path = `channels.${channelType}.accounts.${accountId}.${field.key}`}
                   {@const value = getPath(config, path)}
+                  {@const inputId = fieldId(path)}
                   {#if field.type === 'toggle'}
                     <label class="toggle-field">
                       <input
@@ -224,8 +236,9 @@
                     </label>
                   {:else if field.type === 'number'}
                     <div class="field">
-                      <label>{field.label}</label>
+                      <label for={inputId}>{field.label}</label>
                       <input
+                        id={inputId}
                         type="number"
                         value={value ?? field.default ?? ''}
                         step={field.step}
@@ -239,8 +252,9 @@
                     </div>
                   {:else if field.type === 'text'}
                     <div class="field">
-                      <label>{field.label}</label>
+                      <label for={inputId}>{field.label}</label>
                       <input
+                        id={inputId}
                         type="text"
                         value={value ?? ''}
                         oninput={(e) => updateField(path, e.currentTarget.value)}
@@ -251,8 +265,9 @@
                     </div>
                   {:else if field.type === 'password'}
                     <div class="field">
-                      <label>{field.label}</label>
+                      <label for={inputId}>{field.label}</label>
                       <input
+                        id={inputId}
                         type="password"
                         value={value ?? ''}
                         oninput={(e) => updateField(path, e.currentTarget.value)}
@@ -263,8 +278,8 @@
                     </div>
                   {:else if field.type === 'select'}
                     <div class="field">
-                      <label>{field.label}</label>
-                      <select onchange={(e) => updateField(path, e.currentTarget.value)}>
+                      <label for={inputId}>{field.label}</label>
+                      <select id={inputId} onchange={(e) => updateField(path, e.currentTarget.value)}>
                         {#each field.options ?? [] as opt}
                           <option value={opt} selected={value === opt}>{opt}</option>
                         {/each}
@@ -275,8 +290,9 @@
                     </div>
                   {:else if field.type === 'list'}
                     <div class="field">
-                      <label>{field.label}</label>
+                      <label for={inputId}>{field.label}</label>
                       <textarea
+                        id={inputId}
                         value={parseList(value)}
                         oninput={(e) => updateField(path, toList(e.currentTarget.value))}
                         rows="3"
@@ -292,6 +308,7 @@
               {#each schema.fields as field}
                 {@const path = `channels.${channelType}.${field.key}`}
                 {@const value = getPath(config, path)}
+                {@const inputId = fieldId(path)}
                 {#if field.type === 'toggle'}
                   <label class="toggle-field">
                     <input
@@ -303,8 +320,9 @@
                   </label>
                 {:else if field.type === 'number'}
                   <div class="field">
-                    <label>{field.label}</label>
+                    <label for={inputId}>{field.label}</label>
                     <input
+                      id={inputId}
                       type="number"
                       value={value ?? field.default ?? ''}
                       step={field.step}
@@ -318,8 +336,9 @@
                   </div>
                 {:else if field.type === 'text'}
                   <div class="field">
-                    <label>{field.label}</label>
+                    <label for={inputId}>{field.label}</label>
                     <input
+                      id={inputId}
                       type="text"
                       value={value ?? ''}
                       oninput={(e) => updateField(path, e.currentTarget.value)}
@@ -330,8 +349,9 @@
                   </div>
                 {:else if field.type === 'password'}
                   <div class="field">
-                    <label>{field.label}</label>
+                    <label for={inputId}>{field.label}</label>
                     <input
+                      id={inputId}
                       type="password"
                       value={value ?? ''}
                       oninput={(e) => updateField(path, e.currentTarget.value)}
@@ -342,8 +362,8 @@
                   </div>
                 {:else if field.type === 'select'}
                   <div class="field">
-                    <label>{field.label}</label>
-                    <select onchange={(e) => updateField(path, e.currentTarget.value)}>
+                    <label for={inputId}>{field.label}</label>
+                    <select id={inputId} onchange={(e) => updateField(path, e.currentTarget.value)}>
                       {#each field.options ?? [] as opt}
                         <option value={opt} selected={value === opt}>{opt}</option>
                       {/each}
@@ -354,8 +374,9 @@
                   </div>
                 {:else if field.type === 'list'}
                   <div class="field">
-                    <label>{field.label}</label>
+                    <label for={inputId}>{field.label}</label>
                     <textarea
+                      id={inputId}
                       value={parseList(value)}
                       oninput={(e) => updateField(path, toList(e.currentTarget.value))}
                       rows="3"
@@ -400,6 +421,7 @@
       <div class="accordion-body">
         {#each staticSections[1].fields as field}
           {@const value = getPath(config, field.key)}
+          {@const inputId = fieldId(field.key)}
           {#if field.type === 'toggle'}
             <label class="toggle-field">
               <input
@@ -411,8 +433,9 @@
             </label>
           {:else if field.type === 'number'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="number"
                 value={value ?? field.default ?? ''}
                 step={field.step}
@@ -426,8 +449,9 @@
             </div>
           {:else if field.type === 'text'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="text"
                 value={value ?? ''}
                 oninput={(e) => updateField(field.key, e.currentTarget.value)}
@@ -438,8 +462,8 @@
             </div>
           {:else if field.type === 'select'}
             <div class="field">
-              <label>{field.label}</label>
-              <select onchange={(e) => updateField(field.key, e.currentTarget.value)}>
+              <label for={inputId}>{field.label}</label>
+              <select id={inputId} onchange={(e) => updateField(field.key, e.currentTarget.value)}>
                 {#each field.options ?? [] as opt}
                   <option value={opt} selected={value === opt}>{opt}</option>
                 {/each}
@@ -464,6 +488,7 @@
       <div class="accordion-body">
         {#each staticSections[2].fields as field}
           {@const value = getPath(config, field.key)}
+          {@const inputId = fieldId(field.key)}
           {#if field.type === 'toggle'}
             <label class="toggle-field">
               <input
@@ -475,8 +500,9 @@
             </label>
           {:else if field.type === 'number'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="number"
                 value={value ?? field.default ?? ''}
                 step={field.step}
@@ -490,8 +516,9 @@
             </div>
           {:else if field.type === 'text'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="text"
                 value={value ?? ''}
                 oninput={(e) => updateField(field.key, e.currentTarget.value)}
@@ -502,8 +529,8 @@
             </div>
           {:else if field.type === 'select'}
             <div class="field">
-              <label>{field.label}</label>
-              <select onchange={(e) => updateField(field.key, e.currentTarget.value)}>
+              <label for={inputId}>{field.label}</label>
+              <select id={inputId} onchange={(e) => updateField(field.key, e.currentTarget.value)}>
                 {#each field.options ?? [] as opt}
                   <option value={opt} selected={value === opt}>{opt}</option>
                 {/each}
@@ -528,6 +555,7 @@
       <div class="accordion-body">
         {#each staticSections[3].fields as field}
           {@const value = getPath(config, field.key)}
+          {@const inputId = fieldId(field.key)}
           {#if field.type === 'toggle'}
             <label class="toggle-field">
               <input
@@ -539,8 +567,9 @@
             </label>
           {:else if field.type === 'number'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="number"
                 value={value ?? field.default ?? ''}
                 step={field.step}
@@ -554,8 +583,9 @@
             </div>
           {:else if field.type === 'text'}
             <div class="field">
-              <label>{field.label}</label>
+              <label for={inputId}>{field.label}</label>
               <input
+                id={inputId}
                 type="text"
                 value={value ?? ''}
                 oninput={(e) => updateField(field.key, e.currentTarget.value)}
@@ -566,8 +596,8 @@
             </div>
           {:else if field.type === 'select'}
             <div class="field">
-              <label>{field.label}</label>
-              <select onchange={(e) => updateField(field.key, e.currentTarget.value)}>
+              <label for={inputId}>{field.label}</label>
+              <select id={inputId} onchange={(e) => updateField(field.key, e.currentTarget.value)}>
                 {#each field.options ?? [] as opt}
                   <option value={opt} selected={value === opt}>{opt}</option>
                 {/each}

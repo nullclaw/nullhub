@@ -33,6 +33,32 @@ pub const SavedProviderUpdate = struct {
     validated_with: ?[]const u8 = null,
 };
 
+pub const SavedChannel = struct {
+    id: u32,
+    name: []const u8,
+    channel_type: []const u8,
+    account: []const u8,
+    config: []const u8 = "", // serialized JSON string
+    validated_at: []const u8 = "",
+    validated_with: []const u8 = "",
+};
+
+pub const SavedChannelInput = struct {
+    channel_type: []const u8,
+    account: []const u8,
+    config: []const u8 = "",
+    validated_with: []const u8 = "",
+    validated_at: []const u8 = "",
+};
+
+pub const SavedChannelUpdate = struct {
+    name: ?[]const u8 = null,
+    account: ?[]const u8 = null,
+    config: ?[]const u8 = null,
+    validated_at: ?[]const u8 = null,
+    validated_with: ?[]const u8 = null,
+};
+
 fn providerLabel(provider: []const u8) []const u8 {
     const map = .{
         .{ "openrouter", "OpenRouter" },
@@ -58,12 +84,40 @@ fn providerLabel(provider: []const u8) []const u8 {
     return provider;
 }
 
+fn channelLabel(channel_type: []const u8) []const u8 {
+    const map = .{
+        .{ "telegram", "Telegram" },
+        .{ "discord", "Discord" },
+        .{ "slack", "Slack" },
+        .{ "whatsapp", "WhatsApp" },
+        .{ "matrix", "Matrix" },
+        .{ "mattermost", "Mattermost" },
+        .{ "irc", "IRC" },
+        .{ "imessage", "iMessage" },
+        .{ "email", "Email" },
+        .{ "lark", "Lark/Feishu" },
+        .{ "dingtalk", "DingTalk" },
+        .{ "signal", "Signal" },
+        .{ "line", "LINE" },
+        .{ "qq", "QQ" },
+        .{ "onebot", "OneBot" },
+        .{ "maixcam", "MaixCam" },
+        .{ "nostr", "Nostr" },
+        .{ "webhook", "Webhook" },
+    };
+    inline for (map) |pair| {
+        if (std.mem.eql(u8, channel_type, pair[0])) return pair[1];
+    }
+    return channel_type;
+}
+
 /// JSON-compatible shape used for serialization / deserialization.
 /// `std.json.ArrayHashMap` carries `jsonStringify` and `jsonParse` so we can
 /// round-trip through `std.json` without custom hooks.
 const JsonState = struct {
     instances: std.json.ArrayHashMap(std.json.ArrayHashMap(InstanceEntry)),
     saved_providers: []const SavedProvider = &.{},
+    saved_channels: []const SavedChannel = &.{},
 };
 
 /// Inner map type: instance-name → InstanceEntry.
@@ -79,6 +133,7 @@ pub const State = struct {
     /// instances[component][name] = InstanceEntry
     instances: ComponentMap,
     saved_providers: std.array_list.Managed(SavedProvider),
+    saved_channels: std.array_list.Managed(SavedChannel),
     path: []const u8,
 
     /// Create an empty State that will persist to `path`.
@@ -87,6 +142,7 @@ pub const State = struct {
             .allocator = allocator,
             .instances = ComponentMap.init(allocator),
             .saved_providers = std.array_list.Managed(SavedProvider).init(allocator),
+            .saved_channels = std.array_list.Managed(SavedChannel).init(allocator),
             .path = allocator.dupe(u8, path) catch @panic("OOM"),
         };
     }
@@ -100,8 +156,22 @@ pub const State = struct {
         if (sp.validated_with.len > 0) self.allocator.free(sp.validated_with);
     }
 
+    fn freeSavedChannelStrings(self: *State, sc: SavedChannel) void {
+        self.allocator.free(sc.name);
+        self.allocator.free(sc.channel_type);
+        self.allocator.free(sc.account);
+        if (sc.config.len > 0) self.allocator.free(sc.config);
+        if (sc.validated_at.len > 0) self.allocator.free(sc.validated_at);
+        if (sc.validated_with.len > 0) self.allocator.free(sc.validated_with);
+    }
+
     /// Free all owned strings and hashmaps.
     pub fn deinit(self: *State) void {
+        for (self.saved_channels.items) |sc| {
+            self.freeSavedChannelStrings(sc);
+        }
+        self.saved_channels.deinit();
+
         for (self.saved_providers.items) |sp| {
             self.freeSavedProviderStrings(sp);
         }
@@ -204,6 +274,31 @@ pub const State = struct {
             });
         }
 
+        for (parsed.value.saved_channels) |sc| {
+            const owned_name = try allocator.dupe(u8, sc.name);
+            errdefer allocator.free(owned_name);
+            const owned_channel_type = try allocator.dupe(u8, sc.channel_type);
+            errdefer allocator.free(owned_channel_type);
+            const owned_account = try allocator.dupe(u8, sc.account);
+            errdefer allocator.free(owned_account);
+            const owned_config = if (sc.config.len > 0) try allocator.dupe(u8, sc.config) else @as([]const u8, "");
+            errdefer if (owned_config.len > 0) allocator.free(@constCast(owned_config));
+            const owned_validated_at = if (sc.validated_at.len > 0) try allocator.dupe(u8, sc.validated_at) else @as([]const u8, "");
+            errdefer if (owned_validated_at.len > 0) allocator.free(@constCast(owned_validated_at));
+            const owned_validated_with = if (sc.validated_with.len > 0) try allocator.dupe(u8, sc.validated_with) else @as([]const u8, "");
+            errdefer if (owned_validated_with.len > 0) allocator.free(@constCast(owned_validated_with));
+
+            try state.saved_channels.append(.{
+                .id = sc.id,
+                .name = owned_name,
+                .channel_type = owned_channel_type,
+                .account = owned_account,
+                .config = owned_config,
+                .validated_at = owned_validated_at,
+                .validated_with = owned_validated_with,
+            });
+        }
+
         return state;
     }
 
@@ -237,6 +332,7 @@ pub const State = struct {
         const json_state = JsonState{
             .instances = json_outer,
             .saved_providers = self.saved_providers.items,
+            .saved_channels = self.saved_channels.items,
         };
         const json_bytes = try std.json.Stringify.valueAlloc(
             self.allocator,
@@ -469,6 +565,142 @@ pub const State = struct {
             }
         }
         return false;
+    }
+
+    // ─── SavedChannel CRUD ──────────────────────────────────────────────
+
+    pub fn savedChannels(self: *State) []const SavedChannel {
+        return self.saved_channels.items;
+    }
+
+    pub fn getSavedChannel(self: *State, id: u32) ?SavedChannel {
+        for (self.saved_channels.items) |sc| {
+            if (sc.id == id) return sc;
+        }
+        return null;
+    }
+
+    pub fn addSavedChannel(self: *State, input: SavedChannelInput) !void {
+        const id = self.nextChannelId();
+        const name = try self.generateChannelName(input.channel_type);
+        errdefer self.allocator.free(name);
+        const channel_type = try self.allocator.dupe(u8, input.channel_type);
+        errdefer self.allocator.free(channel_type);
+        const account = try self.allocator.dupe(u8, input.account);
+        errdefer self.allocator.free(account);
+        const config = if (input.config.len > 0) try self.allocator.dupe(u8, input.config) else @as([]const u8, "");
+        errdefer if (config.len > 0) self.allocator.free(@constCast(config));
+        const validated_with = if (input.validated_with.len > 0) try self.allocator.dupe(u8, input.validated_with) else @as([]const u8, "");
+        errdefer if (validated_with.len > 0) self.allocator.free(@constCast(validated_with));
+        const validated_at = if (input.validated_at.len > 0) try self.allocator.dupe(u8, input.validated_at) else @as([]const u8, "");
+        errdefer if (validated_at.len > 0) self.allocator.free(@constCast(validated_at));
+
+        try self.saved_channels.append(.{
+            .id = id,
+            .name = name,
+            .channel_type = channel_type,
+            .account = account,
+            .config = config,
+            .validated_at = validated_at,
+            .validated_with = validated_with,
+        });
+    }
+
+    pub fn updateSavedChannel(self: *State, id: u32, update: SavedChannelUpdate) !bool {
+        for (self.saved_channels.items) |*sc| {
+            if (sc.id == id) {
+                // Dupe all new values first (can fail)
+                const new_name = if (update.name) |name| try self.allocator.dupe(u8, name) else null;
+                errdefer if (new_name) |n| self.allocator.free(n);
+                const new_account = if (update.account) |account| try self.allocator.dupe(u8, account) else null;
+                errdefer if (new_account) |a| self.allocator.free(a);
+                const new_config = if (update.config) |config|
+                    if (config.len > 0) try self.allocator.dupe(u8, config) else @as([]const u8, "")
+                else
+                    null;
+                errdefer if (new_config) |c| if (c.len > 0) self.allocator.free(@constCast(c));
+                const new_validated_at = if (update.validated_at) |validated_at|
+                    if (validated_at.len > 0) try self.allocator.dupe(u8, validated_at) else @as([]const u8, "")
+                else
+                    null;
+                errdefer if (new_validated_at) |t| if (t.len > 0) self.allocator.free(@constCast(t));
+                const new_validated_with = if (update.validated_with) |validated_with|
+                    if (validated_with.len > 0) try self.allocator.dupe(u8, validated_with) else @as([]const u8, "")
+                else
+                    null;
+                // No errdefer needed for the last one - nothing after can fail
+
+                // Apply all at once (no more failures possible)
+                if (update.name != null) {
+                    const n = new_name.?;
+                    self.allocator.free(sc.name);
+                    sc.name = n;
+                }
+                if (update.account != null) {
+                    const a = new_account.?;
+                    self.allocator.free(sc.account);
+                    sc.account = a;
+                }
+                if (update.config != null) {
+                    const c = new_config.?;
+                    if (sc.config.len > 0) self.allocator.free(sc.config);
+                    sc.config = c;
+                }
+                if (update.validated_at != null) {
+                    const t = new_validated_at.?;
+                    if (sc.validated_at.len > 0) self.allocator.free(sc.validated_at);
+                    sc.validated_at = t;
+                }
+                if (update.validated_with != null) {
+                    const w = new_validated_with.?;
+                    if (sc.validated_with.len > 0) self.allocator.free(sc.validated_with);
+                    sc.validated_with = w;
+                }
+
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn removeSavedChannel(self: *State, id: u32) bool {
+        for (self.saved_channels.items, 0..) |sc, i| {
+            if (sc.id == id) {
+                self.freeSavedChannelStrings(sc);
+                _ = self.saved_channels.orderedRemove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn hasSavedChannel(self: *State, channel_type: []const u8, account: []const u8, config: []const u8) bool {
+        for (self.saved_channels.items) |sc| {
+            if (std.mem.eql(u8, sc.channel_type, channel_type) and
+                std.mem.eql(u8, sc.account, account) and
+                std.mem.eql(u8, sc.config, config))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn nextChannelId(self: *State) u32 {
+        var max_id: u32 = 0;
+        for (self.saved_channels.items) |sc| {
+            if (sc.id > max_id) max_id = sc.id;
+        }
+        return max_id + 1;
+    }
+
+    fn generateChannelName(self: *State, channel_type: []const u8) ![]const u8 {
+        const label = channelLabel(channel_type);
+        var count: u32 = 0;
+        for (self.saved_channels.items) |sc| {
+            if (std.mem.eql(u8, sc.channel_type, channel_type)) count += 1;
+        }
+        return std.fmt.allocPrint(self.allocator, "{s} #{d}", .{ label, count + 1 });
     }
 
     fn nextProviderId(self: *State) u32 {
@@ -984,4 +1216,190 @@ test "next provider id after removals" {
     try std.testing.expectEqual(@as(usize, 2), providers.len);
     try std.testing.expectEqual(@as(u32, 2), providers[0].id);
     try std.testing.expectEqual(@as(u32, 3), providers[1].id);
+}
+
+// ─── SavedChannel Tests ─────────────────────────────────────────────────────
+
+test "add saved channel, save, load, verify round-trip" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addSavedChannel(.{
+            .channel_type = "telegram",
+            .account = "@mybot",
+            .config = "{\"token\":\"abc\"}",
+            .validated_with = "nullclaw",
+        });
+
+        const channels = s.savedChannels();
+        try std.testing.expectEqual(@as(usize, 1), channels.len);
+        try std.testing.expectEqualStrings("telegram", channels[0].channel_type);
+        try std.testing.expectEqualStrings("@mybot", channels[0].account);
+        try std.testing.expectEqualStrings("{\"token\":\"abc\"}", channels[0].config);
+        try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+        try std.testing.expectEqual(@as(u32, 1), channels[0].id);
+
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        const channels = s.savedChannels();
+        try std.testing.expectEqual(@as(usize, 1), channels.len);
+        try std.testing.expectEqualStrings("telegram", channels[0].channel_type);
+        try std.testing.expectEqualStrings("@mybot", channels[0].account);
+        try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+        try std.testing.expectEqual(@as(u32, 1), channels[0].id);
+    }
+}
+
+test "channel auto-generated name increments per type" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" });
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot2" });
+    try s.addSavedChannel(.{ .channel_type = "discord", .account = "srv1" });
+
+    const channels = s.savedChannels();
+    try std.testing.expectEqual(@as(usize, 3), channels.len);
+    try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+    try std.testing.expectEqualStrings("Telegram #2", channels[1].name);
+    try std.testing.expectEqualStrings("Discord #1", channels[2].name);
+}
+
+test "update saved channel name only" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" });
+    const updated = try s.updateSavedChannel(1, .{ .name = "My Bot" });
+    try std.testing.expect(updated);
+
+    const channels = s.savedChannels();
+    try std.testing.expectEqualStrings("My Bot", channels[0].name);
+}
+
+test "remove saved channel" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" });
+    try s.addSavedChannel(.{ .channel_type = "discord", .account = "srv1" });
+
+    try std.testing.expect(s.removeSavedChannel(1));
+    try std.testing.expect(!s.removeSavedChannel(99));
+
+    const channels = s.savedChannels();
+    try std.testing.expectEqual(@as(usize, 1), channels.len);
+    try std.testing.expectEqualStrings("discord", channels[0].channel_type);
+}
+
+test "find saved channel by id" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" });
+    try s.addSavedChannel(.{ .channel_type = "discord", .account = "srv1" });
+
+    const found = s.getSavedChannel(2);
+    try std.testing.expect(found != null);
+    try std.testing.expectEqualStrings("discord", found.?.channel_type);
+
+    try std.testing.expect(s.getSavedChannel(99) == null);
+}
+
+test "hasSavedChannel detects duplicates" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{
+        .channel_type = "telegram",
+        .account = "bot1",
+        .config = "{\"token\":\"abc\"}",
+    });
+
+    try std.testing.expect(s.hasSavedChannel("telegram", "bot1", "{\"token\":\"abc\"}"));
+    try std.testing.expect(!s.hasSavedChannel("telegram", "bot1", ""));
+    try std.testing.expect(!s.hasSavedChannel("telegram", "bot2", "{\"token\":\"abc\"}"));
+    try std.testing.expect(!s.hasSavedChannel("discord", "bot1", "{\"token\":\"abc\"}"));
+}
+
+test "saved channels coexist with providers and instances" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addInstance("nullclaw", "bot1", .{ .version = "1.0.0" });
+        try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+        try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" });
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        try std.testing.expect(s.getInstance("nullclaw", "bot1") != null);
+        try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
+        try std.testing.expectEqual(@as(usize, 1), s.savedChannels().len);
+    }
+}
+
+test "next channel id after removals" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedChannel(.{ .channel_type = "telegram", .account = "bot1" }); // id=1
+    try s.addSavedChannel(.{ .channel_type = "discord", .account = "srv1" }); // id=2
+    _ = s.removeSavedChannel(1);
+    try s.addSavedChannel(.{ .channel_type = "slack", .account = "ws1" }); // id=3 (not 1)
+
+    const channels = s.savedChannels();
+    try std.testing.expectEqual(@as(usize, 2), channels.len);
+    try std.testing.expectEqual(@as(u32, 2), channels[0].id);
+    try std.testing.expectEqual(@as(u32, 3), channels[1].id);
 }

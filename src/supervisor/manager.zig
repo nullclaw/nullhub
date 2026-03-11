@@ -78,6 +78,7 @@ pub const Manager = struct {
     pub fn deinit(self: *Manager) void {
         var it = self.instances.iterator();
         while (it.next()) |entry| {
+            self.shutdownInstance(entry.value_ptr, "manager deinit");
             self.freeInstanceOwned(entry.value_ptr);
             self.allocator.free(entry.key_ptr.*);
         }
@@ -187,6 +188,22 @@ pub const Manager = struct {
             .Stopped => |signal| self.logSupervisor(inst.component, inst.name, "{s}: stopped by signal {d}", .{ context, signal }),
             .Unknown => |value| self.logSupervisor(inst.component, inst.name, "{s}: unknown termination value {d}", .{ context, value }),
         }
+    }
+
+    fn shutdownInstance(self: *Manager, inst: *ManagedInstance, context: []const u8) void {
+        if (inst.pid) |pid| {
+            inst.status = .stopping;
+            self.logSupervisor(inst.component, inst.name, "{s}: terminating pid={d}", .{ context, pidToU64(pid) });
+            process.terminate(pid) catch |err| {
+                self.logSupervisor(inst.component, inst.name, "{s}: terminate failed for pid={d}: {s}", .{ context, pidToU64(pid), @errorName(err) });
+            };
+        }
+        if (inst.child) |*child| {
+            self.waitChildAndLog(inst, child, context);
+            inst.child = null;
+        }
+        inst.status = .stopped;
+        inst.pid = null;
     }
 
     /// Start an instance. binary_path is the path to the component binary.
@@ -310,18 +327,8 @@ pub const Manager = struct {
 
         if (self.instances.getPtr(key_buf)) |inst| {
             if (inst.pid) |pid| {
-                inst.status = .stopping;
                 self.logSupervisor(inst.component, inst.name, "stop requested for pid={d}", .{pidToU64(pid)});
-                process.terminate(pid) catch |err| {
-                    self.logSupervisor(inst.component, inst.name, "stop: terminate failed for pid={d}: {s}", .{ pidToU64(pid), @errorName(err) });
-                };
-                // Wait for the child to actually exit so the PID is reaped.
-                if (inst.child) |*child| {
-                    self.waitChildAndLog(inst, child, "stop request");
-                    inst.child = null;
-                }
-                inst.status = .stopped;
-                inst.pid = null;
+                self.shutdownInstance(inst, "stop request");
                 self.logSupervisor(inst.component, inst.name, "instance stopped", .{});
             } else {
                 inst.status = .stopped;
@@ -637,6 +644,35 @@ test "Manager init and deinit (no leaks)" {
 
     var mgr = Manager.init(allocator, p);
     defer mgr.deinit();
+}
+
+test "Manager deinit terminates tracked child processes" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-deinit-kill");
+    defer p.deinit(allocator);
+
+    var mgr = Manager.init(allocator, p);
+
+    const spawned = try process.spawn(allocator, .{
+        .binary = "/bin/sleep",
+        .argv = &.{"60"},
+    });
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "inst" });
+    try mgr.instances.put(key, .{
+        .component = "comp",
+        .name = "inst",
+        .status = .running,
+        .pid = spawned.pid,
+        .child = spawned.child,
+    });
+
+    mgr.deinit();
+
+    try std.testing.expect(!process.isAlive(spawned.pid));
 }
 
 test "getStatus returns null for unknown instance" {

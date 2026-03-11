@@ -16,7 +16,6 @@
   let loading = $state(false);
   let providerHealth = $state<any>(null);
   let providerHealthLoading = $state(false);
-  let lastProviderProbeAt = $state(0);
   let lastUsageRefreshAt = $state(0);
   type UsageWindow = "24h" | "7d" | "30d" | "all";
   let usageWindow = $state<UsageWindow>("24h");
@@ -35,10 +34,22 @@
   let modelName = $derived(extractModel(config));
   let webPort = $derived(extractWebPort(config));
   let providerStatus = $derived(extractProviderStatus(config));
-  let providerDotOk = $derived(Boolean(providerStatus.provider) && Boolean(providerHealth?.live_ok));
-  let providerCardWarn = $derived(!providerDotOk);
+  let providerHealthCurrent = $derived(
+    providerHealth &&
+      providerHealth.provider === providerStatus.provider &&
+      providerHealth.model === providerStatus.model
+      ? providerHealth
+      : null,
+  );
+  let providerDotOk = $derived(
+    Boolean(providerStatus.provider) &&
+      (providerHealthCurrent ? Boolean(providerHealthCurrent.live_ok) : providerStatus.configured),
+  );
+  let providerCardWarn = $derived(
+    providerHealthCurrent ? !providerDotOk : !providerStatus.configured,
+  );
   let providerHintText = $derived(
-    buildProviderHint(providerStatus, providerHealth, providerHealthLoading),
+    buildProviderHint(providerStatus, providerHealthCurrent, providerHealthLoading),
   );
   let chatModuleName = $derived(
     uiModules["nullclaw-chat-ui"] ? "nullclaw-chat-ui" : "",
@@ -197,7 +208,7 @@
   ): string {
     if (!status.provider) return "";
     if (probeLoading) return "Checking live auth...";
-    if (!probe) return "Waiting for live check";
+    if (!probe) return "";
     if (probe.live_ok) {
       return "";
     }
@@ -308,7 +319,7 @@
     }
   }
 
-  async function refreshProviderHealth(force = false, cfgOverride: any = config) {
+  async function refreshProviderHealth(cfgOverride: any = config) {
     const status = extractProviderStatus(cfgOverride);
     if (!status.provider) {
       providerHealthLoading = false;
@@ -316,9 +327,6 @@
       return;
     }
 
-    const now = Date.now();
-    if (!force && now - lastProviderProbeAt < 15_000) return;
-    lastProviderProbeAt = now;
     providerHealthLoading = true;
     try {
       providerHealth = await api.getProviderHealth(component, name);
@@ -359,7 +367,7 @@
     }
   }
 
-  async function refresh() {
+  async function refresh(loadProviderHealth = false) {
     try {
       const status = await api.getStatus();
       const instances = status.instances || {};
@@ -378,7 +386,9 @@
       config = null;
       providerHealth = null;
     }
-    await refreshProviderHealth(false, loadedConfig);
+    if (loadProviderHealth) {
+      await refreshProviderHealth(loadedConfig);
+    }
     await refreshUsage();
     await refreshIntegration();
     // Fetch installed UI modules (best-effort)
@@ -415,7 +425,7 @@
   });
 
   onMount(() => {
-    refresh();
+    refresh(true);
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);
   });
@@ -426,7 +436,6 @@
     try {
       await api.startInstance(component, name);
       await refresh();
-      await refreshProviderHealth(true);
     } catch {
       instance = { ...instance, status: "stopped" };
     } finally {
@@ -439,7 +448,6 @@
     try {
       await api.stopInstance(component, name);
       await refresh();
-      await refreshProviderHealth(true);
     } catch {
       instance = { ...instance, status: "running" };
     } finally {
@@ -452,7 +460,6 @@
     try {
       await api.restartInstance(component, name);
       await refresh();
-      await refreshProviderHealth(true);
     } catch {
     } finally {
       loading = false;
@@ -872,7 +879,7 @@
         </div>
       </div>
     {:else if activeTab === "config"}
-      <ConfigEditor {component} {name} />
+      <ConfigEditor {component} {name} onAction={refresh} />
     {:else if activeTab === "logs"}
       <LogViewer {component} {name} />
     {:else if activeTab === "chat"}

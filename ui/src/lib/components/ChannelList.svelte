@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { api } from "$lib/api/client";
   import { channelSchemas } from './configSchemas';
 
   let {
@@ -11,6 +13,27 @@
 
   let addedChannels = $state<Array<{ type: string; account: string }>>([]);
   let showAddPicker = $state(false);
+  let savedChannels = $state<any[]>([]);
+  let showSavedDropdown = $state(false);
+  let savedChannelsRevealed = $state(false);
+  let loadingSavedChannels = $state(false);
+
+  function sameEntries(
+    a: Array<{ type: string; account: string }>,
+    b: Array<{ type: string; account: string }>,
+  ) {
+    return (
+      a.length === b.length &&
+      a.every((entry, idx) => entry.type === b[idx]?.type && entry.account === b[idx]?.account)
+    );
+  }
+
+  onMount(async () => {
+    try {
+      const data = await api.getSavedChannels();
+      savedChannels = data.channels || [];
+    } catch {}
+  });
 
   $effect(() => {
     const entries: Array<{ type: string; account: string }> = [];
@@ -20,7 +43,7 @@
         entries.push({ type, account });
       }
     }
-    if (entries.length > 0 && addedChannels.length === 0) {
+    if (!sameEntries(entries, addedChannels)) {
       addedChannels = entries;
     }
   });
@@ -34,16 +57,17 @@
   function addChannel(type: string) {
     const schema = channelSchemas[type];
     const account = schema?.hasAccounts ? 'default' : type;
-    addedChannels = [...addedChannels, { type, account }];
     const newValue = { ...value };
     if (!newValue[type]) newValue[type] = {};
-    if (!newValue[type][account]) {
-      const defaults: Record<string, any> = {};
-      for (const field of schema?.fields || []) {
-        if (field.default !== undefined) defaults[field.key] = field.default;
-      }
-      newValue[type][account] = defaults;
+    if (newValue[type][account]) {
+      showAddPicker = false;
+      return;
     }
+    const defaults: Record<string, any> = {};
+    for (const field of schema?.fields || []) {
+      if (field.default !== undefined) defaults[field.key] = field.default;
+    }
+    newValue[type][account] = defaults;
     onchange(newValue);
     showAddPicker = false;
   }
@@ -75,6 +99,36 @@
 
   function getValidationResult(type: string, account: string) {
     return validationResults.find((r: any) => r.channel === type && r.account === account);
+  }
+
+  async function toggleSavedDropdown() {
+    if (showSavedDropdown) {
+      showSavedDropdown = false;
+      return;
+    }
+    if (!savedChannelsRevealed && savedChannels.length > 0) {
+      loadingSavedChannels = true;
+      try {
+        const data = await api.getSavedChannels(true);
+        savedChannels = data.channels || [];
+        savedChannelsRevealed = true;
+      } catch {
+        loadingSavedChannels = false;
+        return;
+      }
+      loadingSavedChannels = false;
+    }
+    showSavedDropdown = true;
+  }
+
+  function useSaved(sc: any) {
+    const type = sc.channel_type;
+    const account = sc.account;
+    const newValue = { ...value };
+    if (!newValue[type]) newValue[type] = {};
+    newValue[type][account] = { ...sc.config };
+    onchange(newValue);
+    showSavedDropdown = false;
   }
 </script>
 
@@ -188,6 +242,24 @@
     </div>
   {:else}
     <button class="add-btn" onclick={() => (showAddPicker = true)}>+ Add Channel</button>
+  {/if}
+
+  {#if savedChannels.length > 0}
+    <div class="saved-section">
+      <button class="saved-btn" onclick={toggleSavedDropdown} disabled={loadingSavedChannels}>
+        {loadingSavedChannels ? "Loading..." : showSavedDropdown ? "Close" : "Use Saved"}
+      </button>
+      {#if showSavedDropdown}
+        <div class="saved-dropdown">
+          {#each savedChannels as sc}
+            <button class="saved-item" onclick={() => useSaved(sc)}>
+              <span class="saved-name">{sc.name}</span>
+              <span class="saved-type">{channelSchemas[sc.channel_type]?.label || sc.channel_type} / {sc.account}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -474,4 +546,64 @@
     background: var(--accent);
     box-shadow: 0 0 5px var(--border-glow);
   }
+
+  .saved-section { position: relative; margin-top: 0.5rem; }
+  .saved-btn {
+    width: 100%;
+    padding: 0.75rem;
+    background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+    border-radius: 2px;
+    color: var(--accent);
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .saved-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    border-style: solid;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    box-shadow: 0 0 8px var(--border-glow);
+    text-shadow: var(--text-glow);
+  }
+  .saved-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .saved-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+    margin-bottom: 4px;
+  }
+  .saved-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+  .saved-item:last-child { border-bottom: none; }
+  .saved-item:hover {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--accent);
+  }
+  .saved-name { font-weight: 700; }
+  .saved-type { font-size: 0.7rem; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 1px; }
 </style>
