@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const access = @import("../access.zig");
+const service_manager = @import("../service.zig");
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -43,54 +44,141 @@ pub fn handlePutSettings(allocator: std.mem.Allocator, body: []const u8) ![]cons
     return try buf.toOwnedSlice();
 }
 
-/// POST /api/service/install — detect platform and return dry-run service registration info.
+/// POST /api/service/install — install and enable the user service.
 /// Caller owns the returned memory.
 pub fn handleServiceInstall(allocator: std.mem.Allocator) ![]const u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    errdefer buf.deinit();
-
-    const os = builtin.os.tag;
-    if (os == .macos) {
-        try buf.appendSlice(
-            "{\"status\":\"ok\",\"platform\":\"macos\",\"service_type\":\"launchd\"," ++
-                "\"path\":\"~/Library/LaunchAgents/com.nullhub.agent.plist\"," ++
-                "\"message\":\"Service registration prepared (dry run)\"}",
-        );
-    } else if (os == .linux) {
-        try buf.appendSlice(
-            "{\"status\":\"ok\",\"platform\":\"linux\",\"service_type\":\"systemd\"," ++
-                "\"path\":\"~/.config/systemd/user/nullhub.service\"," ++
-                "\"message\":\"Service registration prepared (dry run)\"}",
-        );
-    } else {
-        try buf.appendSlice(
-            "{\"status\":\"error\",\"message\":\"unsupported platform\"}",
-        );
+    if (builtin.is_test) {
+        return buildServiceResponse(allocator, "ok", "Service enabled", try plannedServiceStatus(allocator, true, true));
     }
 
-    return try buf.toOwnedSlice();
+    service_manager.install(allocator) catch |err| {
+        return buildServiceResponse(allocator, "error", serviceErrorMessage(err), plannedServiceStatus(allocator, false, false) catch null);
+    };
+
+    return buildServiceResponse(
+        allocator,
+        "ok",
+        "Service enabled",
+        actualServiceStatus(allocator, true, true) catch plannedServiceStatus(allocator, true, true) catch null,
+    );
 }
 
-/// POST /api/service/uninstall — stub that returns success.
+/// POST /api/service/uninstall — uninstall and disable the user service.
 /// Caller owns the returned memory.
 pub fn handleServiceUninstall(allocator: std.mem.Allocator) ![]const u8 {
-    return try allocator.dupe(u8, "{\"status\":\"ok\",\"message\":\"Service unregistered\"}");
+    if (builtin.is_test) {
+        return buildServiceResponse(allocator, "ok", "Service disabled", try plannedServiceStatus(allocator, false, false));
+    }
+
+    service_manager.uninstall(allocator) catch |err| {
+        return buildServiceResponse(allocator, "error", serviceErrorMessage(err), plannedServiceStatus(allocator, false, false) catch null);
+    };
+
+    return buildServiceResponse(
+        allocator,
+        "ok",
+        "Service disabled",
+        actualServiceStatus(allocator, false, false) catch plannedServiceStatus(allocator, false, false) catch null,
+    );
 }
 
-/// GET /api/service/status — stub returning registration status.
+/// GET /api/service/status — return service registration status.
 /// Caller owns the returned memory.
 pub fn handleServiceStatus(allocator: std.mem.Allocator) ![]const u8 {
-    const os = builtin.os.tag;
-    const service_type = if (os == .macos) "launchd" else if (os == .linux) "systemd" else "unknown";
+    if (builtin.is_test) {
+        return buildServiceResponse(allocator, "ok", "Service disabled", try plannedServiceStatus(allocator, false, false));
+    }
+
+    return buildServiceResponse(
+        allocator,
+        "ok",
+        "Service status loaded",
+        service_manager.queryStatus(allocator) catch |err| {
+            return buildServiceResponse(allocator, "error", serviceErrorMessage(err), plannedServiceStatus(allocator, false, false) catch null);
+        },
+    );
+}
+
+fn actualServiceStatus(allocator: std.mem.Allocator, fallback_registered: bool, fallback_running: bool) !service_manager.ServiceStatus {
+    return service_manager.queryStatus(allocator) catch plannedServiceStatus(allocator, fallback_registered, fallback_running);
+}
+
+fn plannedServiceStatus(allocator: std.mem.Allocator, registered: bool, running: bool) !service_manager.ServiceStatus {
+    var status = service_manager.plannedStatus(allocator) catch {
+        return .{
+            .service_type = platformServiceType(),
+            .registered = registered,
+            .running = running,
+            .unit_path = try allocator.dupe(u8, ""),
+        };
+    };
+    status.registered = registered;
+    status.running = running;
+    return status;
+}
+
+fn platformServiceType() []const u8 {
+    return switch (builtin.os.tag) {
+        .macos => "launchd",
+        .linux => "systemd",
+        else => "unsupported",
+    };
+}
+
+fn serviceErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.NoHomeDir => "Home directory not found",
+        error.UnsupportedPlatform => "Unsupported platform",
+        error.SystemctlUnavailable => "systemctl is not available",
+        error.SystemdUserUnavailable => "Systemd user session is unavailable",
+        error.CommandFailed => "Service command failed",
+        else => "Service operation failed",
+    };
+}
+
+fn buildServiceResponse(
+    allocator: std.mem.Allocator,
+    status_value: []const u8,
+    message: []const u8,
+    service_status: ?service_manager.ServiceStatus,
+) ![]const u8 {
+    var owned_status = service_status;
+    defer if (owned_status) |*status| status.deinit(allocator);
 
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
-    try buf.appendSlice("{\"registered\":false,\"running\":false,\"service_type\":\"");
-    try buf.appendSlice(service_type);
-    try buf.appendSlice("\"}");
+    try buf.appendSlice("{\"status\":");
+    try appendJsonString(&buf, status_value);
+    try buf.appendSlice(",\"message\":");
+    try appendJsonString(&buf, message);
 
+    if (owned_status) |status| {
+        try buf.appendSlice(",\"registered\":");
+        try buf.appendSlice(if (status.registered) "true" else "false");
+        try buf.appendSlice(",\"running\":");
+        try buf.appendSlice(if (status.running) "true" else "false");
+        try buf.appendSlice(",\"service_type\":");
+        try appendJsonString(&buf, status.service_type);
+        try buf.appendSlice(",\"unit_path\":");
+        try appendJsonString(&buf, status.unit_path);
+    }
+
+    try buf.append('}');
     return try buf.toOwnedSlice();
+}
+
+fn appendJsonString(buf: *std.array_list.Managed(u8), value: []const u8) !void {
+    try buf.append('"');
+    for (value) |char| switch (char) {
+        '\\' => try buf.appendSlice("\\\\"),
+        '"' => try buf.appendSlice("\\\""),
+        '\n' => try buf.appendSlice("\\n"),
+        '\r' => try buf.appendSlice("\\r"),
+        '\t' => try buf.appendSlice("\\t"),
+        else => try buf.append(char),
+    };
+    try buf.append('"');
 }
 
 fn appendAccessJson(buf: *std.array_list.Managed(u8), urls: access.AccessUrls) !void {
@@ -191,18 +279,9 @@ test "handleServiceInstall returns platform info" {
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"ok\"") != null);
-
-    const os = builtin.os.tag;
-    if (os == .macos) {
-        try std.testing.expect(std.mem.indexOf(u8, json, "\"platform\":\"macos\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, json, "\"service_type\":\"launchd\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, json, "com.nullhub.agent.plist") != null);
-    } else if (os == .linux) {
-        try std.testing.expect(std.mem.indexOf(u8, json, "\"platform\":\"linux\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, json, "\"service_type\":\"systemd\"") != null);
-        try std.testing.expect(std.mem.indexOf(u8, json, "nullhub.service") != null);
-    }
-    try std.testing.expect(std.mem.indexOf(u8, json, "dry run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"registered\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"running\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"service_type\":") != null);
 }
 
 test "handleServiceStatus returns registered false" {
@@ -213,9 +292,12 @@ test "handleServiceStatus returns registered false" {
 
     const parsed = try std.json.parseFromSlice(
         struct {
+            status: []const u8,
+            message: []const u8,
             registered: bool,
             running: bool,
             service_type: []const u8,
+            unit_path: []const u8,
         },
         allocator,
         json,
@@ -223,9 +305,12 @@ test "handleServiceStatus returns registered false" {
     );
     defer parsed.deinit();
 
+    try std.testing.expectEqualStrings("ok", parsed.value.status);
+    try std.testing.expect(parsed.value.message.len > 0);
     try std.testing.expect(parsed.value.registered == false);
     try std.testing.expect(parsed.value.running == false);
     try std.testing.expect(parsed.value.service_type.len > 0);
+    try std.testing.expect(parsed.value.unit_path.len >= 0);
 }
 
 test "handleServiceUninstall returns ok" {
@@ -235,4 +320,5 @@ test "handleServiceUninstall returns ok" {
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"registered\":false") != null);
 }

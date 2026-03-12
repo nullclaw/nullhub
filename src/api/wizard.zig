@@ -155,14 +155,26 @@ pub fn handleGetWizard(allocator: std.mem.Allocator, component_name: []const u8,
     return allocator.dupe(u8, "{\"error\":\"no compatible version found, check GitHub releases\"}") catch null;
 }
 
+fn listModelsForProvider(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    paths: paths_mod.Paths,
+    provider: []const u8,
+    api_key: []const u8,
+) ?[]const u8 {
+    if (registry.findKnownComponent(component_name) == null) return null;
+
+    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse return null;
+    defer allocator.free(bin_path);
+
+    return component_cli.listModels(allocator, bin_path, provider, api_key) catch null;
+}
+
 /// Handle GET /api/wizard/{component}/models — runs component --list-models.
 /// Expects query params: provider and api_key.
 /// Returns the JSON model array directly.
 pub fn handleGetModels(allocator: std.mem.Allocator, component_name: []const u8, paths: paths_mod.Paths, target: []const u8) ?[]const u8 {
     if (registry.findKnownComponent(component_name) == null) return null;
-
-    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse return null;
-    defer allocator.free(bin_path);
 
     // Parse query string for provider and api_key
     const query_start = std.mem.indexOf(u8, target, "?") orelse return null;
@@ -184,7 +196,38 @@ pub fn handleGetModels(allocator: std.mem.Allocator, component_name: []const u8,
     const prov = provider orelse return null;
     const key = api_key orelse "";
 
-    return component_cli.listModels(allocator, bin_path, prov, key) catch null;
+    return listModelsForProvider(allocator, component_name, paths, prov, key);
+}
+
+/// Handle POST /api/wizard/{component}/models — runs component --list-models.
+/// Expects JSON body: {"provider":"...", "api_key":"..."}.
+/// Returns the JSON model array directly.
+pub fn handlePostModels(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    paths: paths_mod.Paths,
+    body: []const u8,
+) ?[]const u8 {
+    const parsed = std.json.parseFromSlice(struct {
+        provider: []const u8,
+        api_key: []const u8 = "",
+    }, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
+    defer parsed.deinit();
+
+    if (parsed.value.provider.len == 0) {
+        return allocator.dupe(u8, "{\"error\":\"provider is required\"}") catch null;
+    }
+
+    return listModelsForProvider(
+        allocator,
+        component_name,
+        paths,
+        parsed.value.provider,
+        parsed.value.api_key,
+    );
 }
 
 /// Handle GET /api/wizard/{component}/versions — fetch available releases from GitHub.

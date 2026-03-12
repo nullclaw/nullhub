@@ -86,7 +86,7 @@
     background: var(--bg-surface);
     color: var(--accent);
     border: 1px solid var(--accent-dim);
-    border-radius: 4px;
+    border-radius: var(--radius);
     font-size: 0.875rem;
     font-weight: bold;
     text-transform: uppercase;
@@ -106,7 +106,7 @@
     background: rgba(255, 0, 0, 0.1);
     color: var(--error);
     border: 1px solid var(--error);
-    border-radius: 4px;
+    border-radius: var(--radius);
     margin-bottom: 1.5rem;
     font-size: 0.875rem;
     font-weight: bold;
@@ -123,9 +123,14 @@
     text-align: center;
     padding: 4rem 2rem;
     color: var(--fg-dim);
-    border: 1px solid var(--border);
+    border: 1px dashed var(--border);
     background: var(--bg-surface);
-    border-radius: 4px;
+    border-radius: var(--radius);
+  }
+
+  :global(body.theme-8bit-lobster) .empty-state,
+  :global(body.theme-8bit-lobster-light) .empty-state {
+    border-style: solid;
   }
   .empty-state p {
     margin-bottom: 1.5rem;
@@ -138,18 +143,31 @@
     background: var(--bg-surface);
     color: var(--accent);
     border: 1px solid var(--accent-dim);
-    border-radius: 4px;
+    border-radius: var(--radius);
     font-size: 0.875rem;
     font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 1px;
     transition: all 0.2s ease;
     text-shadow: var(--text-glow);
-    animation: pulse 2s ease-in-out infinite;
   }
-  @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 4px transparent; border-color: var(--accent-dim); }
-    50% { box-shadow: 0 0 12px var(--border-glow); border-color: var(--accent); }
+
+  :global(body.theme-8bit-lobster:not(.effects-disabled)) .empty-state .btn,
+  :global(body.theme-8bit-lobster-light:not(.effects-disabled)) .empty-state .btn {
+    animation: lobsterPulse 1.5s steps(6, end) infinite;
+  }
+
+  @keyframes lobsterPulse {
+    0%,
+    100% {
+      box-shadow: 0 0 4px transparent;
+      border-color: var(--accent-dim);
+    }
+
+    50% {
+      box-shadow: 0 0 12px var(--border-glow);
+      border-color: var(--accent);
+    }
   }
   .empty-state .btn:hover {
     text-decoration: none;

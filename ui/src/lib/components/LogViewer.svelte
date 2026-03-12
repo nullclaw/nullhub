@@ -1,26 +1,43 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import type { LogSource } from "$lib/api/client";
 
   let { component = "", name = "" } = $props();
   let lines = $state<string[]>([]);
   let container: HTMLElement;
   let autoScroll = $state(true);
+  let source = $state<LogSource>("instance");
+
+  const sourceLabels: Record<LogSource, string> = {
+    instance: "Instance",
+    nullhub: "NullHub",
+  };
+  const logSources: LogSource[] = ["instance", "nullhub"];
 
   async function fetchLogs() {
+    const requestedSource = source;
     try {
-      const data = await api.getLogs(component, name, 200);
+      const data = await api.getLogs(component, name, 200, requestedSource);
+      if (requestedSource !== source) return;
       lines = data.lines || [];
       scrollToBottom();
-    } catch (e) {
+    } catch {
       if (lines.length === 0) lines = ["Failed to load logs"];
     }
   }
 
   onMount(() => {
-    fetchLogs();
+    void fetchLogs();
     const interval = setInterval(fetchLogs, 3000);
     return () => clearInterval(interval);
+  });
+
+  $effect(() => {
+    component;
+    name;
+    source;
+    void fetchLogs();
   });
 
   function scrollToBottom() {
@@ -32,14 +49,28 @@
   }
 
   async function clearLogs() {
-    await api.clearLogs(component, name);
+    await api.clearLogs(component, name, source);
     lines = [];
   }
 </script>
 
 <div class="log-viewer">
   <div class="log-header">
-    <span>Logs</span>
+    <div class="log-title-group">
+      <span>Logs</span>
+      <div class="source-switch" role="tablist" aria-label="Log source">
+        {#each logSources as option}
+          <button
+            type="button"
+            class="source-btn"
+            class:active={source === option}
+            onclick={() => (source = option)}
+          >
+            {sourceLabels[option]}
+          </button>
+        {/each}
+      </div>
+    </div>
     <div class="log-actions">
       <button class="clear-btn" onclick={clearLogs}>Clear</button>
       <label class="auto-scroll">
@@ -53,7 +84,7 @@
       <div class="log-line">{line}</div>
     {/each}
     {#if lines.length === 0}
-      <div class="log-empty">No logs available</div>
+      <div class="log-empty">No {sourceLabels[source]} logs available</div>
     {/if}
   </div>
 </div>
@@ -72,6 +103,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 1rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
     font-size: 0.8125rem;
@@ -79,6 +111,45 @@
     text-transform: uppercase;
     letter-spacing: 1px;
     font-weight: 700;
+  }
+  .log-title-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+  }
+  .source-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.1875rem;
+    border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  .source-btn {
+    padding: 0.3rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 0.6875rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    transition: all 0.15s ease;
+  }
+  .source-btn:hover {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    box-shadow: none;
+    text-shadow: none;
+  }
+  .source-btn.active {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    text-shadow: var(--text-glow);
+    box-shadow: inset 0 0 8px color-mix(in srgb, var(--accent) 18%, transparent);
   }
   .log-content {
     flex: 1;
@@ -163,5 +234,18 @@
     background: var(--accent);
     border-radius: 1px;
     box-shadow: 0 0 3px var(--border-glow);
+  }
+  @media (max-width: 760px) {
+    .log-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .log-title-group {
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .log-actions {
+      justify-content: space-between;
+    }
   }
 </style>

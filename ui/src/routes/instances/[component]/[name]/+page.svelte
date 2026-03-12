@@ -24,6 +24,8 @@
   let usageWindow = $state<UsageWindow>("24h");
   let usageData = $state<any>(null);
   let usageLoading = $state(false);
+  let standaloneCopyState = $state<"idle" | "copied" | "error">("idle");
+  let standaloneCopyTimer: ReturnType<typeof setTimeout> | null = null;
   let integration = $state<any>(null);
   let integrationLoading = $state(false);
   let integrationError = $state<string | null>(null);
@@ -68,6 +70,7 @@
     component === "nullboiler" || component === "nulltickets",
   );
   let supportsAgentData = $derived(component === "nullclaw");
+  let supportsVerboseStartup = $derived(component === "nullclaw");
   let instanceRouteKey = $derived(`${component}/${name}`);
   let queueSummary = $derived(summarizeQueue(integration?.queue));
   let linkedBoilers = $derived(integration?.linked_boilers || []);
@@ -86,6 +89,22 @@
   );
   let selectedPipelineTriggers = $derived(
     Array.isArray(selectedPipelineOption?.triggers) ? selectedPipelineOption.triggers : [],
+  );
+  let standaloneHomeEnv = $derived(componentHomeEnv(component));
+  let standaloneHomePath = $derived(`$NULLHUB_HOME/instances/${component}/${name}`);
+  let standaloneConfigPath = $derived(`${standaloneHomePath}/config.json`);
+  let standaloneBinaryPath = $derived(
+    instance?.version ? `$NULLHUB_HOME/bin/${component}-${instance.version}` : "",
+  );
+  let standaloneLaunchScript = $derived(
+    buildStandaloneLaunchScript(
+      component,
+      name,
+      instance?.version,
+      instance?.launch_mode,
+      instance?.verbose,
+      standaloneHomeEnv,
+    ),
   );
 
   function extractModel(cfg: any): string | null {
@@ -202,6 +221,81 @@
       return new Date(ts * 1000).toLocaleString();
     } catch {
       return "-";
+    }
+  }
+
+  function setStandaloneCopyState(state: "idle" | "copied" | "error") {
+    standaloneCopyState = state;
+    if (standaloneCopyTimer) clearTimeout(standaloneCopyTimer);
+    if (state !== "idle") {
+      standaloneCopyTimer = setTimeout(() => {
+        standaloneCopyState = "idle";
+        standaloneCopyTimer = null;
+      }, 1600);
+    } else {
+      standaloneCopyTimer = null;
+    }
+  }
+
+  function componentHomeEnv(componentName: string): string {
+    if (componentName === "nullclaw") return "NULLCLAW_HOME";
+    if (componentName === "nullboiler") return "NULLBOILER_HOME";
+    if (componentName === "nulltickets") return "NULLTICKETS_HOME";
+    return "COMPONENT_HOME";
+  }
+
+  function shellQuote(value: string): string {
+    if (value === "") return "''";
+    return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+  }
+
+  function tokenizeLaunchMode(launchMode: string): string[] {
+    return launchMode
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+  }
+
+  function buildStandaloneLaunchScript(
+    componentName: string,
+    instanceName: string,
+    version: string | undefined,
+    launchMode: string | undefined,
+    verbose: boolean | undefined,
+    homeEnv: string,
+  ): string {
+    if (!version) return "";
+
+    const args = tokenizeLaunchMode(launchMode || "gateway");
+    if (args.length === 0) args.push("gateway");
+    if (verbose) args.push("--verbose");
+
+    const command = [
+      `"$NULLHUB_HOME/bin/${componentName}-${version}"`,
+      ...args.map(shellQuote),
+    ].join(" ");
+
+    return [
+      'export NULLHUB_HOME="${NULLHUB_HOME:-$HOME/.nullhub}"',
+      `export ${homeEnv}="$NULLHUB_HOME/instances/${componentName}/${instanceName}"`,
+      command,
+    ].join("\n");
+  }
+
+  async function copyStandaloneLaunchScript() {
+    if (!standaloneLaunchScript) return;
+    try {
+      await navigator.clipboard.writeText(standaloneLaunchScript);
+      setStandaloneCopyState("copied");
+    } catch {
+      setStandaloneCopyState("error");
+    }
+  }
+
+  function handleStandaloneLaunchKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      void copyStandaloneLaunchScript();
     }
   }
 
@@ -458,7 +552,7 @@
     loading = true;
     instance = { ...instance, status: "starting" };
     try {
-      await api.startInstance(component, name);
+      await api.startInstance(component, name, { verbose: Boolean(instance?.verbose) });
       await refresh();
     } catch {
       instance = { ...instance, status: "stopped" };
@@ -470,7 +564,10 @@
     loading = true;
     instance = { ...instance, status: "starting" };
     try {
-      await api.startInstance(component, name, "agent");
+      await api.startInstance(component, name, {
+        launch_mode: "agent",
+        verbose: Boolean(instance?.verbose),
+      });
       await refresh();
     } catch {
       instance = { ...instance, status: "stopped" };
@@ -494,7 +591,7 @@
     loading = true;
     instance = { ...instance, status: "restarting" };
     try {
-      await api.restartInstance(component, name);
+      await api.restartInstance(component, name, { verbose: Boolean(instance?.verbose) });
       await refresh();
     } catch {
     } finally {
@@ -521,6 +618,12 @@
   async function toggleAutoStart() {
     await api.patchInstance(component, name, {
       auto_start: !instance?.auto_start,
+    });
+    await refresh();
+  }
+  async function toggleVerbose() {
+    await api.patchInstance(component, name, {
+      verbose: !instance?.verbose,
     });
     await refresh();
   }
@@ -577,6 +680,10 @@
       class:active={activeTab === "logs"}
       onclick={() => (activeTab = "logs")}>Logs</button
     >
+    <button
+      class:active={activeTab === "advanced"}
+      onclick={() => (activeTab = "advanced")}>Advanced</button
+    >
   </div>
 
   <div class="tab-content">
@@ -605,6 +712,19 @@
             {instance?.auto_start ? "On" : "Off"}
           </button>
         </div>
+        {#if supportsVerboseStartup}
+          <div class="info-card">
+            <span class="label">Verbose</span>
+            <button
+              class="toggle-btn"
+              class:on={instance?.verbose}
+              onclick={toggleVerbose}
+            >
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              {instance?.verbose ? "On" : "Off"}
+            </button>
+          </div>
+        {/if}
         {#if instance?.pid}
           <div class="info-card">
             <span class="label">PID</span>
@@ -936,6 +1056,59 @@
       {#key instanceRouteKey}
         <LogViewer {component} {name} />
       {/key}
+    {:else if activeTab === "advanced"}
+      <div class="advanced-panel">
+        <div class="advanced-card">
+          <h3>Standalone Launch</h3>
+          {#if component === "nullclaw" && standaloneBinaryPath}
+            <p>
+              Run this instance without <code>nullhub</code>, reusing the same
+              config, auth, data, and logs directory.
+            </p>
+            <div class="advanced-copy-row">
+              <span class="advanced-copy-hint">
+                {#if standaloneCopyState === "copied"}
+                  Copied
+                {:else if standaloneCopyState === "error"}
+                  Copy failed
+                {:else}
+                  Click to copy
+                {/if}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="advanced-code advanced-code-copy"
+              onclick={() => void copyStandaloneLaunchScript()}
+              onkeydown={handleStandaloneLaunchKeydown}
+              aria-label="Copy standalone launch command"
+            ><code>{standaloneLaunchScript}</code></button>
+            <div class="advanced-meta">
+              <div>
+                <span class="advanced-label">Config</span>
+                <code>{standaloneConfigPath}</code>
+              </div>
+              <div>
+                <span class="advanced-label">Instance Home</span>
+                <code>{standaloneHomePath}</code>
+              </div>
+              <div>
+                <span class="advanced-label">Binary</span>
+                <code>{standaloneBinaryPath}</code>
+              </div>
+            </div>
+            <p class="advanced-note">
+              If your `nullhub` root is custom, export <code>NULLHUB_HOME</code>
+              before running the command.
+            </p>
+          {:else}
+            <p>
+              Standalone launch instructions are available for <code>nullclaw</code>
+              instances for now.
+            </p>
+          {/if}
+        </div>
+      </div>
     {:else if activeTab === "chat"}
       {#if !providerStatus.configured}
         <div class="chat-blocked">
@@ -1306,12 +1479,18 @@
     cursor: pointer;
     padding: 0;
   }
+  .toggle-btn:hover:not(:disabled) {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+    text-shadow: none;
+  }
   .toggle-track {
     position: relative;
     width: 36px;
     height: 20px;
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 2px;
     transition: all 0.2s ease;
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
@@ -1328,7 +1507,6 @@
   }
   .toggle-btn.on .toggle-track {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-color: var(--accent);
     box-shadow: inset 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
   }
   .toggle-btn.on .toggle-thumb {
@@ -1371,6 +1549,94 @@
   }
   .disabled-tab {
     opacity: 0.5;
+  }
+  .advanced-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .advanced-card {
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  }
+  .advanced-card h3 {
+    margin: 0 0 0.75rem;
+    color: var(--accent);
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .advanced-card p {
+    margin: 0;
+    color: var(--fg-dim);
+    line-height: 1.6;
+  }
+  .advanced-code {
+    margin: 1rem 0;
+    padding: 1rem;
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--bg) 55%, var(--bg-surface) 45%);
+    overflow-x: auto;
+  }
+  .advanced-copy-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 1rem;
+    margin-bottom: -0.5rem;
+  }
+  .advanced-copy-hint {
+    color: var(--accent-dim);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .advanced-code-copy {
+    display: block;
+    width: 100%;
+    text-align: left;
+    cursor: copy;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+  .advanced-code-copy:hover,
+  .advanced-code-copy:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--border-glow);
+    background: color-mix(in srgb, var(--bg) 48%, var(--bg-surface) 52%);
+  }
+  .advanced-code code {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--fg);
+    white-space: pre;
+  }
+  .advanced-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+  }
+  .advanced-meta div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  }
+  .advanced-label {
+    color: var(--accent-dim);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .advanced-note {
+    margin-top: 0.9rem !important;
+    font-size: 0.82rem;
   }
   .chat-blocked {
     display: flex;

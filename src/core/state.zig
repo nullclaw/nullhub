@@ -6,6 +6,7 @@ pub const InstanceEntry = struct {
     version: []const u8,
     auto_start: bool = false,
     launch_mode: []const u8 = "gateway",
+    verbose: bool = false,
 };
 
 pub const SavedProvider = struct {
@@ -242,6 +243,7 @@ pub const State = struct {
                     .version = try allocator.dupe(u8, inst_kv.value_ptr.version),
                     .auto_start = inst_kv.value_ptr.auto_start,
                     .launch_mode = duped_launch_mode,
+                    .verbose = inst_kv.value_ptr.verbose,
                 };
                 try inner.put(inst_name, entry);
             }
@@ -378,6 +380,7 @@ pub const State = struct {
             .version = try self.allocator.dupe(u8, entry.version),
             .auto_start = entry.auto_start,
             .launch_mode = owned_launch_mode,
+            .verbose = entry.verbose,
         };
         try inner_ptr.put(owned_name, owned_entry);
     }
@@ -430,6 +433,7 @@ pub const State = struct {
         ptr.version = new_version;
         ptr.launch_mode = new_launch_mode;
         ptr.auto_start = entry.auto_start;
+        ptr.verbose = entry.verbose;
         return true;
     }
 
@@ -999,6 +1003,37 @@ test "update launch_mode persists" {
 
         const entry = s.getInstance("nullclaw", "my-agent").?;
         try std.testing.expectEqualStrings("agent", entry.launch_mode);
+    }
+}
+
+test "verbose defaults to false and persists through save/load" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addInstance("nullclaw", "default-verbose", .{ .version = "1.0.0" });
+        try s.addInstance("nullclaw", "verbose-on", .{
+            .version = "1.0.0",
+            .verbose = true,
+        });
+
+        try std.testing.expect(!s.getInstance("nullclaw", "default-verbose").?.verbose);
+        try std.testing.expect(s.getInstance("nullclaw", "verbose-on").?.verbose);
+
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        try std.testing.expect(!s.getInstance("nullclaw", "default-verbose").?.verbose);
+        try std.testing.expect(s.getInstance("nullclaw", "verbose-on").?.verbose);
     }
 }
 

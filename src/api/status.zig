@@ -25,7 +25,9 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.appendSlice(if (entry.auto_start) "true" else "false");
     try buf.appendSlice(",\"launch_mode\":\"");
     try appendEscaped(buf, entry.launch_mode);
-    try buf.appendSlice("\",\"status\":\"");
+    try buf.appendSlice("\",\"verbose\":");
+    try buf.appendSlice(if (entry.verbose) "true" else "false");
+    try buf.appendSlice(",\"status\":\"");
     try buf.appendSlice(status_str);
     try buf.appendSlice("\"");
     // PID
@@ -187,6 +189,8 @@ test "handleStatus returns valid JSON with hub version" {
             instances: std.json.ArrayHashMap(std.json.ArrayHashMap(struct {
                 version: []const u8,
                 auto_start: bool,
+                launch_mode: []const u8 = "gateway",
+                verbose: bool = false,
                 status: []const u8,
             })),
         },
@@ -233,6 +237,8 @@ test "handleStatus includes instances" {
             instances: std.json.ArrayHashMap(std.json.ArrayHashMap(struct {
                 version: []const u8,
                 auto_start: bool,
+                launch_mode: []const u8 = "gateway",
+                verbose: bool = false,
                 status: []const u8,
             })),
         },
@@ -265,6 +271,24 @@ test "handleStatus includes launch_mode" {
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"launch_mode\":\"agent\"") != null);
+}
+
+test "handleStatus includes verbose flag" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    defer s.deinit();
+    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
+    defer p.deinit(allocator);
+    var mgr = manager_mod.Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .verbose = true });
+
+    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"verbose\":true") != null);
 }
 
 test "handleStatus with empty state returns empty instances" {

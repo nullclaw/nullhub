@@ -7,6 +7,7 @@ const helpers = @import("helpers.zig");
 const local_binary = @import("../core/local_binary.zig");
 const component_cli = @import("../core/component_cli.zig");
 const integration_mod = @import("../core/integration.zig");
+const launch_args_mod = @import("../core/launch_args.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 
@@ -1196,18 +1197,6 @@ fn runInstanceCliJson(
     );
 }
 
-fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]const []const u8 {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer list.deinit(allocator);
-
-    var it = std.mem.tokenizeAny(u8, launch_cmd, " \t\r\n");
-    while (it.next()) |token| {
-        try list.append(allocator, token);
-    }
-
-    return list.toOwnedSlice(allocator);
-}
-
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
 fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8) !void {
@@ -1217,7 +1206,9 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.appendSlice(if (entry.auto_start) "true" else "false");
     try buf.appendSlice(",\"launch_mode\":\"");
     try appendEscaped(buf, entry.launch_mode);
-    try buf.appendSlice("\",\"status\":\"");
+    try buf.appendSlice("\",\"verbose\":");
+    try buf.appendSlice(if (entry.verbose) "true" else "false");
+    try buf.appendSlice(",\"status\":\"");
     try buf.appendSlice(status_str);
     try buf.appendSlice("\"}");
 }
@@ -1297,9 +1288,13 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         name,
     ) catch return helpers.serverError();
 
-    // Check if body overrides launch_mode
-    const StartBody = struct { launch_mode: ?[]const u8 = null };
+    // Check if body overrides startup settings.
+    const StartBody = struct {
+        launch_mode: ?[]const u8 = null,
+        verbose: ?bool = null,
+    };
     var launch_cmd: []const u8 = entry.launch_mode;
+    var launch_verbose = entry.verbose;
     var parsed_body: ?std.json.Parsed(StartBody) = null;
     defer if (parsed_body) |*pb| pb.deinit();
     if (body.len > 0) {
@@ -1311,6 +1306,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         ) catch null;
         if (parsed_body) |pb| {
             if (pb.value.launch_mode) |mode| launch_cmd = mode;
+            if (pb.value.verbose) |verbose| launch_verbose = verbose;
         }
     }
 
@@ -1342,7 +1338,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         }
     }
 
-    const launch_args = splitLaunchCommand(allocator, launch_cmd) catch return helpers.serverError();
+    const launch_args = launch_args_mod.buildLaunchArgs(allocator, launch_cmd, launch_verbose) catch return helpers.serverError();
     defer allocator.free(launch_args);
     const primary_cmd = if (launch_args.len > 0) launch_args[0] else launch_cmd;
     // Agent mode has no HTTP health endpoint — skip health checks (port=0).
@@ -1840,6 +1836,7 @@ pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
             .version = rollback_version,
             .auto_start = existing.auto_start,
             .launch_mode = rollback_launch_mode,
+            .verbose = existing.verbose,
         }) catch {};
         _ = s.save() catch {};
         if (hidden_inst_dir) |path| {
@@ -1954,6 +1951,7 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     s.addInstance(component, "default", .{
         .version = version,
         .auto_start = false,
+        .verbose = false,
     }) catch return helpers.serverError();
     s.save() catch return helpers.serverError();
 
@@ -1964,9 +1962,13 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
 pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8, body: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    // Parse the JSON body to extract auto_start and launch_mode.
+    // Parse the JSON body to extract instance startup settings.
     const parsed = std.json.parseFromSlice(
-        struct { auto_start: ?bool = null, launch_mode: ?[]const u8 = null },
+        struct {
+            auto_start: ?bool = null,
+            launch_mode: ?[]const u8 = null,
+            verbose: ?bool = null,
+        },
         s.allocator,
         body,
         .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
@@ -1975,11 +1977,13 @@ pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8,
 
     const new_auto_start = parsed.value.auto_start orelse entry.auto_start;
     const new_launch_mode = parsed.value.launch_mode orelse entry.launch_mode;
+    const new_verbose = parsed.value.verbose orelse entry.verbose;
 
     _ = s.updateInstance(component, name, .{
         .version = entry.version,
         .auto_start = new_auto_start,
         .launch_mode = new_launch_mode,
+        .verbose = new_verbose,
     }) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
@@ -2631,6 +2635,8 @@ test "handleList returns valid JSON structure" {
             instances: std.json.ArrayHashMap(std.json.ArrayHashMap(struct {
                 version: []const u8,
                 auto_start: bool,
+                launch_mode: []const u8 = "gateway",
+                verbose: bool = false,
                 status: []const u8,
             })),
         },
@@ -2677,7 +2683,13 @@ test "handleGet returns instance detail JSON" {
 
     // Parse and verify JSON content.
     const parsed = try std.json.parseFromSlice(
-        struct { version: []const u8, auto_start: bool, status: []const u8 },
+        struct {
+            version: []const u8,
+            auto_start: bool,
+            launch_mode: []const u8 = "gateway",
+            verbose: bool = false,
+            status: []const u8,
+        },
         allocator,
         resp.body,
         .{ .allocate = .alloc_always },
@@ -2874,6 +2886,20 @@ test "handlePatch updates launch_mode" {
     try std.testing.expectEqualStrings("agent", entry.launch_mode);
 }
 
+test "handlePatch updates verbose startup flag" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const resp = handlePatch(&s, "nullclaw", "my-agent", "{\"verbose\":true}");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const entry = s.getInstance("nullclaw", "my-agent").?;
+    try std.testing.expect(entry.verbose);
+}
+
 test "handleGet includes launch_mode in JSON" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -2888,6 +2914,22 @@ test "handleGet includes launch_mode in JSON" {
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"launch_mode\":\"agent\"") != null);
+}
+
+test "handleGet includes verbose in JSON" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .verbose = true });
+
+    const resp = handleGet(allocator, &s, &mctx.manager, "nullclaw", "my-agent");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"verbose\":true") != null);
 }
 
 test "dispatch routes GET /api/instances" {

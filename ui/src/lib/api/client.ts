@@ -10,6 +10,12 @@ function withQuery(path: string, params: Record<string, string | number | boolea
   return query ? `${path}?${query}` : path;
 }
 
+export type LogSource = 'instance' | 'nullhub';
+type InstanceStartOptions = {
+  launch_mode?: string;
+  verbose?: boolean;
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -30,18 +36,31 @@ export const api = {
   getInstances: () => request<any>('/instances'),
   getWizard: (component: string) => request<any>(`/wizard/${component}`),
   getVersions: (component: string) => request<any>(`/wizard/${component}/versions`),
+  getWizardModels: (component: string, provider: string, apiKey = '') =>
+    request<any>(`/wizard/${component}/models`, {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    }),
   getFreePort: () => request<any>('/free-port'),
   postWizard: (component: string, data: any) =>
     request<any>(`/wizard/${component}`, { method: 'POST', body: JSON.stringify(data) }),
-  startInstance: (c: string, n: string, mode?: string) =>
+  startInstance: (c: string, n: string, modeOrOptions?: string | InstanceStartOptions) =>
     request<any>(`/instances/${c}/${n}/start`, {
       method: 'POST',
-      body: mode ? JSON.stringify({ launch_mode: mode }) : undefined
+      body:
+        typeof modeOrOptions === 'string'
+          ? JSON.stringify({ launch_mode: modeOrOptions })
+          : modeOrOptions
+            ? JSON.stringify(modeOrOptions)
+            : undefined
     }),
   stopInstance: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/stop`, { method: 'POST' }),
-  restartInstance: (c: string, n: string) =>
-    request<any>(`/instances/${c}/${n}/restart`, { method: 'POST' }),
+  restartInstance: (c: string, n: string, options?: InstanceStartOptions) =>
+    request<any>(`/instances/${c}/${n}/restart`, {
+      method: 'POST',
+      body: options ? JSON.stringify(options) : undefined
+    }),
   deleteInstance: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}`, { method: 'DELETE' }),
   getConfig: (c: string, n: string) => request<any>(`/instances/${c}/${n}/config`),
@@ -82,10 +101,10 @@ export const api = {
     }),
   putConfig: (c: string, n: string, config: any) =>
     request<any>(`/instances/${c}/${n}/config`, { method: 'PUT', body: JSON.stringify(config) }),
-  getLogs: (c: string, n: string, lines = 100) =>
-    request<any>(`/instances/${c}/${n}/logs?lines=${lines}`),
-  clearLogs: (c: string, n: string) =>
-    request<any>(`/instances/${c}/${n}/logs`, { method: 'DELETE' }),
+  getLogs: (c: string, n: string, lines = 100, source: LogSource = 'instance') =>
+    request<any>(withQuery(`/instances/${c}/${n}/logs`, { lines, source })),
+  clearLogs: (c: string, n: string, source: LogSource = 'instance') =>
+    request<any>(withQuery(`/instances/${c}/${n}/logs`, { source }), { method: 'DELETE' }),
   getUpdates: () => request<any>('/updates'),
   getSettings: () => request<any>('/settings'),
   putSettings: (settings: any) =>

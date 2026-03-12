@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
 
   let {
@@ -11,17 +11,42 @@
   } = $props();
 
   const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli"];
+  const MODEL_RESULTS_LIMIT = 80;
+
+  type ProviderOption = {
+    value: string;
+    label: string;
+    recommended?: boolean;
+  };
+
+  type ProviderEntry = {
+    provider: string;
+    api_key: string;
+    model: string;
+  };
 
   let savedProviders = $state<any[]>([]);
   let showSavedDropdown = $state(false);
   let savedProvidersRevealed = $state(false);
   let loadingSavedProviders = $state(false);
+  let modelDropdownOpen = $state<Record<number, boolean>>({});
+  let modelLoadingByKey = $state<Record<string, boolean>>({});
+  let modelLoadedByKey = $state<Record<string, boolean>>({});
+  let modelOptionsByKey = $state<Record<string, string[]>>({});
+  let modelErrorsByKey = $state<Record<string, string>>({});
+
+  const modelBlurTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   onMount(async () => {
     try {
       const data = await api.getSavedProviders();
       savedProviders = data.providers || [];
     } catch {}
+  });
+
+  onDestroy(() => {
+    for (const timer of modelBlurTimers.values()) clearTimeout(timer);
+    modelBlurTimers.clear();
   });
 
   async function toggleSavedDropdown() {
@@ -46,7 +71,7 @@
     showSavedDropdown = true;
   }
 
-  function isPlaceholderEntry(entry: { provider: string; api_key: string; model: string }) {
+  function isPlaceholderEntry(entry: ProviderEntry) {
     return entry.api_key.trim().length === 0 && entry.model.trim().length === 0;
   }
 
@@ -69,9 +94,7 @@
     emitChange();
   }
 
-  let entries = $state<
-    Array<{ provider: string; api_key: string; model: string }>
-  >([]);
+  let entries = $state<ProviderEntry[]>([]);
 
   // Sync entries from value prop
   $effect(() => {
@@ -138,11 +161,133 @@
     return LOCAL_PROVIDERS.includes(provider);
   }
 
-  function getProviderLabel(providerValue: string) {
-    return (
-      providers.find((p: any) => p.value === providerValue)?.label ||
-      providerValue
+  function normalizeRecommendedLabel(label: string) {
+    return label
+      .replace(/\(\s*recommended\s*\)/gi, "")
+      .replace(/,\s*recommended/gi, "")
+      .replace(/\s+recommended\s*$/gi, "")
+      .replace(/\(\s*,/g, "(")
+      .replace(/,\s*\)/g, ")")
+      .replace(/\(\s*\)/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  function formatRecommendedLabel(label: string, recommended = false) {
+    const cleaned = recommended ? normalizeRecommendedLabel(label) : label;
+    return recommended && !/recommended/i.test(cleaned)
+      ? `${cleaned} (recommended)`
+      : cleaned;
+  }
+
+  function modelKey(entry: ProviderEntry) {
+    return `${entry.provider}\u0000${entry.api_key}`;
+  }
+
+  function getModelOptions(entry: ProviderEntry) {
+    return modelOptionsByKey[modelKey(entry)] || [];
+  }
+
+  function getModelError(entry: ProviderEntry) {
+    return modelErrorsByKey[modelKey(entry)] || "";
+  }
+
+  function isModelLoading(entry: ProviderEntry) {
+    return Boolean(modelLoadingByKey[modelKey(entry)]);
+  }
+
+  async function ensureModelOptions(entry: ProviderEntry) {
+    if (!component || !entry.provider) return;
+
+    const key = modelKey(entry);
+    if (modelLoadingByKey[key] || modelLoadedByKey[key]) return;
+
+    modelLoadingByKey = { ...modelLoadingByKey, [key]: true };
+    modelErrorsByKey = { ...modelErrorsByKey, [key]: "" };
+
+    try {
+      const data = await api.getWizardModels(component, entry.provider, entry.api_key || "");
+      const models = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.models)
+          ? data.models
+          : [];
+      const normalized = models.filter((model): model is string => typeof model === "string");
+      modelOptionsByKey = { ...modelOptionsByKey, [key]: normalized };
+      modelLoadedByKey = { ...modelLoadedByKey, [key]: true };
+    } catch (error) {
+      modelErrorsByKey = {
+        ...modelErrorsByKey,
+        [key]: error instanceof Error ? error.message : "Unable to load models",
+      };
+    } finally {
+      modelLoadingByKey = { ...modelLoadingByKey, [key]: false };
+    }
+  }
+
+  function openModelDropdown(index: number) {
+    const timer = modelBlurTimers.get(index);
+    if (timer) {
+      clearTimeout(timer);
+      modelBlurTimers.delete(index);
+    }
+
+    modelDropdownOpen = { ...modelDropdownOpen, [index]: true };
+    const entry = entries[index];
+    if (entry) void ensureModelOptions(entry);
+  }
+
+  function closeModelDropdown(index: number) {
+    const timer = modelBlurTimers.get(index);
+    if (timer) {
+      clearTimeout(timer);
+      modelBlurTimers.delete(index);
+    }
+
+    modelDropdownOpen = { ...modelDropdownOpen, [index]: false };
+  }
+
+  function scheduleModelDropdownClose(index: number) {
+    const timer = modelBlurTimers.get(index);
+    if (timer) clearTimeout(timer);
+    modelBlurTimers.set(
+      index,
+      setTimeout(() => {
+        modelDropdownOpen = { ...modelDropdownOpen, [index]: false };
+        modelBlurTimers.delete(index);
+      }, 150),
     );
+  }
+
+  function handleModelInput(index: number, value: string) {
+    updateEntry(index, "model", value);
+    modelDropdownOpen = { ...modelDropdownOpen, [index]: true };
+    const entry = entries[index];
+    if (entry) void ensureModelOptions(entry);
+  }
+
+  function selectModel(index: number, model: string) {
+    updateEntry(index, "model", model);
+    closeModelDropdown(index);
+  }
+
+  function getFilteredModels(entry: ProviderEntry) {
+    const models = getModelOptions(entry);
+    const query = entry.model.trim().toLowerCase();
+    if (!query) return models.slice(0, MODEL_RESULTS_LIMIT);
+
+    const startsWith = models.filter((model) => model.toLowerCase().startsWith(query));
+    const includes = models.filter(
+      (model) => !model.toLowerCase().startsWith(query) && model.toLowerCase().includes(query),
+    );
+    return [...startsWith, ...includes].slice(0, MODEL_RESULTS_LIMIT);
+  }
+
+  function getFilteredModelCount(entry: ProviderEntry) {
+    const models = getModelOptions(entry);
+    const query = entry.model.trim().toLowerCase();
+    if (!query) return models.length;
+    return models.filter((model) => model.toLowerCase().includes(query)).length;
   }
 </script>
 
@@ -168,7 +313,7 @@
         >
           {#each providers as opt}
             <option value={opt.value}
-              >{opt.label}{opt.recommended ? " (recommended)" : ""}</option
+              >{formatRecommendedLabel(opt.label, opt.recommended)}</option
             >
           {/each}
         </select>
@@ -208,13 +353,60 @@
 
       <div class="provider-field">
         <label for={`provider-model-${i}`}>Model</label>
-        <input
-          id={`provider-model-${i}`}
-          type="text"
-          value={entry.model}
-          oninput={(e) => updateEntry(i, "model", e.currentTarget.value)}
-          placeholder="e.g. anthropic/claude-sonnet-4"
-        />
+        <div class="model-picker">
+          <input
+            id={`provider-model-${i}`}
+            type="text"
+            value={entry.model}
+            oninput={(e) => handleModelInput(i, e.currentTarget.value)}
+            onfocus={() => openModelDropdown(i)}
+            onblur={() => scheduleModelDropdownClose(i)}
+            placeholder="e.g. anthropic/claude-sonnet-4"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+
+          {#if modelDropdownOpen[i]}
+            {@const filteredModels = getFilteredModels(entry)}
+            {@const totalMatches = getFilteredModelCount(entry)}
+            <div class="model-dropdown">
+              {#if isModelLoading(entry)}
+                <div class="model-empty">Loading models...</div>
+              {:else if filteredModels.length > 0}
+                {#each filteredModels as model}
+                  <button
+                    type="button"
+                    class="model-option"
+                    class:selected={entry.model === model}
+                    onmousedown={(event) => {
+                      event.preventDefault();
+                      selectModel(i, model);
+                    }}
+                  >
+                    <span class="model-value">{model}</span>
+                  </button>
+                {/each}
+                {#if totalMatches > filteredModels.length}
+                  <div class="model-summary">
+                    Showing {filteredModels.length} of {totalMatches}. Keep typing to narrow.
+                  </div>
+                {/if}
+              {:else if getModelError(entry)}
+                <div class="model-empty model-error">
+                  {getModelError(entry)}. You can still type a model manually.
+                </div>
+              {:else if getModelOptions(entry).length > 0}
+                <div class="model-empty">No matches for "{entry.model}".</div>
+              {:else}
+                <div class="model-empty">
+                  No model list returned for {entry.provider}. You can still type one manually.
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="provider-field-hint">Click to load models, then filter as you type.</div>
       </div>
     </div>
   {/each}
@@ -387,6 +579,72 @@
   .provider-field input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 8px var(--border-glow);
+  }
+
+  .provider-field-hint {
+    margin-top: 0.35rem;
+    font-size: 0.72rem;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+  }
+
+  .model-picker {
+    position: relative;
+  }
+
+  .model-dropdown {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    left: 0;
+    right: 0;
+    max-height: 280px;
+    overflow-y: auto;
+    border: 1px solid var(--accent-dim);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+  }
+
+  .model-option {
+    display: block;
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    background: none;
+    border: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    color: var(--fg);
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .model-option:last-child {
+    border-bottom: none;
+  }
+
+  .model-option:hover,
+  .model-option.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+
+  .model-value {
+    word-break: break-all;
+  }
+
+  .model-empty,
+  .model-summary {
+    padding: 0.75rem;
+    font-size: 0.78rem;
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+  }
+
+  .model-error {
+    color: var(--error, #e55);
   }
 
   .add-btn {

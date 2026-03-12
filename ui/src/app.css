@@ -80,6 +80,32 @@ body.theme-light {
   --text-glow: none;
 }
 
+html.theme-8bit-lobster-light,
+body.theme-8bit-lobster-light {
+  /* Bright lobster palette on a light CRT paper base */
+  --bg: #f8eee7;
+  --bg-surface: rgba(255, 247, 242, 0.88);
+  --bg-hover: rgba(255, 227, 220, 0.95);
+  --fg: #341313;
+  --fg-dim: #8e5454;
+  --accent: #ff3333;
+  --accent-dim: #cc0000;
+  --error: #ff0000;
+  --success: #4caf50;
+  --warning: #c57a00;
+  --fx-accent: #4caf50;
+  --fx-accent-glow: rgba(76, 175, 80, 0.45);
+  --border: rgba(255, 51, 51, 0.28);
+  --border-glow: rgba(255, 51, 51, 0.35);
+  --text-glow: 0 0 4px rgba(255, 51, 51, 0.18);
+  --font-mono: 'VT323', 'JetBrains Mono', 'Fira Code', monospace;
+  --ui-font-size: 19px;
+  --ui-line-height: 1.55;
+  --radius: 0px;
+  --radius-sm: 0px;
+}
+
+html.theme-8bit-lobster,
 body.theme-8bit-lobster {
   /* Really blocky, vivid, dark pixel theme */
   --bg: #0d0505;
@@ -90,23 +116,32 @@ body.theme-8bit-lobster {
   --accent: #ff3333;
   --accent-dim: #cc0000;
   --error: #ff0000;
+  --success: #4caf50;
   --warning: #ffaa00;
+  --fx-accent: #4caf50;
+  --fx-accent-glow: rgba(76, 175, 80, 0.7);
   --border: rgba(255, 51, 51, 0.5);
   --border-glow: rgba(255, 51, 51, 0.8);
   --text-glow: 0 0 6px rgba(255, 51, 51, 0.5);
   --font-mono: 'VT323', 'JetBrains Mono', 'Fira Code', monospace;
+  --ui-font-size: 19px;
+  --ui-line-height: 1.55;
   --radius: 0px;
   --radius-sm: 0px;
-  
 }
 
 :root,
+html,
 body {
   --success: var(--accent);
   --text-muted: var(--fg-dim);
   --text-primary: var(--fg);
   --bg-secondary: var(--bg-surface);
   --bg-tertiary: var(--bg-hover);
+  --fx-accent: var(--accent);
+  --fx-accent-glow: var(--border-glow);
+  --ui-font-size: 15px;
+  --ui-line-height: 1.6;
   --radius: 4px;
   --radius-sm: 2px;
 }
@@ -125,12 +160,19 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-mono);
-  font-size: 15px;
-  line-height: 1.6;
+  line-height: var(--ui-line-height);
   -webkit-font-smoothing: antialiased;
   position: relative;
   overflow-x: hidden;
   transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+html {
+  font-size: var(--ui-font-size);
+}
+
+body {
+  font-size: 1rem;
 }
 
 /* CRT Scanline Effect */
@@ -144,13 +186,38 @@ body:not(.effects-disabled)::before {
   right: 0;
   background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
   background-size: 100% 4px;
+  background-position: 0 0;
   /* Scanline thickness */
   z-index: 9999;
   pointer-events: none;
   /* Let clicks pass through */
+  animation: crt-scanline-drift 9s linear infinite alternate;
+  will-change: background-position;
+}
+
+body.theme-8bit-lobster-light:not(.effects-disabled)::before {
+  background: linear-gradient(
+    rgba(255, 255, 255, 0) 50%,
+    rgba(120, 20, 20, 0.08) 50%
+  );
+  background-size: 100% 4px;
 }
 
 /* CRT Flicker/Pulse */
+@keyframes crt-scanline-drift {
+  0% {
+    background-position: 0 0;
+  }
+
+  50% {
+    background-position: 0 8px;
+  }
+
+  100% {
+    background-position: 0 -8px;
+  }
+}
+
 @keyframes crt-pulse {
   0% {
     opacity: 0.95;
@@ -177,6 +244,15 @@ body:not(.effects-disabled)::after {
   z-index: 9998;
   pointer-events: none;
   animation: crt-pulse 4s infinite linear;
+}
+
+body.theme-8bit-lobster-light:not(.effects-disabled)::after {
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(160, 48, 48, 0.08) 55%,
+    rgba(80, 10, 10, 0.18) 120%
+  );
 }
 
 /* Base Inputs */
@@ -218,24 +294,49 @@ button:hover:not(:disabled) {
   text-shadow: 0 0 8px var(--accent);
 }
 
-body.theme-8bit-lobster button:hover:not(:disabled) {
+body.theme-8bit-lobster button:hover:not(:disabled),
+body.theme-8bit-lobster-light button:hover:not(:disabled) {
   /* Flatten hover effect, no jumping shadow */
   box-shadow: 0 0 8px var(--border-glow);
   transform: none;
 }
 
+body.theme-8bit-lobster .status-dot,
+body.theme-8bit-lobster-light .status-dot {
+  border-radius: var(--radius) !important;
+}
+
 /* Retro green LED indicators for the 8-bit theme */
 body.theme-8bit-lobster .status-dot.running,
 body.theme-8bit-lobster .status-dot.ok,
+body.theme-8bit-lobster .status-dot.validated,
+body.theme-8bit-lobster-light .status-dot.running,
+body.theme-8bit-lobster-light .status-dot.ok,
+body.theme-8bit-lobster-light .status-dot.validated,
 body.theme-8bit-lobster .badge.running::before {
-  background: #4caf50 !important;
-  box-shadow: 0 0 8px #4caf50 !important;
-  animation: retroPulse 2s steps(2, start) infinite;
+  background: var(--success) !important;
+  box-shadow: 0 0 8px var(--success) !important;
+}
+
+body.theme-8bit-lobster-light .badge.running::before {
+  background: var(--success) !important;
+  box-shadow: 0 0 8px var(--success) !important;
+}
+
+body.theme-8bit-lobster:not(.effects-disabled) .status-dot.running,
+body.theme-8bit-lobster:not(.effects-disabled) .status-dot.ok,
+body.theme-8bit-lobster:not(.effects-disabled) .status-dot.validated,
+body.theme-8bit-lobster:not(.effects-disabled) .badge.running::before,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.running,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.ok,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.validated,
+body.theme-8bit-lobster-light:not(.effects-disabled) .badge.running::before {
+  animation: retroPulse 1.6s steps(6, end) infinite;
 }
 
 @keyframes retroPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.45; }
 }
 
 button:disabled {

@@ -5,22 +5,44 @@ const helpers = @import("helpers.zig");
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
 
+const SUPERVISOR_PREFIX = "[nullhub/supervisor]";
+const MAX_LOG_BYTES = 16 * 1024 * 1024;
+
+pub const LogSource = enum {
+    instance,
+    nullhub,
+};
+
 // ─── Query parameter parsing ─────────────────────────────────────────────────
 
 /// Extract the `lines` query parameter from a target URL.
 /// Returns 100 as default if not specified.
 pub fn parseLines(target: []const u8) usize {
-    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return 100;
+    const val = queryValue(target, "lines") orelse return 100;
+    return std.fmt.parseInt(usize, val, 10) catch 100;
+}
+
+pub fn parseSource(target: []const u8) LogSource {
+    const val = queryValue(target, "source") orelse return .instance;
+    if (std.mem.eql(u8, val, "nullhub") or std.mem.eql(u8, val, "supervisor")) {
+        return .nullhub;
+    }
+    return .instance;
+}
+
+fn queryValue(target: []const u8, key: []const u8) ?[]const u8 {
+    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return null;
     const query = target[qmark + 1 ..];
 
     var params = std.mem.splitScalar(u8, query, '&');
     while (params.next()) |param| {
-        if (std.mem.startsWith(u8, param, "lines=")) {
-            const val = param["lines=".len..];
-            return std.fmt.parseInt(usize, val, 10) catch 100;
+        if (std.mem.indexOfScalar(u8, param, '=')) |eq| {
+            if (std.mem.eql(u8, param[0..eq], key)) return param[eq + 1 ..];
+            continue;
         }
+        if (std.mem.eql(u8, param, key)) return "";
     }
-    return 100;
+    return null;
 }
 
 /// Strip query string from target to get the path portion.
@@ -83,20 +105,9 @@ fn readTailLinesJson(
     component: []const u8,
     name: []const u8,
     max_lines: usize,
+    source: LogSource,
 ) ![]u8 {
-    const logs_dir = p.instanceLogs(allocator, component, name) catch return error.PathBuildFailed;
-    defer allocator.free(logs_dir);
-
-    const log_path = std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" }) catch return error.PathBuildFailed;
-    defer allocator.free(log_path);
-
-    const file = std.fs.openFileAbsolute(log_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return allocator.dupe(u8, "{\"lines\":[]}"),
-        else => return err,
-    };
-    defer file.close();
-
-    const contents = try file.readToEndAlloc(allocator, 16 * 1024 * 1024);
+    const contents = try readSourceContents(allocator, p, component, name, source);
     defer allocator.free(contents);
 
     // Split into lines and take last N.
@@ -106,9 +117,108 @@ fn readTailLinesJson(
     return buf.items;
 }
 
-/// GET /api/instances/{c}/{n}/logs?lines=N — read last N lines from stdout.log.
-pub fn handleGet(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8, name: []const u8, max_lines: usize) ApiResponse {
-    const body = readTailLinesJson(allocator, p, component, name, max_lines) catch return .{
+fn readSourceContents(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    source: LogSource,
+) ![]u8 {
+    const logs_dir = p.instanceLogs(allocator, component, name) catch return error.PathBuildFailed;
+    defer allocator.free(logs_dir);
+
+    const stdout_log_path = std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" }) catch return error.PathBuildFailed;
+    defer allocator.free(stdout_log_path);
+    const stdout_contents = try readFileOrEmpty(allocator, stdout_log_path);
+    defer allocator.free(stdout_contents);
+
+    return switch (source) {
+        .instance => filterLegacyStdout(allocator, stdout_contents, .instance),
+        .nullhub => blk: {
+            const legacy_nullhub = try filterLegacyStdout(allocator, stdout_contents, .nullhub);
+            defer allocator.free(legacy_nullhub);
+
+            const nullhub_log_path = std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" }) catch return error.PathBuildFailed;
+            defer allocator.free(nullhub_log_path);
+            const nullhub_contents = try readFileOrEmpty(allocator, nullhub_log_path);
+            defer allocator.free(nullhub_contents);
+
+            break :blk joinContents(allocator, &.{ legacy_nullhub, nullhub_contents });
+        },
+    };
+}
+
+fn readFileOrEmpty(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return allocator.dupe(u8, ""),
+        else => return err,
+    };
+    defer file.close();
+    return file.readToEndAlloc(allocator, MAX_LOG_BYTES);
+}
+
+fn filterLegacyStdout(allocator: std.mem.Allocator, contents: []const u8, source: LogSource) ![]u8 {
+    var filtered = std.array_list.Managed(u8).init(allocator);
+    errdefer filtered.deinit();
+
+    var wrote_any = false;
+    var line_it = std.mem.splitScalar(u8, contents, '\n');
+    while (line_it.next()) |line| {
+        const is_supervisor_line = std.mem.startsWith(u8, line, SUPERVISOR_PREFIX);
+        const keep = switch (source) {
+            .instance => !is_supervisor_line,
+            .nullhub => is_supervisor_line,
+        };
+        if (!keep) continue;
+
+        if (wrote_any) try filtered.append('\n');
+        try filtered.appendSlice(line);
+        wrote_any = true;
+    }
+
+    if (wrote_any and contents.len > 0 and contents[contents.len - 1] == '\n') {
+        try filtered.append('\n');
+    }
+
+    if (filtered.items.len == 0) return allocator.dupe(u8, "");
+    return filtered.toOwnedSlice();
+}
+
+fn joinContents(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
+    var joined = std.array_list.Managed(u8).init(allocator);
+    errdefer joined.deinit();
+
+    var wrote_any = false;
+    for (parts) |part| {
+        if (part.len == 0) continue;
+        if (wrote_any and joined.items.len > 0 and joined.items[joined.items.len - 1] != '\n') {
+            try joined.append('\n');
+        }
+        try joined.appendSlice(part);
+        wrote_any = true;
+    }
+
+    if (joined.items.len == 0) return allocator.dupe(u8, "");
+    return joined.toOwnedSlice();
+}
+
+fn writeFileBestEffort(path: []const u8, contents: []const u8) void {
+    if (std.fs.createFileAbsolute(path, .{ .truncate = true })) |file| {
+        defer file.close();
+        file.writeAll(contents) catch {};
+    } else |_| {}
+}
+
+/// GET /api/instances/{c}/{n}/logs?lines=N&source=instance|nullhub — read last N lines from the selected log source.
+pub fn handleGet(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    max_lines: usize,
+    source: LogSource,
+) ApiResponse {
+    const body = readTailLinesJson(allocator, p, component, name, max_lines, source) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -147,8 +257,14 @@ fn buildLinesJson(buf: *std.array_list.Managed(u8), contents: []const u8, max_li
     try buf.appendSlice("]}");
 }
 
-/// DELETE /api/instances/{c}/{n}/logs — truncate stdout.log.
-pub fn handleDelete(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+/// DELETE /api/instances/{c}/{n}/logs?source=instance|nullhub — clear the selected log source.
+pub fn handleDelete(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    source: LogSource,
+) ApiResponse {
     const logs_dir = p.instanceLogs(allocator, component, name) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
@@ -156,17 +272,48 @@ pub fn handleDelete(allocator: std.mem.Allocator, p: paths_mod.Paths, component:
     };
     defer allocator.free(logs_dir);
 
-    const log_path = std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" }) catch return .{
+    const stdout_log_path = std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" }) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
     };
-    defer allocator.free(log_path);
+    defer allocator.free(stdout_log_path);
 
-    // Truncate the file (open for writing, which clears contents).
-    if (std.fs.createFileAbsolute(log_path, .{ .truncate = true })) |file| {
-        file.close();
-    } else |_| {}
+    const stdout_contents = readFileOrEmpty(allocator, stdout_log_path) catch return .{
+        .status = "500 Internal Server Error",
+        .content_type = "application/json",
+        .body = "{\"error\":\"internal error\"}",
+    };
+    defer allocator.free(stdout_contents);
+
+    switch (source) {
+        .instance => {
+            const preserved_nullhub = filterLegacyStdout(allocator, stdout_contents, .nullhub) catch return .{
+                .status = "500 Internal Server Error",
+                .content_type = "application/json",
+                .body = "{\"error\":\"internal error\"}",
+            };
+            defer allocator.free(preserved_nullhub);
+            writeFileBestEffort(stdout_log_path, preserved_nullhub);
+        },
+        .nullhub => {
+            const preserved_instance = filterLegacyStdout(allocator, stdout_contents, .instance) catch return .{
+                .status = "500 Internal Server Error",
+                .content_type = "application/json",
+                .body = "{\"error\":\"internal error\"}",
+            };
+            defer allocator.free(preserved_instance);
+            writeFileBestEffort(stdout_log_path, preserved_instance);
+
+            const nullhub_log_path = std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" }) catch return .{
+                .status = "500 Internal Server Error",
+                .content_type = "application/json",
+                .body = "{\"error\":\"internal error\"}",
+            };
+            defer allocator.free(nullhub_log_path);
+            writeFileBestEffort(nullhub_log_path, "");
+        },
+    }
 
     return .{
         .status = "200 OK",
@@ -182,8 +329,9 @@ pub fn handleStream(
     component: []const u8,
     name: []const u8,
     max_lines: usize,
+    source: LogSource,
 ) ApiResponse {
-    const lines_json = readTailLinesJson(allocator, p, component, name, max_lines) catch return .{
+    const lines_json = readTailLinesJson(allocator, p, component, name, max_lines, source) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "text/event-stream",
         .body = "event: error\ndata: {\"error\":\"log_read_failed\"}\n\n",
@@ -267,6 +415,15 @@ test "parseLines: invalid value defaults to 100" {
     try std.testing.expectEqual(@as(usize, 100), parseLines("/api/instances/x/y/logs?lines=abc"));
 }
 
+test "parseSource defaults to instance" {
+    try std.testing.expectEqual(LogSource.instance, parseSource("/api/instances/x/y/logs"));
+}
+
+test "parseSource reads nullhub source" {
+    try std.testing.expectEqual(LogSource.nullhub, parseSource("/api/instances/x/y/logs?source=nullhub"));
+    try std.testing.expectEqual(LogSource.nullhub, parseSource("/api/instances/x/y/logs?source=supervisor"));
+}
+
 test "handleGet returns empty lines when no log file" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-empty";
@@ -276,7 +433,7 @@ test "handleGet returns empty lines when no log file" {
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
 
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100);
+    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("{\"lines\":[]}", resp.body);
@@ -307,7 +464,7 @@ test "handleGet reads actual log content" {
         try file.writeAll("line1\nline2\nline3\n");
     }
 
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100);
+    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -350,7 +507,7 @@ test "handleGet tails last N lines" {
         try file.writeAll("a\nb\nc\nd\ne\n");
     }
 
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 2);
+    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 2, .instance);
     defer allocator.free(resp.body);
 
     const parsed = try std.json.parseFromSlice(
@@ -388,13 +545,117 @@ test "handleStream returns SSE snapshot" {
         try file.writeAll("line-a\nline-b\n");
     }
 
-    const resp = handleStream(allocator, p, "nullclaw", "my-agent", 50);
+    const resp = handleStream(allocator, p, "nullclaw", "my-agent", 50, .instance);
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("text/event-stream", resp.content_type);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "event: connected") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "event: snapshot") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"line-a\"") != null);
+}
+
+test "handleGet separates legacy stdout and nullhub logs by source" {
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-logs-api-sources";
+    std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+
+    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    defer allocator.free(logs_dir);
+    makeDirRecursive(logs_dir) catch unreachable;
+
+    const stdout_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
+    defer allocator.free(stdout_log_path);
+    const nullhub_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
+    defer allocator.free(nullhub_log_path);
+
+    {
+        const file = try std.fs.createFileAbsolute(stdout_log_path, .{});
+        defer file.close();
+        try file.writeAll("app line 1\n[nullhub/supervisor][1] old diag\napp line 2\n");
+    }
+    {
+        const file = try std.fs.createFileAbsolute(nullhub_log_path, .{});
+        defer file.close();
+        try file.writeAll("[nullhub/supervisor][2] new diag\n");
+    }
+
+    const instance_resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
+    defer allocator.free(instance_resp.body);
+    const instance_parsed = try std.json.parseFromSlice(
+        struct { lines: [][]const u8 },
+        allocator,
+        instance_resp.body,
+        .{ .allocate = .alloc_always },
+    );
+    defer instance_parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), instance_parsed.value.lines.len);
+    try std.testing.expectEqualStrings("app line 1", instance_parsed.value.lines[0]);
+    try std.testing.expectEqualStrings("app line 2", instance_parsed.value.lines[1]);
+
+    const nullhub_resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .nullhub);
+    defer allocator.free(nullhub_resp.body);
+    const nullhub_parsed = try std.json.parseFromSlice(
+        struct { lines: [][]const u8 },
+        allocator,
+        nullhub_resp.body,
+        .{ .allocate = .alloc_always },
+    );
+    defer nullhub_parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), nullhub_parsed.value.lines.len);
+    try std.testing.expectEqualStrings("[nullhub/supervisor][1] old diag", nullhub_parsed.value.lines[0]);
+    try std.testing.expectEqualStrings("[nullhub/supervisor][2] new diag", nullhub_parsed.value.lines[1]);
+}
+
+test "handleDelete clears selected source while preserving the other" {
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-logs-api-clear-source";
+    std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+
+    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    defer allocator.free(logs_dir);
+    makeDirRecursive(logs_dir) catch unreachable;
+
+    const stdout_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
+    defer allocator.free(stdout_log_path);
+    const nullhub_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
+    defer allocator.free(nullhub_log_path);
+
+    {
+        const file = try std.fs.createFileAbsolute(stdout_log_path, .{});
+        defer file.close();
+        try file.writeAll("app line\n[nullhub/supervisor][1] legacy diag\n");
+    }
+    {
+        const file = try std.fs.createFileAbsolute(nullhub_log_path, .{});
+        defer file.close();
+        try file.writeAll("[nullhub/supervisor][2] dedicated diag\n");
+    }
+
+    const clear_nullhub = handleDelete(allocator, p, "nullclaw", "my-agent", .nullhub);
+    try std.testing.expectEqualStrings("200 OK", clear_nullhub.status);
+
+    {
+        const file = try std.fs.openFileAbsolute(stdout_log_path, .{});
+        defer file.close();
+        const contents = try file.readToEndAlloc(allocator, 1024);
+        defer allocator.free(contents);
+        try std.testing.expectEqualStrings("app line\n", contents);
+    }
+    {
+        const file = try std.fs.openFileAbsolute(nullhub_log_path, .{});
+        defer file.close();
+        const contents = try file.readToEndAlloc(allocator, 1024);
+        defer allocator.free(contents);
+        try std.testing.expectEqualStrings("", contents);
+    }
 }
 
 test "isLogsPath detects logs paths" {

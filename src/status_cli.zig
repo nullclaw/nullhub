@@ -9,6 +9,7 @@ const LiveInstance = struct {
     version: []const u8,
     auto_start: bool = false,
     launch_mode: []const u8 = "gateway",
+    verbose: bool = false,
     status: []const u8,
     pid: ?u64 = null,
     port: ?u16 = null,
@@ -126,8 +127,15 @@ fn printFallbackStatus(allocator: std.mem.Allocator, w: anytype, opts: cli.Statu
     if (opts.instance) |ref| {
         if (state.getInstance(ref.component, ref.name)) |entry| {
             try w.print(
-                "Instance {s}/{s}\n  version: {s}\n  auto_start: {s}\n  launch_mode: {s}\n  status: offline\n",
-                .{ ref.component, ref.name, entry.version, if (entry.auto_start) "yes" else "no", entry.launch_mode },
+                "Instance {s}/{s}\n  version: {s}\n  auto_start: {s}\n  launch_mode: {s}\n  verbose: {s}\n  status: offline\n",
+                .{
+                    ref.component,
+                    ref.name,
+                    entry.version,
+                    if (entry.auto_start) "yes" else "no",
+                    entry.launch_mode,
+                    if (entry.verbose) "yes" else "no",
+                },
             );
         } else {
             try w.print("Instance {s}/{s} not found.\n", .{ ref.component, ref.name });
@@ -147,13 +155,14 @@ fn printFallbackStatus(allocator: std.mem.Allocator, w: anytype, opts: cli.Statu
         while (inst_it.next()) |inst_entry| {
             const entry = inst_entry.value_ptr.*;
             try w.print(
-                "  {s}/{s}  offline  version={s} auto_start={s} launch_mode={s}\n",
+                "  {s}/{s}  offline  version={s} auto_start={s} launch_mode={s} verbose={s}\n",
                 .{
                     comp_entry.key_ptr.*,
                     inst_entry.key_ptr.*,
                     entry.version,
                     if (entry.auto_start) "yes" else "no",
                     entry.launch_mode,
+                    if (entry.verbose) "yes" else "no",
                 },
             );
         }
@@ -164,6 +173,7 @@ fn printLiveInstance(w: anytype, component: []const u8, name: []const u8, instan
     try w.print("  {s}/{s}  {s}  version={s}", .{ component, name, instance.status, instance.version });
     try w.print(" auto_start={s}", .{if (instance.auto_start) "yes" else "no"});
     try w.print(" launch_mode={s}", .{instance.launch_mode});
+    try w.print(" verbose={s}", .{if (instance.verbose) "yes" else "no"});
     if (instance.port) |port| try w.print(" port={d}", .{port});
     if (instance.uptime_seconds) |uptime| try w.print(" uptime={d}s", .{uptime});
     if (instance.restart_count) |restarts| try w.print(" restarts={d}", .{restarts});

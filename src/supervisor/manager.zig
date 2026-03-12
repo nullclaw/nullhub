@@ -119,10 +119,10 @@ pub const Manager = struct {
             else => return,
         };
 
-        const stdout_log = std.fs.path.join(self.allocator, &.{ logs_dir, "stdout.log" }) catch return;
-        defer self.allocator.free(stdout_log);
+        const nullhub_log = std.fs.path.join(self.allocator, &.{ logs_dir, "nullhub.log" }) catch return;
+        defer self.allocator.free(nullhub_log);
 
-        var file = std.fs.createFileAbsolute(stdout_log, .{ .truncate = false }) catch return;
+        var file = std.fs.createFileAbsolute(nullhub_log, .{ .truncate = false }) catch return;
         defer file.close();
         file.seekFromEnd(0) catch return;
 
@@ -686,7 +686,7 @@ test "getStatus returns null for unknown instance" {
     try std.testing.expect(mgr.getStatus("foo", "bar") == null);
 }
 
-test "logSupervisor appends diagnostics to stdout.log" {
+test "logSupervisor appends diagnostics to nullhub.log" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/test-nullhub-mgr-log-supervisor";
     std.fs.deleteTreeAbsolute(tmp_root) catch {};
@@ -703,7 +703,7 @@ test "logSupervisor appends diagnostics to stdout.log" {
 
     const logs_dir = try p.instanceLogs(allocator, "nullclaw", "diag");
     defer allocator.free(logs_dir);
-    const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
+    const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
     defer allocator.free(log_path);
 
     var file = try std.fs.openFileAbsolute(log_path, .{});

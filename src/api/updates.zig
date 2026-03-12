@@ -5,6 +5,7 @@ const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
 const registry = @import("../installer/registry.zig");
 const downloader = @import("../installer/downloader.zig");
+const launch_args_mod = @import("../core/launch_args.zig");
 const platform = @import("../core/platform.zig");
 const helpers = @import("helpers.zig");
 
@@ -62,18 +63,6 @@ fn fetchLatestTagForComponent(allocator: std.mem.Allocator, component: []const u
     defer release.deinit();
 
     return allocator.dupe(u8, release.value.tag_name) catch null;
-}
-
-fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]const []const u8 {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer list.deinit(allocator);
-
-    var it = std.mem.tokenizeAny(u8, launch_cmd, " \t\r\n");
-    while (it.next()) |token| {
-        try list.append(allocator, token);
-    }
-
-    return list.toOwnedSlice(allocator);
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -206,7 +195,7 @@ pub fn handleApplyUpdateRuntime(
 
     const inst_dir = paths.instanceDir(allocator, component, name) catch return serverError();
     defer allocator.free(inst_dir);
-    const launch_args = splitLaunchCommand(allocator, entry.launch_mode) catch return serverError();
+    const launch_args = launch_args_mod.buildLaunchArgs(allocator, entry.launch_mode, entry.verbose) catch return serverError();
     defer allocator.free(launch_args);
 
     if (was_running) {
@@ -262,6 +251,7 @@ pub fn handleApplyUpdateRuntime(
         .version = latest_tag,
         .auto_start = entry.auto_start,
         .launch_mode = entry.launch_mode,
+        .verbose = entry.verbose,
     }) catch return serverError();
     if (!updated) return notFound();
     s.save() catch return serverError();

@@ -29,7 +29,6 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    border: 1px solid var(--badge-color);
     background: color-mix(in srgb, var(--badge-color) 10%, transparent);
     color: var(--badge-color);
     box-shadow: inset 0 0 5px

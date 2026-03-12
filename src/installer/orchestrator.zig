@@ -8,6 +8,7 @@ const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
 const local_binary = @import("../core/local_binary.zig");
+const launch_args_mod = @import("../core/launch_args.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const ui_modules_mod = @import("ui_modules.zig");
@@ -256,11 +257,12 @@ pub fn install(
         .version = version,
         .auto_start = true,
         .launch_mode = launch_command,
+        .verbose = false,
     }) catch return error.StateError;
     s.save() catch return error.StateError;
 
     // 7. Start process via Manager
-    const launch_args = splitLaunchCommand(allocator, launch_command) catch return error.StartFailed;
+    const launch_args = launch_args_mod.buildLaunchArgs(allocator, launch_command, false) catch return error.StartFailed;
     defer allocator.free(launch_args);
     mgr.startInstance(
         opts.component,
@@ -472,18 +474,6 @@ fn injectPortFields(
     }
 
     return std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
-}
-
-fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]const []const u8 {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer list.deinit(allocator);
-
-    var it = std.mem.tokenizeAny(u8, launch_cmd, " \t\r\n");
-    while (it.next()) |token| {
-        try list.append(allocator, token);
-    }
-
-    return list.toOwnedSlice(allocator);
 }
 
 fn findFreePort(start: u16) u16 {
