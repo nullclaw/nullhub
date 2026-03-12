@@ -55,7 +55,7 @@
   let entries = $state<MemoryEntry[]>([]);
   let entriesLoading = $state(false);
   let entriesError = $state<string | null>(null);
-  let category = $state("all");
+  let category = $state("conversation");
   let limit = $state("50");
   let loadedEntriesKey = $state("");
 

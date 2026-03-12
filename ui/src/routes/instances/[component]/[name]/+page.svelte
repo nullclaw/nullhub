@@ -60,7 +60,6 @@
   let chatModuleVersion = $derived(uiModules["nullclaw-chat-ui"] || "");
   let chatReady = $derived(
     instance?.status === "running" &&
-      (instance?.launch_mode || "gateway") === "gateway" &&
       chatModuleName !== "" &&
       webPort != null &&
       providerStatus.configured,
@@ -434,14 +433,6 @@
     name;
     if ((activeTab === "history" || activeTab === "memory" || activeTab === "skills") && !supportsAgentData) {
       activeTab = "overview";
-      return;
-    }
-    const chatVisible =
-      (instance?.launch_mode || "gateway") === "gateway" &&
-      instance?.status === "running" &&
-      chatModuleName !== "";
-    if (activeTab === "chat" && !chatVisible) {
-      activeTab = "overview";
     }
   });
 
@@ -468,6 +459,18 @@
     instance = { ...instance, status: "starting" };
     try {
       await api.startInstance(component, name);
+      await refresh();
+    } catch {
+      instance = { ...instance, status: "stopped" };
+    } finally {
+      loading = false;
+    }
+  }
+  async function startAgent() {
+    loading = true;
+    instance = { ...instance, status: "starting" };
+    try {
+      await api.startInstance(component, name, "agent");
       await refresh();
     } catch {
       instance = { ...instance, status: "stopped" };
@@ -531,6 +534,7 @@
     </div>
     <div class="actions">
       <button class="btn" onclick={start} disabled={loading}>Start</button>
+      <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
       <button class="btn" onclick={stop} disabled={loading}>Stop</button>
       <button class="btn" onclick={restart} disabled={loading}>Restart</button>
       <button class="btn danger" onclick={remove} disabled={loading}
@@ -543,6 +547,13 @@
     <button
       class:active={activeTab === "overview"}
       onclick={() => (activeTab = "overview")}>Overview</button
+    >
+    <button
+      class:active={activeTab === "chat"}
+      class:disabled-tab={!chatReady}
+      onclick={() => (activeTab = "chat")}
+      >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
+        >{/if}</button
     >
     {#if supportsAgentData}
       <button
@@ -566,15 +577,6 @@
       class:active={activeTab === "logs"}
       onclick={() => (activeTab = "logs")}>Logs</button
     >
-    {#if (instance?.launch_mode || "gateway") === "gateway" && instance?.status === "running" && chatModuleName}
-      <button
-        class:active={activeTab === "chat"}
-        class:disabled-tab={!chatReady}
-        onclick={() => (activeTab = "chat")}
-        >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
-          >{/if}</button
-      >
-    {/if}
   </div>
 
   <div class="tab-content">
@@ -590,18 +592,7 @@
         </div>
         <div class="info-card">
           <span class="label">Launch Mode</span>
-          <div class="mode-selector">
-            <button
-              class="mode-btn"
-              class:active={(instance?.launch_mode || "gateway") === "gateway"}
-              onclick={() => setMode("gateway")}>Gateway</button
-            >
-            <button
-              class="mode-btn"
-              class:active={instance?.launch_mode === "agent"}
-              onclick={() => setMode("agent")}>Agent</button
-            >
-          </div>
+          <span class="mode-value">{(instance?.launch_mode || "gateway") === "agent" ? "Agent" : "Gateway"}</span>
         </div>
         <div class="info-card">
           <span class="label">Auto Start</span>
@@ -1293,34 +1284,13 @@
     letter-spacing: 1px;
     font-weight: 700;
   }
-  .mode-selector {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .mode-btn {
-    padding: 0.375rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    background: var(--bg-surface);
-    color: var(--fg-dim);
-    font-size: 0.75rem;
-    font-weight: 700;
+  .mode-value {
     text-transform: uppercase;
     letter-spacing: 1px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  .mode-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent-dim);
-    color: var(--fg);
-  }
-  .mode-btn.active {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    border-color: var(--accent);
+    font-weight: 700;
+    font-size: 0.85rem;
     color: var(--accent);
     text-shadow: var(--text-glow);
-    box-shadow: inset 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
   }
   .toggle-btn {
     display: flex;

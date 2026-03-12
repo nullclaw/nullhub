@@ -145,6 +145,11 @@
     letter-spacing: 1px;
     transition: all 0.2s ease;
     text-shadow: var(--text-glow);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 4px transparent; border-color: var(--accent-dim); }
+    50% { box-shadow: 0 0 12px var(--border-glow); border-color: var(--accent); }
   }
   .empty-state .btn:hover {
     text-decoration: none;

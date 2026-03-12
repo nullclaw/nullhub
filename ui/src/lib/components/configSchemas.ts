@@ -10,6 +10,7 @@ export interface FieldDef {
   min?: number;
   max?: number;
   hint?: string;
+  advanced?: boolean;
 }
 
 export interface ChannelSchema {
@@ -30,15 +31,15 @@ export const channelSchemas: Record<string, ChannelSchema> = {
     fields: [
       { key: 'bot_token', label: 'Bot Token', type: 'password' },
       { key: 'allow_from', label: 'Allow From', type: 'list', default: [], hint: 'User IDs or * for all' },
-      { key: 'group_allow_from', label: 'Group Allow From', type: 'list', default: [] },
-      { key: 'group_policy', label: 'Group Policy', type: 'select', options: ['allowlist', 'open', 'mention_only'], default: 'allowlist' },
-      { key: 'reply_in_private', label: 'Reply in Private', type: 'toggle', default: true },
-      { key: 'require_mention', label: 'Require Mention', type: 'toggle', default: false },
-      { key: 'proxy', label: 'Proxy', type: 'text', hint: 'e.g. socks5://host:port' },
-      { key: 'interactive.enabled', label: 'Interactive Buttons', type: 'toggle', default: false },
-      { key: 'interactive.ttl_secs', label: 'Interactive TTL (secs)', type: 'number', default: 900 },
-      { key: 'interactive.owner_only', label: 'Interactive Owner Only', type: 'toggle', default: true },
-      { key: 'interactive.remove_on_click', label: 'Remove on Click', type: 'toggle', default: true },
+      { key: 'group_allow_from', label: 'Group Allow From', type: 'list', default: [], advanced: true },
+      { key: 'group_policy', label: 'Group Policy', type: 'select', options: ['allowlist', 'open', 'mention_only'], default: 'allowlist', advanced: true },
+      { key: 'reply_in_private', label: 'Reply in Private', type: 'toggle', default: true, advanced: true },
+      { key: 'require_mention', label: 'Require Mention', type: 'toggle', default: false, advanced: true },
+      { key: 'proxy', label: 'Proxy', type: 'text', hint: 'e.g. socks5://host:port', advanced: true },
+      { key: 'interactive.enabled', label: 'Interactive Buttons', type: 'toggle', default: false, advanced: true },
+      { key: 'interactive.ttl_secs', label: 'Interactive TTL (secs)', type: 'number', default: 900, advanced: true },
+      { key: 'interactive.owner_only', label: 'Interactive Owner Only', type: 'toggle', default: true, advanced: true },
+      { key: 'interactive.remove_on_click', label: 'Remove on Click', type: 'toggle', default: true, advanced: true },
     ]
   },
   discord: {

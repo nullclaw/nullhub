@@ -12,6 +12,7 @@
   } = $props();
   let importing = $state(false);
   let imported = $state(false);
+  let comingSoon = $derived(alpha && !installed && !standalone);
 
   async function handleImport(e: MouseEvent) {
     e.preventDefault();
@@ -31,6 +32,18 @@
   }
 </script>
 
+{#if comingSoon}
+<div class="component-card disabled">
+  <div class="card-header">
+    <h3>{displayName}</h3>
+    <div class="card-actions">
+      <span class="alpha-badge">&lt;Alpha&gt;</span>
+      <span class="coming-soon-badge">Coming Soon</span>
+    </div>
+  </div>
+  <p>{description}</p>
+</div>
+{:else}
 <a href="/install/{name}" class="component-card">
   <div class="card-header">
     <h3>{displayName}</h3>
@@ -53,6 +66,7 @@
   </div>
   <p>{description}</p>
 </a>
+{/if}
 
 <style>
   .component-card {
@@ -66,12 +80,18 @@
     backdrop-filter: blur(4px);
   }
 
-  .component-card:hover {
+  .component-card:hover:not(.disabled) {
     text-decoration: none;
     background: var(--bg-hover);
     border-color: var(--accent);
     box-shadow: 0 0 15px var(--border-glow);
     transform: translateY(-2px);
+  }
+
+  .component-card.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
   }
 
   .card-header {
@@ -122,6 +142,18 @@
     letter-spacing: 0.8px;
     font-weight: 700;
     box-shadow: inset 0 0 4px color-mix(in srgb, #ffb84d 35%, transparent);
+  }
+
+  .coming-soon-badge {
+    font-size: 0.7rem;
+    background: color-mix(in srgb, var(--fg-dim) 12%, transparent);
+    color: var(--fg-dim);
+    border: 1px solid color-mix(in srgb, var(--fg-dim) 40%, transparent);
+    padding: 0.25rem 0.45rem;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-weight: 700;
   }
 
   .import-btn {

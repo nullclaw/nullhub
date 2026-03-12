@@ -233,6 +233,71 @@
   }
 </script>
 
+{#snippet channelField(prefix: string, field: any, config: Record<string, any>, update: (key: string, value: any) => void)}
+  <div class="field">
+    <label for={`${prefix}-${field.key}`}>
+      {field.label}
+      {#if field.hint}
+        <span class="field-hint">{field.hint}</span>
+      {/if}
+    </label>
+    {#if field.type === 'password'}
+      <input
+        id={`${prefix}-${field.key}`}
+        type="password"
+        value={config[field.key] ?? field.default ?? ""}
+        oninput={(e) => update(field.key, e.currentTarget.value)}
+        placeholder={prefix.startsWith("edit") ? "Leave empty to keep current" : "Enter value..."}
+      />
+    {:else if field.type === 'number'}
+      <input
+        id={`${prefix}-${field.key}`}
+        type="number"
+        value={config[field.key] ?? field.default ?? ""}
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        oninput={(e) => update(field.key, Number(e.currentTarget.value))}
+      />
+    {:else if field.type === 'toggle'}
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={(config[field.key] ?? field.default ?? false) === true}
+          onchange={(e) => update(field.key, e.currentTarget.checked)}
+        />
+        <span class="toggle-slider"></span>
+      </label>
+    {:else if field.type === 'select'}
+      <select
+        id={`${prefix}-${field.key}`}
+        value={config[field.key] ?? field.default ?? ""}
+        onchange={(e) => update(field.key, e.currentTarget.value)}
+      >
+        {#each field.options || [] as opt}
+          <option value={opt}>{opt}</option>
+        {/each}
+      </select>
+    {:else if field.type === 'list'}
+      <input
+        id={`${prefix}-${field.key}`}
+        type="text"
+        value={(config[field.key] ?? field.default ?? []).join(', ')}
+        oninput={(e) => update(field.key, e.currentTarget.value.split(',').map((s: string) => s.trim()).filter(Boolean))}
+        placeholder={field.hint || "Comma-separated values..."}
+      />
+    {:else}
+      <input
+        id={`${prefix}-${field.key}`}
+        type="text"
+        value={config[field.key] ?? field.default ?? ""}
+        oninput={(e) => update(field.key, e.currentTarget.value)}
+        placeholder={field.hint || "Enter value..."}
+      />
+    {/if}
+  </div>
+{/snippet}
+
 <div class="channels-page">
   <div class="page-header">
     <h1>Channels</h1>
@@ -277,70 +342,17 @@
           <input id="add-account" type="text" bind:value={addForm.account} placeholder="default" />
         </div>
       {/if}
-      {#each addSchema?.fields || [] as field}
-        <div class="field">
-          <label for={`add-${field.key}`}>
-            {field.label}
-            {#if field.hint}
-              <span class="field-hint">{field.hint}</span>
-            {/if}
-          </label>
-          {#if field.type === 'password'}
-            <input
-              id={`add-${field.key}`}
-              type="password"
-              value={addForm.config[field.key] ?? field.default ?? ""}
-              oninput={(e) => { addForm.config = { ...addForm.config, [field.key]: e.currentTarget.value }; }}
-              placeholder="Enter value..."
-            />
-          {:else if field.type === 'number'}
-            <input
-              id={`add-${field.key}`}
-              type="number"
-              value={addForm.config[field.key] ?? field.default ?? ""}
-              min={field.min}
-              max={field.max}
-              step={field.step}
-              oninput={(e) => { addForm.config = { ...addForm.config, [field.key]: Number(e.currentTarget.value) }; }}
-            />
-          {:else if field.type === 'toggle'}
-            <label class="toggle">
-              <input
-                type="checkbox"
-                checked={(addForm.config[field.key] ?? field.default ?? false) === true}
-                onchange={(e) => { addForm.config = { ...addForm.config, [field.key]: e.currentTarget.checked }; }}
-              />
-              <span class="toggle-slider"></span>
-            </label>
-          {:else if field.type === 'select'}
-            <select
-              id={`add-${field.key}`}
-              value={addForm.config[field.key] ?? field.default ?? ""}
-              onchange={(e) => { addForm.config = { ...addForm.config, [field.key]: e.currentTarget.value }; }}
-            >
-              {#each field.options || [] as opt}
-                <option value={opt}>{opt}</option>
-              {/each}
-            </select>
-          {:else if field.type === 'list'}
-            <input
-              id={`add-${field.key}`}
-              type="text"
-              value={(addForm.config[field.key] ?? field.default ?? []).join(', ')}
-              oninput={(e) => { addForm.config = { ...addForm.config, [field.key]: e.currentTarget.value.split(',').map((s: string) => s.trim()).filter(Boolean) }; }}
-              placeholder={field.hint || "Comma-separated values..."}
-            />
-          {:else}
-            <input
-              id={`add-${field.key}`}
-              type="text"
-              value={addForm.config[field.key] ?? field.default ?? ""}
-              oninput={(e) => { addForm.config = { ...addForm.config, [field.key]: e.currentTarget.value }; }}
-              placeholder={field.hint || "Enter value..."}
-            />
-          {/if}
-        </div>
+      {#each (addSchema?.fields || []).filter(f => !f.advanced) as field}
+        {@render channelField("add", field, addForm.config, (k, v) => { addForm.config = { ...addForm.config, [k]: v }; })}
       {/each}
+      {#if (addSchema?.fields || []).some(f => f.advanced)}
+        <details class="advanced-section">
+          <summary>Advanced</summary>
+          {#each (addSchema?.fields || []).filter(f => f.advanced) as field}
+            {@render channelField("add", field, addForm.config, (k, v) => { addForm.config = { ...addForm.config, [k]: v }; })}
+          {/each}
+        </details>
+      {/if}
       {#if addError}
         <div class="error-message">{addError}</div>
       {/if}
@@ -379,70 +391,17 @@
                     <input id="edit-account-{c.id}" type="text" bind:value={editForm.account} />
                   </div>
                 {/if}
-                {#each editSchema?.fields || [] as field}
-                  <div class="field">
-                    <label for={`edit-${c.id}-${field.key}`}>
-                      {field.label}
-                      {#if field.hint}
-                        <span class="field-hint">{field.hint}</span>
-                      {/if}
-                    </label>
-                    {#if field.type === 'password'}
-                      <input
-                        id={`edit-${c.id}-${field.key}`}
-                        type="password"
-                        value={editForm.config[field.key] ?? ""}
-                        oninput={(e) => { editForm.config = { ...editForm.config, [field.key]: e.currentTarget.value }; }}
-                        placeholder="Leave empty to keep current"
-                      />
-                    {:else if field.type === 'number'}
-                      <input
-                        id={`edit-${c.id}-${field.key}`}
-                        type="number"
-                        value={editForm.config[field.key] ?? field.default ?? ""}
-                        min={field.min}
-                        max={field.max}
-                        step={field.step}
-                        oninput={(e) => { editForm.config = { ...editForm.config, [field.key]: Number(e.currentTarget.value) }; }}
-                      />
-                    {:else if field.type === 'toggle'}
-                      <label class="toggle">
-                        <input
-                          type="checkbox"
-                          checked={(editForm.config[field.key] ?? field.default ?? false) === true}
-                          onchange={(e) => { editForm.config = { ...editForm.config, [field.key]: e.currentTarget.checked }; }}
-                        />
-                        <span class="toggle-slider"></span>
-                      </label>
-                    {:else if field.type === 'select'}
-                      <select
-                        id={`edit-${c.id}-${field.key}`}
-                        value={editForm.config[field.key] ?? field.default ?? ""}
-                        onchange={(e) => { editForm.config = { ...editForm.config, [field.key]: e.currentTarget.value }; }}
-                      >
-                        {#each field.options || [] as opt}
-                          <option value={opt}>{opt}</option>
-                        {/each}
-                      </select>
-                    {:else if field.type === 'list'}
-                      <input
-                        id={`edit-${c.id}-${field.key}`}
-                        type="text"
-                        value={(editForm.config[field.key] ?? field.default ?? []).join(', ')}
-                        oninput={(e) => { editForm.config = { ...editForm.config, [field.key]: e.currentTarget.value.split(',').map((s: string) => s.trim()).filter(Boolean) }; }}
-                        placeholder={field.hint || "Comma-separated values..."}
-                      />
-                    {:else}
-                      <input
-                        id={`edit-${c.id}-${field.key}`}
-                        type="text"
-                        value={editForm.config[field.key] ?? ""}
-                        oninput={(e) => { editForm.config = { ...editForm.config, [field.key]: e.currentTarget.value }; }}
-                        placeholder={field.hint || "Enter value..."}
-                      />
-                    {/if}
-                  </div>
+                {#each (editSchema?.fields || []).filter(f => !f.advanced) as field}
+                  {@render channelField(`edit-${c.id}`, field, editForm.config, (k, v) => { editForm.config = { ...editForm.config, [k]: v }; })}
                 {/each}
+                {#if (editSchema?.fields || []).some(f => f.advanced)}
+                  <details class="advanced-section">
+                    <summary>Advanced</summary>
+                    {#each (editSchema?.fields || []).filter(f => f.advanced) as field}
+                      {@render channelField(`edit-${c.id}`, field, editForm.config, (k, v) => { editForm.config = { ...editForm.config, [k]: v }; })}
+                    {/each}
+                  </details>
+                {/if}
                 {#if editError}
                   <div class="error-message">{editError}</div>
                 {/if}
@@ -586,6 +545,28 @@
     letter-spacing: 0;
     text-transform: none;
     margin-left: 0.5rem;
+  }
+
+  .advanced-section {
+    margin-top: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 0.75rem;
+  }
+  .advanced-section[open] {
+    padding-bottom: 0.75rem;
+  }
+  .advanced-section summary {
+    cursor: pointer;
+    padding: 0.5rem 0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--fg-dim);
+  }
+  .advanced-section summary:hover {
+    color: var(--accent);
   }
 
   .card-header {

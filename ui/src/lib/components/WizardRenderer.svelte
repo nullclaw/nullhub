@@ -331,18 +331,17 @@
         {/if}
       </div>
 
-      {#if versions.length > 1}
-        <WizardStep
-          step={{
-            id: "_version",
-            title: "Version",
-            description: "Select the version to install",
-            type: "select",
-            options: versions,
-          }}
-          value={selectedVersion}
-          onchange={(v) => (selectedVersion = v)}
-        />
+      {#if versions.length > 0}
+        <div class="version-select">
+          <label for="version-picker">Version</label>
+          <select id="version-picker" bind:value={selectedVersion}>
+            {#each versions as v, i}
+              <option value={v.value}>
+                {v.label}{i === 0 ? " (latest, recommended)" : ""}
+              </option>
+            {/each}
+          </select>
+        </div>
       {/if}
 
       {#if providerStep}
@@ -553,6 +552,37 @@
   }
 
   .name-step input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 8px var(--border-glow);
+  }
+
+  .version-select {
+    margin-bottom: 2rem;
+  }
+  .version-select label {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: var(--fg-dim);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .version-select select {
+    width: 100%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0.625rem 0.875rem;
+    color: var(--fg);
+    font-size: 0.875rem;
+    font-family: var(--font-mono);
+    outline: none;
+    transition: all 0.2s ease;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+  }
+  .version-select select:focus {
     border-color: var(--accent);
     box-shadow: 0 0 8px var(--border-glow);
   }
