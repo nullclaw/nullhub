@@ -99,15 +99,14 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Set UI version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Build embedded UI assets
         env:
           TAG_VERSION: ${{ github.ref_name }}
-        run: npm --prefix ui version "${TAG_VERSION#v}" --no-git-tag-version --allow-same-version
-
-      - name: Build embedded UI assets
         run: |
           npm --prefix ui ci --no-audit --no-fund
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            npm --prefix ui version "${TAG_VERSION#v}" --no-git-tag-version --allow-same-version
+          fi
           npm --prefix ui run build
 
       - name: Create source archive
@@ -120,6 +119,7 @@ jobs:
             --exclude='.generated_ui_assets.zig' \
             --exclude='ui/node_modules' \
             --exclude='ui/.svelte-kit' \
+            --exclude='nullhub-source-*.tar.gz' \
             -czf "${archive_name}" .
           echo "ARCHIVE_NAME=${archive_name}" >> "$GITHUB_ENV"
 
