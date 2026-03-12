@@ -101,6 +101,10 @@
     return validationResults.find((r: any) => r.channel === type && r.account === account);
   }
 
+  function isNamedAccount(account: string) {
+    return account.length > 0 && account !== 'default';
+  }
+
   async function toggleSavedDropdown() {
     if (showSavedDropdown) {
       showSavedDropdown = false;
@@ -132,6 +136,69 @@
   }
 </script>
 
+{#snippet channelField(entry: { type: string; account: string }, field: any)}
+  <div class="channel-field">
+    <label for={`ch-${entry.type}-${entry.account}-${field.key}`}>
+      {field.label}
+      {#if field.hint}
+        <span class="field-hint">{field.hint}</span>
+      {/if}
+    </label>
+
+    {#if field.type === 'password'}
+      <input
+        id={`ch-${entry.type}-${entry.account}-${field.key}`}
+        type="password"
+        value={getFieldValue(entry.type, entry.account, field.key, field.default)}
+        oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
+        placeholder="Enter value..."
+      />
+    {:else if field.type === 'number'}
+      <input
+        id={`ch-${entry.type}-${entry.account}-${field.key}`}
+        type="number"
+        value={getFieldValue(entry.type, entry.account, field.key, field.default)}
+        oninput={(e) => updateField(entry.type, entry.account, field.key, Number(e.currentTarget.value))}
+      />
+    {:else if field.type === 'toggle'}
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={getFieldValue(entry.type, entry.account, field.key, field.default) === true}
+          onchange={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.checked)}
+        />
+        <span class="toggle-slider"></span>
+      </label>
+    {:else if field.type === 'select'}
+      <select
+        id={`ch-${entry.type}-${entry.account}-${field.key}`}
+        value={getFieldValue(entry.type, entry.account, field.key, field.default)}
+        onchange={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
+      >
+        {#each field.options || [] as opt}
+          <option value={opt}>{opt}</option>
+        {/each}
+      </select>
+    {:else if field.type === 'list'}
+      <input
+        id={`ch-${entry.type}-${entry.account}-${field.key}`}
+        type="text"
+        value={(getFieldValue(entry.type, entry.account, field.key, field.default) || []).join(', ')}
+        oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value.split(',').map((s: string) => s.trim()).filter(Boolean))}
+        placeholder={field.hint || "Comma-separated values..."}
+      />
+    {:else}
+      <input
+        id={`ch-${entry.type}-${entry.account}-${field.key}`}
+        type="text"
+        value={getFieldValue(entry.type, entry.account, field.key, field.default)}
+        oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
+        placeholder={field.hint || "Enter value..."}
+      />
+    {/if}
+  </div>
+{/snippet}
+
 <div class="channel-list">
   <div class="step-title">Channels</div>
   <p class="step-description">
@@ -158,75 +225,26 @@
             title={result.reason}></span>
         {/if}
         <span class="channel-name">{schema?.label || entry.type}</span>
-        {#if schema?.hasAccounts}
+        {#if schema?.hasAccounts && isNamedAccount(entry.account)}
           <span class="account-name">{entry.account}</span>
         {/if}
         <button class="icon-btn remove-btn" onclick={() => removeChannel(i)} title="Remove">&#215;</button>
       </div>
 
       <div class="channel-fields">
-        {#each schema?.fields || [] as field}
-          <div class="channel-field">
-            <label for={`ch-${entry.type}-${entry.account}-${field.key}`}>
-              {field.label}
-              {#if field.hint}
-                <span class="field-hint">{field.hint}</span>
-              {/if}
-            </label>
-
-            {#if field.type === 'password'}
-              <input
-                id={`ch-${entry.type}-${entry.account}-${field.key}`}
-                type="password"
-                value={getFieldValue(entry.type, entry.account, field.key, field.default)}
-                oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
-                placeholder="Enter value..."
-              />
-            {:else if field.type === 'number'}
-              <input
-                id={`ch-${entry.type}-${entry.account}-${field.key}`}
-                type="number"
-                value={getFieldValue(entry.type, entry.account, field.key, field.default)}
-                oninput={(e) => updateField(entry.type, entry.account, field.key, Number(e.currentTarget.value))}
-              />
-            {:else if field.type === 'toggle'}
-              <label class="toggle">
-                <input
-                  type="checkbox"
-                  checked={getFieldValue(entry.type, entry.account, field.key, field.default) === true}
-                  onchange={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.checked)}
-                />
-                <span class="toggle-slider"></span>
-              </label>
-            {:else if field.type === 'select'}
-              <select
-                id={`ch-${entry.type}-${entry.account}-${field.key}`}
-                value={getFieldValue(entry.type, entry.account, field.key, field.default)}
-                onchange={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
-              >
-                {#each field.options || [] as opt}
-                  <option value={opt}>{opt}</option>
-                {/each}
-              </select>
-            {:else if field.type === 'list'}
-              <input
-                id={`ch-${entry.type}-${entry.account}-${field.key}`}
-                type="text"
-                value={(getFieldValue(entry.type, entry.account, field.key, field.default) || []).join(', ')}
-                oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value.split(',').map((s: string) => s.trim()).filter(Boolean))}
-                placeholder={field.hint || "Comma-separated values..."}
-              />
-            {:else}
-              <input
-                id={`ch-${entry.type}-${entry.account}-${field.key}`}
-                type="text"
-                value={getFieldValue(entry.type, entry.account, field.key, field.default)}
-                oninput={(e) => updateField(entry.type, entry.account, field.key, e.currentTarget.value)}
-                placeholder={field.hint || "Enter value..."}
-              />
-            {/if}
-          </div>
+        {#each (schema?.fields || []).filter((field) => !field.advanced) as field}
+          {@render channelField(entry, field)}
         {/each}
+        {#if (schema?.fields || []).some((field) => field.advanced)}
+          <details class="advanced-section">
+            <summary>Advanced</summary>
+            <div class="advanced-fields">
+              {#each (schema?.fields || []).filter((field) => field.advanced) as field}
+                {@render channelField(entry, field)}
+              {/each}
+            </div>
+          </details>
+        {/if}
       </div>
     </div>
   {/each}
@@ -241,22 +259,28 @@
       <button class="picker-cancel" onclick={() => (showAddPicker = false)}>Cancel</button>
     </div>
   {:else}
-    <button class="add-btn" onclick={() => (showAddPicker = true)}>+ Add Channel</button>
-  {/if}
-
-  {#if savedChannels.length > 0}
-    <div class="saved-section">
-      <button class="saved-btn" onclick={toggleSavedDropdown} disabled={loadingSavedChannels}>
-        {loadingSavedChannels ? "Loading..." : showSavedDropdown ? "Close" : "Use Saved"}
-      </button>
-      {#if showSavedDropdown}
-        <div class="saved-dropdown">
-          {#each savedChannels as sc}
-            <button class="saved-item" onclick={() => useSaved(sc)}>
-              <span class="saved-name">{sc.name}</span>
-              <span class="saved-type">{channelSchemas[sc.channel_type]?.label || sc.channel_type} / {sc.account}</span>
-            </button>
-          {/each}
+    <div class="add-row">
+      <button class="add-btn" onclick={() => (showAddPicker = true)}>+ Add Channel</button>
+      {#if savedChannels.length > 0}
+        <div class="saved-dropdown-container">
+          <button class="add-btn saved-btn" onclick={toggleSavedDropdown} disabled={loadingSavedChannels}>
+            {loadingSavedChannels ? "Loading..." : showSavedDropdown ? "Close" : "Use Saved"}
+          </button>
+          {#if showSavedDropdown}
+            <div class="saved-dropdown">
+              {#each savedChannels as sc}
+                <button class="saved-item" onclick={() => useSaved(sc)}>
+                  <span class="saved-name">{sc.name}</span>
+                  <span class="saved-type">
+                    {channelSchemas[sc.channel_type]?.label || sc.channel_type}
+                    {#if isNamedAccount(sc.account)}
+                      / {sc.account}
+                    {/if}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -363,6 +387,37 @@
   }
 
   .channel-fields { display: flex; flex-direction: column; gap: 0.75rem; }
+
+  .advanced-section {
+    margin-top: 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 0.75rem;
+  }
+
+  .advanced-section[open] {
+    padding-bottom: 0.75rem;
+  }
+
+  .advanced-section summary {
+    cursor: pointer;
+    padding: 0.6rem 0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--fg-dim);
+  }
+
+  .advanced-section summary:hover {
+    color: var(--accent);
+  }
+
+  .advanced-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
 
   .channel-field label {
     display: block;
@@ -508,6 +563,20 @@
     text-shadow: var(--text-glow);
   }
 
+  .add-row {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .add-row .add-btn {
+    flex: 1;
+  }
+
+  .saved-dropdown-container {
+    position: relative;
+    flex: 0 0 auto;
+  }
+
   .toggle {
     position: relative;
     display: inline-block;
@@ -547,24 +616,15 @@
     box-shadow: 0 0 5px var(--border-glow);
   }
 
-  .saved-section { position: relative; margin-top: 0.5rem; }
   .saved-btn {
-    width: 100%;
-    padding: 0.75rem;
-    background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
-    border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
-    border-radius: 2px;
-    color: var(--accent);
-    font-size: 0.875rem;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    cursor: pointer;
-    transition: all 0.2s ease;
+    border-style: solid !important;
+    border-color: var(--accent-dim) !important;
+    color: var(--accent) !important;
+    width: auto !important;
+    padding: 0.75rem 1.25rem !important;
   }
   .saved-btn:hover:not(:disabled) {
     border-color: var(--accent);
-    border-style: solid;
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     box-shadow: 0 0 8px var(--border-glow);
     text-shadow: var(--text-glow);
@@ -573,37 +633,45 @@
   .saved-dropdown {
     position: absolute;
     bottom: 100%;
-    left: 0;
     right: 0;
+    min-width: 220px;
     background: var(--bg-surface);
-    border: 1px solid var(--accent);
+    border: 1px solid var(--accent-dim);
     border-radius: 2px;
-    max-height: 300px;
+    max-height: 200px;
     overflow-y: auto;
     z-index: 10;
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
-    margin-bottom: 4px;
+    box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
+    margin-bottom: 0.25rem;
   }
   .saved-item {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
     width: 100%;
-    padding: 0.75rem 1rem;
+    padding: 0.625rem 1rem;
     background: none;
     border: none;
     border-bottom: 1px solid var(--border);
     color: var(--fg);
     cursor: pointer;
     transition: all 0.15s ease;
+    text-align: left;
     font-family: var(--font-mono);
-    font-size: 0.8rem;
   }
   .saved-item:last-child { border-bottom: none; }
   .saved-item:hover {
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    background: var(--bg-hover);
     color: var(--accent);
   }
-  .saved-name { font-weight: 700; }
-  .saved-type { font-size: 0.7rem; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 1px; }
+  .saved-name {
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+  .saved-type {
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    margin-top: 0.125rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
 </style>

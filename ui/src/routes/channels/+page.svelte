@@ -421,7 +421,7 @@
                 <span class="channel-type">{getChannelLabel(c.channel_type)}</span>
               </div>
               <div class="card-body">
-                {#if c.account}
+                {#if c.account && c.account !== "default"}
                   <div class="card-field">
                     <span class="label">Account</span>
                     <code>{c.account}</code>
