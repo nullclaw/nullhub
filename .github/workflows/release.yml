@@ -67,6 +67,12 @@ jobs:
             echo "value=dev" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set UI version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.value }}
+        run: npm --prefix ui version "$BUILD_VERSION" --no-git-tag-version --allow-same-version
+
       - name: Build ReleaseSmall
         run: zig build -Doptimize=ReleaseSmall -Dversion=${{ steps.version.outputs.value }} ${{ matrix.zig_target && format('-Dtarget={0}', matrix.zig_target) || '' }}
 
@@ -94,8 +100,13 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Build embedded UI assets
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
         run: |
           npm --prefix ui ci --no-audit --no-fund
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            npm --prefix ui version "${TAG_VERSION#v}" --no-git-tag-version --allow-same-version
+          fi
           npm --prefix ui run build
 
       - name: Create source archive
@@ -108,7 +119,8 @@ jobs:
             --exclude='.generated_ui_assets.zig' \
             --exclude='ui/node_modules' \
             --exclude='ui/.svelte-kit' \
-            -czf "${archive_name}" .
+            -czf "/tmp/${archive_name}" .
+          mv "/tmp/${archive_name}" .
           echo "ARCHIVE_NAME=${archive_name}" >> "$GITHUB_ENV"
 
       - name: Upload source archive
