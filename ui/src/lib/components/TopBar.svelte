@@ -197,9 +197,9 @@
     display: inline-block;
     width: 10px;
     height: 10px;
-    border-radius: 50%;
+    border-radius: var(--radius);
     background: var(--error);
-    box-shadow: 0 0 8px var(--error);
+    box-shadow: 0 0 6px var(--error);
     flex-shrink: 0;
   }
 

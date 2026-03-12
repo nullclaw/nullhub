@@ -39,7 +39,7 @@
     content: "";
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: var(--radius);
     background: var(--badge-color);
     box-shadow: 0 0 6px var(--badge-color);
   }

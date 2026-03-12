@@ -170,7 +170,7 @@
     font-size: 0.8125rem;
     padding: 0.5rem;
     background: rgba(0, 0, 0, 0.2);
-    border: 1px dashed var(--border);
+    border: 1px dotted var(--border);
     border-radius: 2px;
   }
   .gateway-label {

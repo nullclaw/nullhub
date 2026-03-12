@@ -97,9 +97,6 @@ body.theme-8bit-lobster {
   --font-mono: 'VT323', 'JetBrains Mono', 'Fira Code', monospace;
   --radius: 0px;
   --radius-sm: 0px;
-  
-  /* Override global success variable to pop with neon green instead of accent red */
-  --success: #33ff00;
 }
 
 :root,
@@ -221,9 +218,9 @@ button:hover:not(:disabled) {
 }
 
 body.theme-8bit-lobster button:hover:not(:disabled) {
-  /* Solid retro 8-bit shadow/pop instead of soft glow */
+  /* Solid retro 8-bit shadow, just flat color and slight pop */
   box-shadow: 2px 2px 0px var(--border-glow);
-  transform: translate(-1px, -1px);
+  transform: none;
 }
 
 /* Retro blinking cursor effect on hover for the 8-bit theme */
