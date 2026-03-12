@@ -29,6 +29,8 @@ zig build
 ```
 
 Opens browser to [http://nullhub.localhost:19800](http://nullhub.localhost:19800).
+The resulting binary includes the built web UI; it no longer depends on a
+runtime `ui/build` directory.
 
 Local access chain:
 
@@ -45,6 +47,11 @@ Local access chain:
 - `curl` is required to fetch releases and binaries.
 - `tar` is required to extract UI module bundles.
 
+### Build Prerequisites
+
+- `npm` is required for `zig build` and `zig build test` because the Svelte UI is
+  built and embedded into the binary during the Zig build.
+
 When these tools are missing, `nullhub` will try to install them automatically
 via available system package managers (`apt`, `dnf`, `yum`, `pacman`, `zypper`,
 `apk`, `brew`, `winget`, `choco`).
@@ -54,6 +61,7 @@ via available system package managers (`apt`, `dnf`, `yum`, `pacman`, `zypper`,
 ```
 nullhub                          # Start server + open browser
 nullhub serve [--port N]         # Start server without browser
+nullhub version | -v | --version # Print version
 
 nullhub install <component>      # Terminal wizard
 nullhub uninstall <c>/<n>        # Remove instance
@@ -72,8 +80,9 @@ nullhub update <c>/<n>           # Update single instance
 nullhub update-all               # Update everything
 
 nullhub config <c>/<n> [--edit]  # View/edit config
-nullhub service install          # Register as OS service (systemd/launchd)
-nullhub version                  # Print version
+nullhub service install          # Register/start OS service (systemd/launchd)
+nullhub service uninstall        # Remove OS service
+nullhub service status           # Show OS service status
 ```
 
 Instance addressing uses `{component}/{instance-name}` everywhere.

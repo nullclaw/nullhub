@@ -16,13 +16,14 @@ const manager_mod = @import("supervisor/manager.zig");
 const wizard_api = @import("api/wizard.zig");
 const providers_api = @import("api/providers.zig");
 const channels_api = @import("api/channels.zig");
+const usage_api = @import("api/usage.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
+const ui_assets = @import("ui_assets");
+const version = @import("version.zig");
 
-const version = "2026.3.2";
 const max_request_size: usize = 65_536;
-const ui_build_path = "ui/build";
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -296,6 +297,14 @@ pub const Server = struct {
         const method = parts.next() orelse return;
         const target = parts.next() orelse return;
 
+        if (std.mem.eql(u8, method, "GET") or std.mem.eql(u8, method, "HEAD")) {
+            if (try self.redirectLocationForAliasHost(alloc, raw, target)) |location| {
+                defer alloc.free(location);
+                try sendRedirect(conn.stream, location);
+                return;
+            }
+        }
+
         // Read remaining body if Content-Length indicates more data
         const body = readBody(raw, n, conn.stream, alloc) catch return;
 
@@ -330,6 +339,20 @@ pub const Server = struct {
             break :blk self.route(alloc, method, target, body);
         };
         try sendResponse(conn.stream, response);
+    }
+
+    fn redirectLocationForAliasHost(self: *const Server, allocator: std.mem.Allocator, raw: []const u8, target: []const u8) !?[]u8 {
+        if (!access.isLocalBindHost(self.host)) return null;
+
+        const host_header = extractHeader(raw, "Host") orelse return null;
+        if (!hostMatchesAliasHost(host_header, access.public_alias_host)) return null;
+        if (target.len == 0 or target[0] != '/') return null;
+
+        return try std.fmt.allocPrint(allocator, "http://{s}:{d}{s}", .{
+            access.canonical_local_host,
+            self.port,
+            target,
+        });
     }
 
     fn route(self: *Server, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -431,6 +454,19 @@ pub const Server = struct {
                     };
                 }
             }
+        }
+
+        // Global Usage API
+        if (std.mem.eql(u8, target, "/api/usage") or std.mem.startsWith(u8, target, "/api/usage?")) {
+            if (std.mem.eql(u8, method, "GET")) {
+                const resp = usage_api.handleGlobalUsage(allocator, self.state, self.paths, target);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            return .{
+                .status = "405 Method Not Allowed",
+                .content_type = "application/json",
+                .body = "{\"error\":\"method not allowed\"}",
+            };
         }
 
         // Settings API
@@ -848,7 +884,7 @@ pub const Server = struct {
             }
         }
 
-        // For non-API paths, attempt to serve static files from ui/build
+        // For non-API paths, attempt to serve static files from the embedded UI bundle.
         if (!std.mem.startsWith(u8, target, "/api/")) {
             return serveStaticFile(allocator, target);
         }
@@ -917,6 +953,22 @@ fn sendResponse(stream: std.net.Stream, response: Response) !void {
     }
 }
 
+fn sendRedirect(stream: std.net.Stream, location: []const u8) !void {
+    var buf: [4096]u8 = undefined;
+    const header = try std.fmt.bufPrint(
+        &buf,
+        "HTTP/1.1 308 Permanent Redirect\r\n" ++
+            "Location: {s}\r\n" ++
+            "Content-Length: 0\r\n" ++
+            "Access-Control-Allow-Origin: *\r\n" ++
+            "Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS\r\n" ++
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{location},
+    );
+    _ = try stream.write(header);
+}
+
 pub fn extractBody(raw: []const u8) []const u8 {
     if (std.mem.indexOf(u8, raw, "\r\n\r\n")) |pos| {
         const body_start = pos + 4;
@@ -944,6 +996,13 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn hostMatchesAliasHost(host_header: []const u8, alias_host: []const u8) bool {
+    const trimmed = std.mem.trim(u8, host_header, " \t");
+    if (std.ascii.eqlIgnoreCase(trimmed, alias_host)) return true;
+    if (trimmed.len <= alias_host.len) return false;
+    return trimmed[alias_host.len] == ':' and std.ascii.eqlIgnoreCase(trimmed[0..alias_host.len], alias_host);
+}
+
 fn contentType(path: []const u8) []const u8 {
     if (std.mem.endsWith(u8, path, ".html")) return "text/html";
     if (std.mem.endsWith(u8, path, ".js")) return "application/javascript";
@@ -961,7 +1020,7 @@ fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
         return .{ .status = "400 Bad Request", .content_type = "text/plain", .body = "bad request" };
     }
 
-    // Determine the file path relative to ui/build
+    // Determine the requested file inside the embedded UI bundle.
     const rel_path = if (std.mem.eql(u8, target, "/"))
         "index.html"
     else if (target.len > 1)
@@ -969,28 +1028,23 @@ fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
     else
         "index.html";
 
-    // Build full path: ui/build/ + rel_path
-    const full_path = std.fmt.allocPrint(allocator, ui_build_path ++ "/{s}", .{rel_path}) catch {
-        return .{
-            .status = "500 Internal Server Error",
-            .content_type = "text/html",
-            .body = "internal server error",
-        };
-    };
-
-    // Try to open the requested file, fall back to index.html for SPA routing
-    const file = std.fs.cwd().openFile(full_path, .{}) catch {
-        // SPA fallback: serve index.html for any non-file path
-        const index_path = ui_build_path ++ "/index.html";
-        const index_file = std.fs.cwd().openFile(index_path, .{}) catch {
+    if (ui_assets.get(rel_path)) |asset| {
+        const content = allocator.dupe(u8, asset.bytes) catch {
             return .{
-                .status = "404 Not Found",
+                .status = "500 Internal Server Error",
                 .content_type = "text/html",
-                .body = "not found",
+                .body = "internal server error",
             };
         };
-        defer index_file.close();
-        const index_content = index_file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+        return .{
+            .status = "200 OK",
+            .content_type = contentType(rel_path),
+            .body = content,
+        };
+    }
+
+    if (ui_assets.get("index.html")) |index_asset| {
+        const index_content = allocator.dupe(u8, index_asset.bytes) catch {
             return .{
                 .status = "500 Internal Server Error",
                 .content_type = "text/html",
@@ -1002,21 +1056,12 @@ fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
             .content_type = "text/html",
             .body = index_content,
         };
-    };
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
-        return .{
-            .status = "500 Internal Server Error",
-            .content_type = "text/html",
-            .body = "internal server error",
-        };
-    };
+    }
 
     return .{
-        .status = "200 OK",
-        .content_type = contentType(full_path),
-        .body = content,
+        .status = "404 Not Found",
+        .content_type = "text/html",
+        .body = "not found",
     };
 }
 
@@ -1075,7 +1120,7 @@ test "route GET /api/status returns version and platform" {
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("application/json", resp.content_type);
     // Body should contain version
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "2026.3.2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, version.string) != null);
     // Body should contain platform key
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "platform") != null);
     // Body should contain uptime_seconds
@@ -1087,8 +1132,9 @@ test "route unknown non-API path attempts static file serving" {
     defer ctx.deinit(std.testing.allocator);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/nonexistent", "");
-    // Without ui/build directory, static file serving returns 404
-    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("text/html", resp.content_type);
 }
 
 test "route POST to GET-only route falls through to static serving" {
@@ -1096,8 +1142,8 @@ test "route POST to GET-only route falls through to static serving" {
     defer ctx.deinit(std.testing.allocator);
 
     const resp = ctx.route(std.testing.allocator, "POST", "/health", "");
-    // POST /health doesn't match any route, falls through to static file serving
-    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
 }
 
 test "route unknown API path returns JSON 404" {
@@ -1158,6 +1204,12 @@ test "extractHeader is case-insensitive" {
     const val = extractHeader(raw, "Content-Length");
     try std.testing.expect(val != null);
     try std.testing.expectEqualStrings("10", val.?);
+}
+
+test "hostMatchesAliasHost matches bare host and host with port" {
+    try std.testing.expect(hostMatchesAliasHost("nullhub.local", "nullhub.local"));
+    try std.testing.expect(hostMatchesAliasHost("nullhub.local:19800", "nullhub.local"));
+    try std.testing.expect(!hostMatchesAliasHost("nullhub.localhost:19800", "nullhub.local"));
 }
 
 test "extractBody returns body after headers" {
@@ -1353,9 +1405,11 @@ test "contentType returns octet-stream for unknown extension" {
     try std.testing.expectEqualStrings("application/octet-stream", contentType("file.xyz"));
 }
 
-test "serveStaticFile returns 404 when ui/build does not exist" {
+test "serveStaticFile serves embedded index fallback" {
     const resp = serveStaticFile(std.testing.allocator, "/nonexistent.html");
-    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("text/html", resp.content_type);
 }
 
 test "serveStaticFile rejects path traversal" {
@@ -1369,6 +1423,7 @@ test "route GET / attempts static file serving" {
     defer ctx.deinit(std.testing.allocator);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/", "");
-    // Without ui/build/index.html, falls back to 404
-    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("text/html", resp.content_type);
 }

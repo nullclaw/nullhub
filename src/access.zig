@@ -55,8 +55,7 @@ pub fn buildAccessUrlsWithOptions(allocator: std.mem.Allocator, host: []const u8
         const fallback_url = try buildUrl(allocator, fallback_local_host, port);
         errdefer allocator.free(fallback_url);
 
-        const browser_open_host = if (options.public_alias_active) public_alias_host else canonical_local_host;
-        const browser_open_url = try buildUrl(allocator, browser_open_host, port);
+        const browser_open_url = try buildUrl(allocator, canonical_local_host, port);
         errdefer allocator.free(browser_open_url);
 
         const direct_url = try buildUrl(allocator, fallback_local_host, port);
@@ -135,5 +134,6 @@ test "buildAccessUrls prefers public alias when it is active" {
 
     try std.testing.expect(urls.public_alias_active);
     try std.testing.expectEqualStrings("dns-sd", urls.public_alias_provider);
-    try std.testing.expectEqualStrings("http://nullhub.local:19800", urls.browser_open_url);
+    try std.testing.expectEqualStrings("http://nullhub.localhost:19800", urls.browser_open_url);
+    try std.testing.expectEqualStrings("http://nullhub.local:19800", urls.public_alias_url.?);
 }

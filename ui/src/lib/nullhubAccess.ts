@@ -26,7 +26,7 @@ export async function redirectToPreferredOrigin(location: Location): Promise<voi
 
   const urls = buildNullHubAccessUrls(resolvePort(location), location.protocol);
   const currentOrigin = location.origin;
-  const candidates = [urls.publicAliasUrl, urls.canonicalUrl, urls.fallbackUrl];
+  const candidates = [urls.browserOpenUrl, urls.fallbackUrl];
 
   for (const candidate of candidates) {
     if (candidate === currentOrigin) return;

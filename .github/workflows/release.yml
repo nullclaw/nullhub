@@ -51,8 +51,24 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Resolve build version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build ReleaseSmall
-        run: zig build -Doptimize=ReleaseSmall ${{ matrix.zig_target && format('-Dtarget={0}', matrix.zig_target) || '' }}
+        run: zig build -Doptimize=ReleaseSmall -Dversion=${{ steps.version.outputs.value }} ${{ matrix.zig_target && format('-Dtarget={0}', matrix.zig_target) || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -60,8 +76,49 @@ jobs:
           name: nullhub-${{ matrix.target }}
           path: zig-out/bin/nullhub${{ matrix.ext }}
 
+  source:
+    name: Prepare source archive
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build embedded UI assets
+        run: |
+          npm --prefix ui ci --no-audit --no-fund
+          npm --prefix ui run build
+
+      - name: Create source archive
+        run: |
+          archive_name="nullhub-source-${GITHUB_REF_NAME}.tar.gz"
+          tar \
+            --exclude='.git' \
+            --exclude='.zig-cache' \
+            --exclude='zig-out' \
+            --exclude='.generated_ui_assets.zig' \
+            --exclude='ui/node_modules' \
+            --exclude='ui/.svelte-kit' \
+            -czf "${archive_name}" .
+          echo "ARCHIVE_NAME=${archive_name}" >> "$GITHUB_ENV"
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nullhub-source
+          path: ${{ env.ARCHIVE_NAME }}
+
   release:
-    needs: build
+    needs: [build, source]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -90,6 +147,7 @@ jobs:
             nullhub-macos-x86_64.bin
             nullhub-windows-x86_64.exe
             nullhub-windows-aarch64.exe
+            nullhub-source/*.tar.gz
           generate_release_notes: true
 
   docker:

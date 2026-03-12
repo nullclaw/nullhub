@@ -1,5 +1,15 @@
 const BASE = '/api';
 
+function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined || value === '') continue;
+    search.set(key, String(value));
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -14,6 +24,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getStatus: () => request<any>('/status'),
+  getGlobalUsage: (window: '24h' | '7d' | '30d' | 'all' = '24h') =>
+    request<any>(`/usage?window=${window}`),
   getComponents: () => request<any>('/components'),
   getInstances: () => request<any>('/instances'),
   getWizard: (component: string) => request<any>(`/wizard/${component}`),
@@ -37,6 +49,30 @@ export const api = {
     request<any>(`/instances/${c}/${n}/provider-health`),
   getUsage: (c: string, n: string, window: '24h' | '7d' | '30d' | 'all' = '24h') =>
     request<any>(`/instances/${c}/${n}/usage?window=${window}`),
+  getHistory: (c: string, n: string, params?: { sessionId?: string; limit?: number; offset?: number }) =>
+    request<any>(
+      withQuery(`/instances/${c}/${n}/history`, {
+        session_id: params?.sessionId,
+        limit: params?.limit,
+        offset: params?.offset,
+      }),
+    ),
+  getMemory: (
+    c: string,
+    n: string,
+    params?: { stats?: boolean; key?: string; query?: string; category?: string; limit?: number },
+  ) =>
+    request<any>(
+      withQuery(`/instances/${c}/${n}/memory`, {
+        stats: params?.stats ? 1 : undefined,
+        key: params?.key,
+        query: params?.query,
+        category: params?.category,
+        limit: params?.limit,
+      }),
+    ),
+  getSkills: (c: string, n: string, name?: string) =>
+    request<any>(withQuery(`/instances/${c}/${n}/skills`, { name })),
   getIntegration: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/integration`),
   linkIntegration: (c: string, n: string, payload: any) =>

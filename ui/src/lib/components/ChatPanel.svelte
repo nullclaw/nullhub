@@ -1,20 +1,23 @@
 <script lang="ts">
   import ModuleFrame from "./ModuleFrame.svelte";
 
-  let { port = 0, moduleName = "", moduleVersion = "" } = $props();
+  let { port = 0, moduleName = "", moduleVersion = "", instanceKey = "" } = $props();
 
   const wsUrl = $derived(port > 0 ? `ws://127.0.0.1:${port}/ws` : "");
   const hasModule = $derived(moduleName.length > 0 && moduleVersion.length > 0);
+  const mountKey = $derived(`${instanceKey}:${moduleName}:${moduleVersion}:${wsUrl}`);
 </script>
 
 <div class="chat-panel">
   {#if hasModule && wsUrl}
-    <ModuleFrame
-      {moduleName}
-      {moduleVersion}
-      instanceUrl={wsUrl}
-      moduleProps={{ wsUrl, pairingCode: "123456" }}
-    />
+    {#key mountKey}
+      <ModuleFrame
+        {moduleName}
+        {moduleVersion}
+        instanceUrl={wsUrl}
+        moduleProps={{ wsUrl, pairingCode: "123456" }}
+      />
+    {/key}
   {:else if !hasModule}
     <div class="chat-unavailable">
       Chat UI module not installed. Reinstall this instance to add it.

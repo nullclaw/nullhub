@@ -36,7 +36,6 @@ jobs:
           version: 0.15.2
 
       - name: Setup Node.js 22
-        if: runner.os == 'Linux'
         uses: actions/setup-node@v4
         with:
           node-version: 22

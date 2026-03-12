@@ -5,11 +5,10 @@ const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
 const access = @import("../access.zig");
+const version = @import("../version.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
-
-const version = "2026.3.2";
 
 fn pidToU64(pid: std.process.Child.Id) u64 {
     return switch (@typeInfo(@TypeOf(pid))) {
@@ -81,7 +80,7 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
 
     // Hub info
     try buf.appendSlice("{\"hub\":{\"version\":\"");
-    try buf.appendSlice(version);
+    try buf.appendSlice(version.string);
     try buf.appendSlice("\",\"platform\":\"");
     try buf.appendSlice(comptime platform.detect().toString());
     try buf.appendSlice("\",\"uptime_seconds\":");
@@ -197,7 +196,7 @@ test "handleStatus returns valid JSON with hub version" {
     );
     defer parsed.deinit();
 
-    try std.testing.expectEqualStrings("2026.3.2", parsed.value.hub.version);
+    try std.testing.expectEqualStrings(version.string, parsed.value.hub.version);
     try std.testing.expect(parsed.value.hub.platform.len > 0);
     try std.testing.expectEqual(@as(u64, 3600), parsed.value.hub.uptime_seconds);
     try std.testing.expect(!parsed.value.hub.access.public_alias_active);

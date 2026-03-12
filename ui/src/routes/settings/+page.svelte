@@ -50,37 +50,6 @@
     </div>
   </div>
 
-  {#if settings.access}
-    <div class="settings-section">
-      <h2>Current Access URLs</h2>
-      <div class="access-field">
-        <span class="access-name">Primary</span>
-        <a href={settings.access.browser_open_url}><code>{settings.access.browser_open_url}</code></a>
-      </div>
-      {#if settings.access.local_alias_chain}
-        <div class="access-field">
-          <span class="access-name">Alias Chain</span>
-          <div class="access-chain">
-            <a href={settings.access.public_alias_url}><code>{settings.access.public_alias_url}</code></a>
-            <span>&rarr;</span>
-            <a href={settings.access.canonical_url}><code>{settings.access.canonical_url}</code></a>
-            <span>&rarr;</span>
-            <a href={settings.access.fallback_url}><code>{settings.access.fallback_url}</code></a>
-          </div>
-        </div>
-        <p class="hint">
-          {#if settings.access.public_alias_active}
-            <code>nullhub.local</code> is active via {settings.access.public_alias_provider}.
-          {:else}
-            <code>nullhub.local</code> is not active on this machine, so NullHub uses
-            <code>nullhub.localhost</code> first and keeps <code>127.0.0.1</code>
-            as the hard fallback.
-          {/if}
-        </p>
-      {/if}
-    </div>
-  {/if}
-
   <div class="settings-section">
     <h2>Security</h2>
     <div class="field">
@@ -241,45 +210,6 @@
     margin-top: 0.5rem;
     line-height: 1.5;
     font-family: var(--font-mono);
-  }
-  .access-field {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-  .access-name {
-    min-width: 7rem;
-    font-size: 0.8125rem;
-    font-weight: 700;
-    color: var(--fg-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .access-field a,
-  .access-field code {
-    font-family: var(--font-mono);
-    color: var(--accent);
-    word-break: break-all;
-  }
-  .access-chain {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-    justify-content: flex-end;
-  }
-  .access-chain span {
-    color: var(--fg-dim);
-  }
-  @media (max-width: 720px) {
-    .access-field {
-      flex-direction: column;
-    }
-    .access-chain {
-      justify-content: flex-start;
-    }
   }
 
   .btn {

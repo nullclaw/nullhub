@@ -3,12 +3,13 @@ const builtin = @import("builtin");
 pub const root = @import("root.zig");
 const cli = root.cli;
 const server = root.server;
+const service = root.service;
 const paths_mod = root.paths;
 const manager_mod = root.manager;
 const access = root.access;
 const mdns_mod = root.mdns;
-
-const version = "2026.3.2";
+const status_cli = root.status_cli;
+const version = root.version;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -22,9 +23,9 @@ pub fn main() !void {
     const command = cli.parse(&args);
 
     switch (command) {
-        .version => std.debug.print("nullhub v{s}\n", .{version}),
+        .version => try printVersionLine(),
         .serve => |opts| {
-            std.debug.print("nullhub v{s}\n", .{version});
+            std.debug.print("nullhub v{s}\n", .{version.string});
 
             var paths = try paths_mod.Paths.init(allocator, null);
             defer paths.deinit(allocator);
@@ -59,13 +60,7 @@ pub fn main() !void {
 
             try srv.run();
         },
-        .status => |opts| {
-            if (opts.instance) |inst| {
-                std.debug.print("status for {s}/{s} (not yet implemented)\n", .{ inst.component, inst.name });
-            } else {
-                std.debug.print("status: no instances (not yet implemented)\n", .{});
-            }
-        },
+        .status => |opts| try status_cli.run(allocator, opts),
         .install => |opts| {
             std.debug.print("install {s}", .{opts.component});
             if (opts.name) |n| std.debug.print(" --name {s}", .{n});
@@ -91,7 +86,24 @@ pub fn main() !void {
             std.debug.print(" (not yet implemented)\n", .{});
         },
         .wizard => |opts| std.debug.print("wizard {s} (not yet implemented)\n", .{opts.component}),
-        .service => |sc| std.debug.print("service {s} (not yet implemented)\n", .{@tagName(sc)}),
+        .service => |sc| handleServiceCommand(allocator, sc) catch |err| {
+            const any_err: anyerror = err;
+            switch (any_err) {
+                error.UnsupportedPlatform => std.debug.print("Service management is not supported on this platform.\n", .{}),
+                error.NoHomeDir => std.debug.print("Could not resolve home directory for service files.\n", .{}),
+                error.SystemctlUnavailable => {
+                    std.debug.print("`systemctl` is not available; Linux service commands require systemd user services.\n", .{});
+                },
+                error.SystemdUserUnavailable => {
+                    std.debug.print("systemd user services are unavailable (`systemctl --user`).\n", .{});
+                },
+                error.CommandFailed => {
+                    std.debug.print("Service command failed: {s}\n", .{@tagName(sc)});
+                },
+                else => return any_err,
+            }
+            std.process.exit(1);
+        },
         .uninstall => |opts| {
             std.debug.print("uninstall {s}/{s}", .{ opts.instance.component, opts.instance.name });
             if (opts.remove_data) std.debug.print(" --remove-data", .{});
@@ -100,6 +112,34 @@ pub fn main() !void {
         .add_source => |opts| std.debug.print("add-source {s} (not yet implemented)\n", .{opts.repo}),
         .help => cli.printUsage(),
     }
+}
+
+fn handleServiceCommand(allocator: std.mem.Allocator, command: cli.ServiceCommand) !void {
+    switch (command) {
+        .install => {
+            try service.install(allocator);
+            try printStdout("Service installed and started.\n");
+        },
+        .uninstall => {
+            try service.uninstall(allocator);
+            try printStdout("Service uninstalled.\n");
+        },
+        .status => try service.printStatus(allocator),
+    }
+}
+
+fn printVersionLine() !void {
+    var line_buf: [128]u8 = undefined;
+    const line = try std.fmt.bufPrint(&line_buf, "nullhub v{s}\n", .{version.string});
+    try printStdout(line);
+}
+
+fn printStdout(text: []const u8) !void {
+    var stdout_buf: [1024]u8 = undefined;
+    var bw = std.fs.File.stdout().writer(&stdout_buf);
+    const w = &bw.interface;
+    try w.writeAll(text);
+    try w.flush();
 }
 
 fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) void {

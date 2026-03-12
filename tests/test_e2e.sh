@@ -14,6 +14,7 @@ BASE="http://127.0.0.1:$PORT"
 # Build
 echo "Building nullhub..."
 zig build
+EXPECTED_VERSION=$(./zig-out/bin/nullhub --version 2>&1 | awk '{print $2}' | sed 's/^v//')
 
 # Start server in background
 echo "Starting nullhub on port $PORT..."
@@ -90,7 +91,7 @@ assert_status "GET /health returns 200" "200" GET "$BASE/health"
 echo ""
 echo "=== Status API ==="
 assert_status "GET /api/status returns 200" "200" GET "$BASE/api/status"
-assert_json_field "Status has hub version" "$BASE/api/status" "['hub']['version']" "2026.3.2"
+assert_json_field "Status has hub version" "$BASE/api/status" "['hub']['version']" "$EXPECTED_VERSION"
 
 echo ""
 echo "=== Components API ==="

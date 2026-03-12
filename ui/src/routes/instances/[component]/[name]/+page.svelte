@@ -5,6 +5,9 @@
   import LogViewer from "$lib/components/LogViewer.svelte";
   import ConfigEditor from "$lib/components/ConfigEditor.svelte";
   import ChatPanel from "$lib/components/ChatPanel.svelte";
+  import InstanceHistoryPanel from "$lib/components/InstanceHistoryPanel.svelte";
+  import InstanceMemoryPanel from "$lib/components/InstanceMemoryPanel.svelte";
+  import InstanceSkillsPanel from "$lib/components/InstanceSkillsPanel.svelte";
   import { api } from "$lib/api/client";
 
   let component = $derived($page.params.component);
@@ -65,6 +68,8 @@
   let supportsIntegration = $derived(
     component === "nullboiler" || component === "nulltickets",
   );
+  let supportsAgentData = $derived(component === "nullclaw");
+  let instanceRouteKey = $derived(`${component}/${name}`);
   let queueSummary = $derived(summarizeQueue(integration?.queue));
   let linkedBoilers = $derived(integration?.linked_boilers || []);
   let trackerOptions = $derived(integration?.available_trackers || []);
@@ -367,7 +372,7 @@
     }
   }
 
-  async function refresh(loadProviderHealth = false) {
+  async function refresh(loadProviderHealth = false, forceUsage = false) {
     try {
       const status = await api.getStatus();
       const instances = status.instances || {};
@@ -389,7 +394,7 @@
     if (loadProviderHealth) {
       await refreshProviderHealth(loadedConfig);
     }
-    await refreshUsage();
+    await refreshUsage(forceUsage);
     await refreshIntegration();
     // Fetch installed UI modules (best-effort)
     try {
@@ -424,8 +429,36 @@
     }
   });
 
+  $effect(() => {
+    component;
+    name;
+    if ((activeTab === "history" || activeTab === "memory" || activeTab === "skills") && !supportsAgentData) {
+      activeTab = "overview";
+      return;
+    }
+    const chatVisible =
+      (instance?.launch_mode || "gateway") === "gateway" &&
+      instance?.status === "running" &&
+      chatModuleName !== "";
+    if (activeTab === "chat" && !chatVisible) {
+      activeTab = "overview";
+    }
+  });
+
+  $effect(() => {
+    instanceRouteKey;
+    if (!component || !name) return;
+    instance = null;
+    config = null;
+    providerHealth = null;
+    usageData = null;
+    integration = null;
+    integrationError = null;
+    lastUsageRefreshAt = 0;
+    void refresh(true, true);
+  });
+
   onMount(() => {
-    refresh(true);
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);
   });
@@ -511,6 +544,20 @@
       class:active={activeTab === "overview"}
       onclick={() => (activeTab = "overview")}>Overview</button
     >
+    {#if supportsAgentData}
+      <button
+        class:active={activeTab === "history"}
+        onclick={() => (activeTab = "history")}>History</button
+      >
+      <button
+        class:active={activeTab === "memory"}
+        onclick={() => (activeTab = "memory")}>Memory</button
+      >
+      <button
+        class:active={activeTab === "skills"}
+        onclick={() => (activeTab = "skills")}>Skills</button
+      >
+    {/if}
     <button
       class:active={activeTab === "config"}
       onclick={() => (activeTab = "config")}>Config</button
@@ -878,10 +925,26 @@
           {/if}
         </div>
       </div>
+    {:else if activeTab === "history"}
+      {#key instanceRouteKey}
+        <InstanceHistoryPanel {component} {name} active={activeTab === "history"} />
+      {/key}
+    {:else if activeTab === "memory"}
+      {#key instanceRouteKey}
+        <InstanceMemoryPanel {component} {name} active={activeTab === "memory"} />
+      {/key}
+    {:else if activeTab === "skills"}
+      {#key instanceRouteKey}
+        <InstanceSkillsPanel {component} {name} active={activeTab === "skills"} />
+      {/key}
     {:else if activeTab === "config"}
-      <ConfigEditor {component} {name} onAction={refresh} />
+      {#key instanceRouteKey}
+        <ConfigEditor {component} {name} onAction={refresh} />
+      {/key}
     {:else if activeTab === "logs"}
-      <LogViewer {component} {name} />
+      {#key instanceRouteKey}
+        <LogViewer {component} {name} />
+      {/key}
     {:else if activeTab === "chat"}
       {#if !providerStatus.configured}
         <div class="chat-blocked">
@@ -908,11 +971,14 @@
           Web channel not configured for this instance.
         </div>
       {:else}
-        <ChatPanel
-          port={webPort}
-          moduleName={chatModuleName}
-          moduleVersion={chatModuleVersion}
-        />
+        {#key instanceRouteKey}
+          <ChatPanel
+            port={webPort}
+            moduleName={chatModuleName}
+            moduleVersion={chatModuleVersion}
+            instanceKey={instanceRouteKey}
+          />
+        {/key}
       {/if}
     {/if}
   </div>

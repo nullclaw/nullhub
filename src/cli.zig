@@ -16,6 +16,8 @@ pub const InstanceRef = struct {
 
 pub const StatusOptions = struct {
     instance: ?InstanceRef = null,
+    host: []const u8 = access.default_bind_host,
+    port: u16 = access.default_port,
 };
 
 pub const InstallOptions = struct {
@@ -105,7 +107,7 @@ pub fn parse(args: *std.process.ArgIterator) Command {
     if (std.mem.eql(u8, cmd, "serve")) {
         return parseServe(args);
     }
-    if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version")) {
+    if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
         return .version;
     }
     if (std.mem.eql(u8, cmd, "status")) {
@@ -186,7 +188,13 @@ fn parseServe(args: *std.process.ArgIterator) Command {
 fn parseStatus(args: *std.process.ArgIterator) Command {
     var opts = StatusOptions{};
     while (args.next()) |arg| {
-        if (arg.len > 0 and arg[0] != '-') {
+        if (std.mem.eql(u8, arg, "--host")) {
+            if (args.next()) |val| opts.host = val;
+        } else if (std.mem.eql(u8, arg, "--port")) {
+            if (args.next()) |val| {
+                opts.port = std.fmt.parseInt(u16, val, 10) catch access.default_port;
+            }
+        } else if (arg.len > 0 and arg[0] != '-') {
             opts.instance = parseInstanceRef(arg);
             break;
         }
@@ -305,7 +313,7 @@ pub fn printUsage() void {
         \\  restart <component/name>  Restart an instance
         \\  start-all                 Start all auto-start instances
         \\  stop-all                  Stop all instances
-        \\  status [component/name]   Show instance status
+        \\  status [component/name]   Show hub or instance status
         \\  logs <component/name>     View instance logs
         \\  config <component/name>   View/edit instance config
         \\  wizard <component>        Run setup wizard
@@ -315,7 +323,7 @@ pub fn printUsage() void {
         \\  uninstall <component/name> Remove an instance
         \\  service <install|uninstall|status>  Manage OS service
         \\  add-source <repo-url>     Add custom component source
-        \\  version                   Show version
+        \\  version, -v, --version    Show version
         \\
     , .{});
 }
@@ -391,6 +399,8 @@ test "LogsOptions defaults" {
 test "StatusOptions defaults" {
     const opts = StatusOptions{};
     try std.testing.expect(opts.instance == null);
+    try std.testing.expectEqualStrings(access.default_bind_host, opts.host);
+    try std.testing.expectEqual(access.default_port, opts.port);
 }
 
 test "ConfigOptions defaults" {

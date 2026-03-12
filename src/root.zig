@@ -22,15 +22,19 @@ pub const prereqs = @import("installer/prereqs.zig");
 pub const process = @import("supervisor/process.zig");
 pub const registry = @import("installer/registry.zig");
 pub const server = @import("server.zig");
+pub const service = @import("service.zig");
 pub const settings_api = @import("api/settings.zig");
 pub const state = @import("core/state.zig");
+pub const status_cli = @import("status_cli.zig");
 pub const status_api = @import("api/status.zig");
 pub const ui_modules = @import("installer/ui_modules.zig");
 pub const updates_api = @import("api/updates.zig");
 pub const versions = @import("installer/versions.zig");
+pub const version = @import("version.zig");
 pub const wizard_api = @import("api/wizard.zig");
 pub const providers_api = @import("api/providers.zig");
 pub const channels_api = @import("api/channels.zig");
+pub const usage_api = @import("api/usage.zig");
 
 test {
     _ = auth;
@@ -57,13 +61,17 @@ test {
     _ = process;
     _ = registry;
     _ = server;
+    _ = service;
     _ = settings_api;
     _ = state;
+    _ = status_cli;
     _ = status_api;
     _ = ui_modules;
     _ = updates_api;
     _ = versions;
+    _ = version;
     _ = wizard_api;
     _ = providers_api;
     _ = channels_api;
+    _ = usage_api;
 }

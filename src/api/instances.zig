@@ -607,7 +607,7 @@ pub fn parsePath(target: []const u8) ?ParsedPath {
     return .{ .component = component, .name = name, .action = action };
 }
 
-const UsageLedgerLine = struct {
+pub const UsageLedgerLine = struct {
     ts: i64 = 0,
     provider: ?[]const u8 = null,
     model: ?[]const u8 = null,
@@ -617,7 +617,7 @@ const UsageLedgerLine = struct {
     success: bool = true,
 };
 
-const UsageAggregate = struct {
+pub const UsageAggregate = struct {
     provider: []const u8,
     model: []const u8,
     prompt_tokens: u64 = 0,
@@ -627,16 +627,16 @@ const UsageAggregate = struct {
     last_used: i64 = 0,
 };
 
-const TOKEN_USAGE_LEDGER_FILENAME = "llm_token_usage.jsonl";
-const LEGACY_USAGE_LEDGER_FILENAME = "llm_usage.jsonl";
-const USAGE_CACHE_VERSION: u32 = 1;
-const USAGE_CACHE_MAX_LEDGER_BYTES: usize = 128 * 1024 * 1024;
-const USAGE_HOURLY_RETENTION_SECS: i64 = 14 * 24 * 60 * 60;
-const USAGE_DAILY_RETENTION_SECS: i64 = 730 * 24 * 60 * 60;
-const HOUR_SECS: i64 = 60 * 60;
-const DAY_SECS: i64 = 24 * 60 * 60;
+pub const TOKEN_USAGE_LEDGER_FILENAME = "llm_token_usage.jsonl";
+pub const LEGACY_USAGE_LEDGER_FILENAME = "llm_usage.jsonl";
+pub const USAGE_CACHE_VERSION: u32 = 1;
+pub const USAGE_CACHE_MAX_LEDGER_BYTES: usize = 128 * 1024 * 1024;
+pub const USAGE_HOURLY_RETENTION_SECS: i64 = 14 * 24 * 60 * 60;
+pub const USAGE_DAILY_RETENTION_SECS: i64 = 730 * 24 * 60 * 60;
+pub const HOUR_SECS: i64 = 60 * 60;
+pub const DAY_SECS: i64 = 24 * 60 * 60;
 
-const UsageCacheBucket = struct {
+pub const UsageCacheBucket = struct {
     bucket_start: i64 = 0,
     provider: []const u8 = "",
     model: []const u8 = "",
@@ -647,7 +647,7 @@ const UsageCacheBucket = struct {
     last_used: i64 = 0,
 };
 
-const UsageCacheSnapshot = struct {
+pub const UsageCacheSnapshot = struct {
     version: u32 = USAGE_CACHE_VERSION,
     generated_at: i64 = 0,
     ledger_size: u64 = 0,
@@ -655,7 +655,7 @@ const UsageCacheSnapshot = struct {
     hourly: []UsageCacheBucket = &.{},
     daily: []UsageCacheBucket = &.{},
 
-    fn deinit(self: *UsageCacheSnapshot, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *UsageCacheSnapshot, allocator: std.mem.Allocator) void {
         for (self.hourly) |row| {
             allocator.free(row.provider);
             allocator.free(row.model);
@@ -670,7 +670,7 @@ const UsageCacheSnapshot = struct {
     }
 };
 
-fn emptyUsageCache(now_ts: i64) UsageCacheSnapshot {
+pub fn emptyUsageCache(now_ts: i64) UsageCacheSnapshot {
     return .{ .generated_at = now_ts };
 }
 
@@ -678,11 +678,11 @@ fn bucketFloor(ts: i64, bucket_secs: i64) i64 {
     return @divFloor(ts, bucket_secs) * bucket_secs;
 }
 
-fn isShortUsageWindow(window: []const u8) bool {
+pub fn isShortUsageWindow(window: []const u8) bool {
     return std.mem.eql(u8, window, "24h") or std.mem.eql(u8, window, "7d");
 }
 
-fn resolveUsageLedgerPath(allocator: std.mem.Allocator, inst_dir: []const u8) ![]u8 {
+pub fn resolveUsageLedgerPath(allocator: std.mem.Allocator, inst_dir: []const u8) ![]u8 {
     const preferred = try std.fs.path.join(allocator, &.{ inst_dir, TOKEN_USAGE_LEDGER_FILENAME });
     std.fs.accessAbsolute(preferred, .{}) catch {
         const legacy = try std.fs.path.join(allocator, &.{ inst_dir, LEGACY_USAGE_LEDGER_FILENAME });
@@ -695,7 +695,7 @@ fn resolveUsageLedgerPath(allocator: std.mem.Allocator, inst_dir: []const u8) ![
     return preferred;
 }
 
-fn usageCachePath(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) ![]u8 {
+pub fn usageCachePath(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) ![]u8 {
     const filename = try std.fmt.allocPrint(allocator, "{s}.json", .{name});
     defer allocator.free(filename);
     return std.fs.path.join(allocator, &.{ paths.root, "cache", "usage", component, filename });
@@ -760,7 +760,7 @@ fn parseUsageCacheBuckets(allocator: std.mem.Allocator, value: std.json.Value) !
     return list.toOwnedSlice(allocator);
 }
 
-fn loadUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, now_ts: i64) !?UsageCacheSnapshot {
+pub fn loadUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, now_ts: i64) !?UsageCacheSnapshot {
     const file = std.fs.openFileAbsolute(cache_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
@@ -820,7 +820,7 @@ fn writeUsageCacheBuckets(
     try w.writeByte(']');
 }
 
-fn writeUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, snapshot: *const UsageCacheSnapshot) !void {
+pub fn writeUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, snapshot: *const UsageCacheSnapshot) !void {
     const cache_dir = std.fs.path.dirname(cache_path) orelse return error.InvalidPath;
     std.fs.makeDirAbsolute(cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -897,7 +897,7 @@ fn pruneUsageBuckets(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged
     }
 }
 
-fn rebuildUsageCacheSnapshot(
+pub fn rebuildUsageCacheSnapshot(
     allocator: std.mem.Allocator,
     ledger_path: []const u8,
     ledger_size: u64,
@@ -993,7 +993,7 @@ fn rebuildUsageCacheSnapshot(
     return snapshot;
 }
 
-fn parseUsageWindow(target: []const u8) []const u8 {
+pub fn parseUsageWindow(target: []const u8) []const u8 {
     const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return "24h";
     const query = target[qmark + 1 ..];
     var params = std.mem.splitScalar(u8, query, '&');
@@ -1008,12 +1008,192 @@ fn parseUsageWindow(target: []const u8) []const u8 {
     return "24h";
 }
 
-fn usageWindowMinTs(window: []const u8, now_ts: i64) ?i64 {
+pub fn usageWindowMinTs(window: []const u8, now_ts: i64) ?i64 {
     if (std.mem.eql(u8, window, "all")) return null;
     if (std.mem.eql(u8, window, "24h")) return now_ts - 24 * 60 * 60;
     if (std.mem.eql(u8, window, "7d")) return now_ts - 7 * 24 * 60 * 60;
     if (std.mem.eql(u8, window, "30d")) return now_ts - 30 * 24 * 60 * 60;
     return now_ts - 24 * 60 * 60;
+}
+
+fn queryParamRaw(target: []const u8, key: []const u8) ?[]const u8 {
+    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return null;
+    const query = target[qmark + 1 ..];
+    var params = std.mem.splitScalar(u8, query, '&');
+    while (params.next()) |param| {
+        if (param.len <= key.len) continue;
+        if (!std.mem.startsWith(u8, param, key)) continue;
+        if (param[key.len] != '=') continue;
+        return param[key.len + 1 ..];
+    }
+    return null;
+}
+
+fn decodeQueryValueAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const encoded = try allocator.dupe(u8, raw);
+    for (encoded) |*ch| {
+        if (ch.* == '+') ch.* = ' ';
+    }
+    const decoded = std.Uri.percentDecodeInPlace(encoded);
+    if (decoded.ptr == encoded.ptr and decoded.len == encoded.len) return encoded;
+    const out = try allocator.dupe(u8, decoded);
+    allocator.free(encoded);
+    return out;
+}
+
+fn queryParamValueAlloc(allocator: std.mem.Allocator, target: []const u8, key: []const u8) !?[]u8 {
+    const raw = queryParamRaw(target, key) orelse return null;
+    const decoded = try decodeQueryValueAlloc(allocator, raw);
+    return decoded;
+}
+
+fn queryParamBool(target: []const u8, key: []const u8) bool {
+    const raw = queryParamRaw(target, key) orelse return false;
+    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
+
+fn queryParamUsize(target: []const u8, key: []const u8, default_value: usize) usize {
+    const raw = queryParamRaw(target, key) orelse return default_value;
+    return std.fmt.parseInt(usize, raw, 10) catch default_value;
+}
+
+fn isLikelyJsonPayload(bytes: []const u8) bool {
+    const trimmed = std.mem.trim(u8, bytes, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    return switch (trimmed[0]) {
+        '{', '[', '"', 'n', 't', 'f', '-', '0'...'9' => true,
+        else => false,
+    };
+}
+
+fn firstMeaningfulLine(text: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    if (trimmed.len == 0) return "";
+    if (std.mem.indexOfScalar(u8, trimmed, '\n')) |idx| {
+        return std.mem.trim(u8, trimmed[0..idx], " \t\r");
+    }
+    return trimmed;
+}
+
+fn buildCliJsonError(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    message: []const u8,
+    stderr: ?[]const u8,
+    stdout: ?[]const u8,
+) ![]u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+
+    try buf.appendSlice("{\"error\":\"");
+    try appendEscaped(&buf, code);
+    try buf.appendSlice("\",\"message\":\"");
+    try appendEscaped(&buf, message);
+    try buf.append('"');
+
+    if (stderr) |value| {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n");
+        if (trimmed.len > 0) {
+            try buf.appendSlice(",\"stderr\":\"");
+            try appendEscaped(&buf, trimmed);
+            try buf.append('"');
+        }
+    }
+
+    if (stdout) |value| {
+        const trimmed = std.mem.trim(u8, value, " \t\r\n");
+        if (trimmed.len > 0) {
+            try buf.appendSlice(",\"stdout\":\"");
+            try appendEscaped(&buf, trimmed);
+            try buf.append('"');
+        }
+    }
+
+    try buf.append('}');
+    return try buf.toOwnedSlice();
+}
+
+fn jsonCliError(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    message: []const u8,
+    stderr: ?[]const u8,
+    stdout: ?[]const u8,
+) ApiResponse {
+    const body = buildCliJsonError(allocator, code, message, stderr, stdout) catch return helpers.serverError();
+    return jsonOk(body);
+}
+
+fn runInstanceCliJson(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    args: []const []const u8,
+) ApiResponse {
+    const entry = s.getInstance(component, name) orelse return notFound();
+
+    const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
+    defer allocator.free(bin_path);
+    std.fs.accessAbsolute(bin_path, .{}) catch {
+        return jsonCliError(
+            allocator,
+            "component_binary_missing",
+            "Component binary is missing for this instance version",
+            null,
+            null,
+        );
+    };
+
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
+    defer allocator.free(inst_dir);
+
+    const result = component_cli.runWithComponentHome(
+        allocator,
+        component,
+        bin_path,
+        args,
+        null,
+        inst_dir,
+    ) catch {
+        return jsonCliError(
+            allocator,
+            "cli_exec_failed",
+            "Failed to execute component CLI",
+            null,
+            null,
+        );
+    };
+    defer allocator.free(result.stderr);
+
+    if (result.success and isLikelyJsonPayload(result.stdout)) {
+        return jsonOk(result.stdout);
+    }
+    if (!result.success and isLikelyJsonPayload(result.stdout)) {
+        return jsonOk(result.stdout);
+    }
+
+    defer allocator.free(result.stdout);
+
+    const stderr_line = firstMeaningfulLine(result.stderr);
+    const stdout_line = firstMeaningfulLine(result.stdout);
+    const message = if (stderr_line.len > 0)
+        stderr_line
+    else if (stdout_line.len > 0)
+        stdout_line
+    else if (result.success)
+        "CLI returned a non-JSON response"
+    else
+        "CLI command failed";
+
+    return jsonCliError(
+        allocator,
+        if (result.success) "invalid_cli_response" else "cli_command_failed",
+        message,
+        result.stderr,
+        result.stdout,
+    );
 }
 
 fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]const []const u8 {
@@ -1393,6 +1573,10 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
         } else if (snapshot.ledger_size != ledger_size or snapshot.ledger_mtime_ns != ledger_mtime_ns) {
             should_rebuild = true;
         }
+    } else if (has_cache) {
+        snapshot.deinit(allocator);
+        snapshot = emptyUsageCache(now_ts);
+        has_cache = false;
     }
 
     if (should_rebuild) {
@@ -1514,6 +1698,120 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
     buf.appendSlice("}}") catch return helpers.serverError();
 
     return jsonOk(buf.items);
+}
+
+/// GET /api/instances/{component}/{name}/history?limit=N&offset=N
+/// GET /api/instances/{component}/{name}/history?session_id=...&limit=N&offset=N
+pub fn handleHistory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    const session_id = queryParamValueAlloc(allocator, target, "session_id") catch return helpers.serverError();
+    defer if (session_id) |value| allocator.free(value);
+
+    const limit = queryParamUsize(target, "limit", if (session_id != null) 100 else 50);
+    const offset = queryParamUsize(target, "offset", 0);
+
+    var limit_buf: [32]u8 = undefined;
+    var offset_buf: [32]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
+    const offset_str = std.fmt.bufPrint(&offset_buf, "{d}", .{offset}) catch return helpers.serverError();
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+
+    args.append(allocator, "history") catch return helpers.serverError();
+    if (session_id) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+        args.append(allocator, "show") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+    } else {
+        args.append(allocator, "list") catch return helpers.serverError();
+    }
+    args.append(allocator, "--limit") catch return helpers.serverError();
+    args.append(allocator, limit_str) catch return helpers.serverError();
+    args.append(allocator, "--offset") catch return helpers.serverError();
+    args.append(allocator, offset_str) catch return helpers.serverError();
+    args.append(allocator, "--json") catch return helpers.serverError();
+
+    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+}
+
+/// GET /api/instances/{component}/{name}/memory?stats=1
+/// GET /api/instances/{component}/{name}/memory?key=...
+/// GET /api/instances/{component}/{name}/memory?query=...&limit=N
+/// GET /api/instances/{component}/{name}/memory?category=...&limit=N
+pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    const key = queryParamValueAlloc(allocator, target, "key") catch return helpers.serverError();
+    defer if (key) |value| allocator.free(value);
+    const query = queryParamValueAlloc(allocator, target, "query") catch return helpers.serverError();
+    defer if (query) |value| allocator.free(value);
+    const category = queryParamValueAlloc(allocator, target, "category") catch return helpers.serverError();
+    defer if (category) |value| allocator.free(value);
+
+    const default_limit: usize = if (query != null) 6 else 20;
+    const limit = queryParamUsize(target, "limit", default_limit);
+
+    var limit_buf: [32]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+
+    args.append(allocator, "memory") catch return helpers.serverError();
+    if (queryParamBool(target, "stats")) {
+        args.append(allocator, "stats") catch return helpers.serverError();
+        args.append(allocator, "--json") catch return helpers.serverError();
+        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    }
+
+    if (key) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"key is required\"}");
+        args.append(allocator, "get") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+        args.append(allocator, "--json") catch return helpers.serverError();
+        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    }
+
+    if (query) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"query is required\"}");
+        args.append(allocator, "search") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+        args.append(allocator, "--limit") catch return helpers.serverError();
+        args.append(allocator, limit_str) catch return helpers.serverError();
+        args.append(allocator, "--json") catch return helpers.serverError();
+        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    }
+
+    args.append(allocator, "list") catch return helpers.serverError();
+    if (category) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--category") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    args.append(allocator, "--limit") catch return helpers.serverError();
+    args.append(allocator, limit_str) catch return helpers.serverError();
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+}
+
+/// GET /api/instances/{component}/{name}/skills
+/// GET /api/instances/{component}/{name}/skills?name=...
+pub fn handleSkills(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    const skill_name = queryParamValueAlloc(allocator, target, "name") catch return helpers.serverError();
+    defer if (skill_name) |value| allocator.free(value);
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+
+    args.append(allocator, "skills") catch return helpers.serverError();
+    if (skill_name) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"name is required\"}");
+        args.append(allocator, "info") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+    } else {
+        args.append(allocator, "list") catch return helpers.serverError();
+    }
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
 }
 
 /// DELETE /api/instances/{component}/{name}
@@ -2078,6 +2376,18 @@ pub fn dispatch(
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleUsage(allocator, s, paths, parsed.component, parsed.name, target);
         }
+        if (std.mem.eql(u8, action, "history")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleHistory(allocator, s, paths, parsed.component, parsed.name, target);
+        }
+        if (std.mem.eql(u8, action, "memory")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleMemory(allocator, s, paths, parsed.component, parsed.name, target);
+        }
+        if (std.mem.eql(u8, action, "skills")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleSkills(allocator, s, paths, parsed.component, parsed.name, target);
+        }
         if (std.mem.eql(u8, action, "integration")) {
             if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, mutex, paths, parsed.component, parsed.name);
             if (std.mem.eql(u8, method, "POST")) return handleIntegrationPost(allocator, s, manager, mutex, paths, parsed.component, parsed.name, body);
@@ -2187,6 +2497,25 @@ fn writeTestTrackerWorkflow(
     try file.writeAll("\n");
 }
 
+fn writeTestBinary(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    version: []const u8,
+    script: []const u8,
+) !void {
+    try paths.ensureDirs();
+    const bin_path = try paths.binary(allocator, component, version);
+    defer allocator.free(bin_path);
+
+    const file = try std.fs.createFileAbsolute(bin_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(script);
+    if (comptime std.fs.has_executable_bit) {
+        try file.chmod(0o755);
+    }
+}
+
 test "parsePath: component and name" {
     const p = parsePath("/api/instances/nullclaw/my-agent").?;
     try std.testing.expectEqualStrings("nullclaw", p.component);
@@ -2224,6 +2553,13 @@ test "parseUsageWindow accepts supported values" {
     try std.testing.expectEqualStrings("7d", parseUsageWindow("/api/instances/nullclaw/default/usage?window=7d"));
     try std.testing.expectEqualStrings("30d", parseUsageWindow("/api/instances/nullclaw/default/usage?window=30d"));
     try std.testing.expectEqualStrings("all", parseUsageWindow("/api/instances/nullclaw/default/usage?window=all"));
+}
+
+test "queryParamValueAlloc decodes percent-encoded and plus-separated values" {
+    const allocator = std.testing.allocator;
+    const value = (try queryParamValueAlloc(allocator, "/api/instances/nullclaw/default/memory?query=hello+world%2Fskills", "query")).?;
+    defer allocator.free(value);
+    try std.testing.expectEqualStrings("hello world/skills", value);
 }
 
 test "parseAnyHttpStatusCode extracts first valid http code" {
@@ -2943,6 +3279,104 @@ test "dispatch routes GET usage action" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"rows\":[]") != null);
+}
+
+test "handleHistory returns CLI JSON and passes instance home" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "history" ] && [ "$2" = "list" ]; then
+        \\  if [ -z "$NULLCLAW_HOME" ]; then
+        \\    echo "missing home" >&2
+        \\    exit 1
+        \\  fi
+        \\  printf '%s\n' '{"total":1,"limit":50,"offset":0,"sessions":[{"session_id":"s-1","message_count":2,"first_message_at":"2026-03-10T10:00:00Z","last_message_at":"2026-03-10T10:01:00Z"}]}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "history" ] && [ "$2" = "show" ]; then
+        \\  printf '{"session_id":"%s","total":2,"limit":100,"offset":0,"messages":[{"role":"user","content":"hi","created_at":"2026-03-10T10:00:00Z"}]}\n' "$3"
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.0", script);
+
+    const list_resp = handleHistory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/history?limit=50&offset=0");
+    defer allocator.free(list_resp.body);
+    try std.testing.expectEqualStrings("200 OK", list_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, list_resp.body, "\"session_id\":\"s-1\"") != null);
+
+    const show_resp = handleHistory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/history?session_id=s-1&limit=100&offset=0");
+    defer allocator.free(show_resp.body);
+    try std.testing.expectEqualStrings("200 OK", show_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, show_resp.body, "\"session_id\":\"s-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, show_resp.body, "\"role\":\"user\"") != null);
+}
+
+test "handleMemory wraps legacy CLI failures as JSON errors" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1" });
+    const script =
+        \\#!/bin/sh
+        \\echo "Unknown memory command" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.1", script);
+
+    const resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?stats=1");
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"cli_command_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "Unknown memory command") != null);
+}
+
+test "dispatch routes GET skills action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "list" ]; then
+        \\  printf '%s\n' '[{"name":"checks","version":"1.0.0","description":"Checks","author":"","enabled":true,"always":false,"available":true,"missing_deps":"","path":"/tmp/checks","source":"workspace","instructions_bytes":42}]'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2", script);
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/skills", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"checks\"") != null);
 }
 
 test "dispatch returns null for non-matching path" {
