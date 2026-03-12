@@ -69,6 +69,7 @@
     component === "nullboiler" || component === "nulltickets",
   );
   let supportsAgentData = $derived(component === "nullclaw");
+  let instanceRouteKey = $derived(`${component}/${name}`);
   let queueSummary = $derived(summarizeQueue(integration?.queue));
   let linkedBoilers = $derived(integration?.linked_boilers || []);
   let trackerOptions = $derived(integration?.available_trackers || []);
@@ -371,7 +372,7 @@
     }
   }
 
-  async function refresh(loadProviderHealth = false) {
+  async function refresh(loadProviderHealth = false, forceUsage = false) {
     try {
       const status = await api.getStatus();
       const instances = status.instances || {};
@@ -393,7 +394,7 @@
     if (loadProviderHealth) {
       await refreshProviderHealth(loadedConfig);
     }
-    await refreshUsage();
+    await refreshUsage(forceUsage);
     await refreshIntegration();
     // Fetch installed UI modules (best-effort)
     try {
@@ -444,8 +445,20 @@
     }
   });
 
+  $effect(() => {
+    instanceRouteKey;
+    if (!component || !name) return;
+    instance = null;
+    config = null;
+    providerHealth = null;
+    usageData = null;
+    integration = null;
+    integrationError = null;
+    lastUsageRefreshAt = 0;
+    void refresh(true, true);
+  });
+
   onMount(() => {
-    refresh(true);
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);
   });
@@ -913,15 +926,25 @@
         </div>
       </div>
     {:else if activeTab === "history"}
-      <InstanceHistoryPanel {component} {name} active={activeTab === "history"} />
+      {#key instanceRouteKey}
+        <InstanceHistoryPanel {component} {name} active={activeTab === "history"} />
+      {/key}
     {:else if activeTab === "memory"}
-      <InstanceMemoryPanel {component} {name} active={activeTab === "memory"} />
+      {#key instanceRouteKey}
+        <InstanceMemoryPanel {component} {name} active={activeTab === "memory"} />
+      {/key}
     {:else if activeTab === "skills"}
-      <InstanceSkillsPanel {component} {name} active={activeTab === "skills"} />
+      {#key instanceRouteKey}
+        <InstanceSkillsPanel {component} {name} active={activeTab === "skills"} />
+      {/key}
     {:else if activeTab === "config"}
-      <ConfigEditor {component} {name} onAction={refresh} />
+      {#key instanceRouteKey}
+        <ConfigEditor {component} {name} onAction={refresh} />
+      {/key}
     {:else if activeTab === "logs"}
-      <LogViewer {component} {name} />
+      {#key instanceRouteKey}
+        <LogViewer {component} {name} />
+      {/key}
     {:else if activeTab === "chat"}
       {#if !providerStatus.configured}
         <div class="chat-blocked">
@@ -948,11 +971,14 @@
           Web channel not configured for this instance.
         </div>
       {:else}
-        <ChatPanel
-          port={webPort}
-          moduleName={chatModuleName}
-          moduleVersion={chatModuleVersion}
-        />
+        {#key instanceRouteKey}
+          <ChatPanel
+            port={webPort}
+            moduleName={chatModuleName}
+            moduleVersion={chatModuleVersion}
+            instanceKey={instanceRouteKey}
+          />
+        {/key}
       {/if}
     {/if}
   </div>
