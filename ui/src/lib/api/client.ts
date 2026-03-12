@@ -86,7 +86,8 @@ export const api = {
     request<any>(`/instances/${c}/${n}/logs?lines=${lines}`),
   clearLogs: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/logs`, { method: 'DELETE' }),
-  getUpdates: () => request<any>('/updates'),
+  getUpdates: (component?: string, instance?: string) =>
+    request<any>(withQuery('/updates', { component, instance })),
   getSettings: () => request<any>('/settings'),
   putSettings: (settings: any) =>
     request<any>('/settings', { method: 'PUT', body: JSON.stringify(settings) }),

@@ -33,6 +33,9 @@
   let trackerClaimRole = $state("coder");
   let trackerSuccessTrigger = $state("complete");
   let trackerConcurrency = $state("1");
+  let updateInfo = $state<{ latest_version: string; update_available: boolean } | null>(null);
+  let updating = $state(false);
+  let actionBusy = $derived(loading || updating);
 
   let modelName = $derived(extractModel(config));
   let webPort = $derived(extractWebPort(config));
@@ -455,7 +458,10 @@
     integration = null;
     integrationError = null;
     lastUsageRefreshAt = 0;
+    updateInfo = null;
+    updating = false;
     void refresh(true, true);
+    void checkForUpdate();
   });
 
   onMount(() => {
@@ -521,6 +527,34 @@
     });
     await refresh();
   }
+  async function checkForUpdate() {
+    if (!component || !name) return;
+    try {
+      const res = await api.getUpdates(component, name);
+      const match = (res.updates || [])[0];
+      if (match) {
+        updateInfo = { latest_version: match.latest_version, update_available: match.update_available };
+      } else {
+        updateInfo = null;
+      }
+    } catch { /* ignore */ }
+  }
+  async function applyUpdate() {
+    if (!confirm("Update this instance to the latest version?")) return;
+    loading = true;
+    updating = true;
+    try {
+      await api.applyUpdate(component, name);
+      updateInfo = null;
+      await refresh(true, true);
+      await checkForUpdate();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      updating = false;
+      loading = false;
+    }
+  }
 </script>
 
 <div class="instance-detail">
@@ -530,10 +564,15 @@
       <span class="component-tag">{component}</span>
     </div>
     <div class="actions">
-      <button class="btn" onclick={start} disabled={loading}>Start</button>
-      <button class="btn" onclick={stop} disabled={loading}>Stop</button>
-      <button class="btn" onclick={restart} disabled={loading}>Restart</button>
-      <button class="btn danger" onclick={remove} disabled={loading}
+      <button class="btn" onclick={start} disabled={actionBusy}>Start</button>
+      <button class="btn" onclick={stop} disabled={actionBusy}>Stop</button>
+      <button class="btn" onclick={restart} disabled={actionBusy}>Restart</button>
+      {#if updateInfo?.update_available}
+        <button class="btn update" onclick={applyUpdate} disabled={actionBusy}
+          >{updating ? "Updating..." : `Update to ${updateInfo.latest_version}`}</button
+        >
+      {/if}
+      <button class="btn danger" onclick={remove} disabled={actionBusy}
         >Delete</button
       >
     </div>
@@ -1047,6 +1086,16 @@
     cursor: not-allowed;
     box-shadow: none;
     text-shadow: none;
+  }
+  .btn.update {
+    color: var(--success, #0f0);
+    border-color: color-mix(in srgb, var(--success, #0f0) 50%, transparent);
+    text-shadow: 0 0 5px var(--success, #0f0);
+  }
+  .btn.update:hover {
+    background: color-mix(in srgb, var(--success, #0f0) 15%, transparent);
+    border-color: var(--success, #0f0);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--success, #0f0) 50%, transparent);
   }
   .btn.danger {
     color: var(--error);

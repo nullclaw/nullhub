@@ -410,8 +410,8 @@ pub const Server = struct {
                     return jsonResponse("{\"port\":3000}");
                 }
             }
-            if (std.mem.eql(u8, target, "/api/updates")) {
-                const ur = updates_api.handleCheckUpdates(allocator, self.state);
+            if (std.mem.eql(u8, target, "/api/updates") or std.mem.startsWith(u8, target, "/api/updates?")) {
+                const ur = updates_api.handleCheckUpdatesTarget(allocator, self.state, target);
                 return .{ .status = ur.status, .content_type = ur.content_type, .body = ur.body };
             }
             if (std.mem.eql(u8, target, "/api/ui-modules")) {
@@ -1347,6 +1347,17 @@ test "route GET /api/updates returns empty updates" {
     defer ctx.deinit(std.testing.allocator);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/api/updates", "");
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"updates\":[]}", resp.body);
+}
+
+test "route GET /api/updates with filters returns empty updates" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api/updates?component=nullclaw&instance=my-agent", "");
     defer std.testing.allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("application/json", resp.content_type);

@@ -21,13 +21,31 @@ pub const ParsedUpdatePath = struct {
     name: []const u8,
 };
 
+const UpdateFilters = struct {
+    component: ?[]u8 = null,
+    instance: ?[]u8 = null,
+
+    fn deinit(self: UpdateFilters, allocator: std.mem.Allocator) void {
+        if (self.component) |component| allocator.free(component);
+        if (self.instance) |instance| allocator.free(instance);
+    }
+};
+
+const CachedLatestInfo = struct {
+    component: []const u8,
+    latest_version: []const u8,
+    owns_latest_version: bool,
+    has_platform_asset: bool,
+};
+
 /// Parse `/api/instances/{component}/{name}/update` from a request target.
 /// Returns `null` if the path does not match.
 pub fn parseUpdatePath(target: []const u8) ?ParsedUpdatePath {
     const prefix = "/api/instances/";
-    if (!std.mem.startsWith(u8, target, prefix)) return null;
+    const clean = stripQuery(target);
+    if (!std.mem.startsWith(u8, clean, prefix)) return null;
 
-    const rest = target[prefix.len..];
+    const rest = clean[prefix.len..];
     if (rest.len == 0) return null;
 
     var it = std.mem.splitScalar(u8, rest, '/');
@@ -46,6 +64,58 @@ pub fn parseUpdatePath(target: []const u8) ?ParsedUpdatePath {
     return .{ .component = component, .name = name };
 }
 
+fn stripQuery(target: []const u8) []const u8 {
+    return if (std.mem.indexOfScalar(u8, target, '?')) |qmark| target[0..qmark] else target;
+}
+
+fn queryParamRaw(target: []const u8, key: []const u8) ?[]const u8 {
+    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return null;
+    const query = target[qmark + 1 ..];
+
+    var it = std.mem.splitScalar(u8, query, '&');
+    while (it.next()) |pair| {
+        if (pair.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+        if (!std.mem.eql(u8, pair[0..eq], key)) continue;
+        return pair[eq + 1 ..];
+    }
+
+    return null;
+}
+
+fn decodeQueryValueAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const encoded = try allocator.dupe(u8, raw);
+    for (encoded) |*ch| {
+        if (ch.* == '+') ch.* = ' ';
+    }
+    const decoded = std.Uri.percentDecodeInPlace(encoded);
+    if (decoded.ptr == encoded.ptr and decoded.len == encoded.len) return encoded;
+    const out = try allocator.dupe(u8, decoded);
+    allocator.free(encoded);
+    return out;
+}
+
+fn queryParamValueAlloc(allocator: std.mem.Allocator, target: []const u8, key: []const u8) !?[]u8 {
+    const raw = queryParamRaw(target, key) orelse return null;
+    return try decodeQueryValueAlloc(allocator, raw);
+}
+
+fn parseUpdateFiltersAlloc(allocator: std.mem.Allocator, target: []const u8) !UpdateFilters {
+    return .{
+        .component = try queryParamValueAlloc(allocator, target, "component"),
+        .instance = try queryParamValueAlloc(allocator, target, "instance"),
+    };
+}
+
+fn unknownLatestInfo(component: []const u8) CachedLatestInfo {
+    return .{
+        .component = component,
+        .latest_version = "unknown",
+        .owns_latest_version = false,
+        .has_platform_asset = false,
+    };
+}
+
 fn stripV(v: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, v, "v")) v[1..] else v;
 }
@@ -54,14 +124,50 @@ fn versionsEqual(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, stripV(a), stripV(b));
 }
 
-fn fetchLatestTagForComponent(allocator: std.mem.Allocator, component: []const u8) ?[]u8 {
-    if (builtin.is_test) return null;
+fn matchesFilters(filters: UpdateFilters, component: []const u8, instance: []const u8) bool {
+    if (filters.component) |filtered_component| {
+        if (!std.mem.eql(u8, filtered_component, component)) return false;
+    }
+    if (filters.instance) |filtered_instance| {
+        if (!std.mem.eql(u8, filtered_instance, instance)) return false;
+    }
+    return true;
+}
 
-    const known = registry.findKnownComponent(component) orelse return null;
-    var release = registry.fetchLatestRelease(allocator, known.repo) catch return null;
+fn fetchLatestInfoForComponent(allocator: std.mem.Allocator, component: []const u8) CachedLatestInfo {
+    if (builtin.is_test) return unknownLatestInfo(component);
+
+    const known = registry.findKnownComponent(component) orelse return unknownLatestInfo(component);
+    var release = registry.fetchLatestRelease(allocator, known.repo) catch return unknownLatestInfo(component);
     defer release.deinit();
 
-    return allocator.dupe(u8, release.value.tag_name) catch null;
+    const latest_version = allocator.dupe(u8, release.value.tag_name) catch return unknownLatestInfo(component);
+
+    return .{
+        .component = component,
+        .latest_version = latest_version,
+        .owns_latest_version = true,
+        .has_platform_asset = registry.findAssetForComponentPlatform(
+            allocator,
+            release.value,
+            component,
+            comptime platform.detect().toString(),
+        ) != null,
+    };
+}
+
+fn getOrFetchCachedLatestInfo(
+    allocator: std.mem.Allocator,
+    cache: *std.ArrayListUnmanaged(CachedLatestInfo),
+    component: []const u8,
+) !CachedLatestInfo {
+    for (cache.items) |entry| {
+        if (std.mem.eql(u8, entry.component, component)) return entry;
+    }
+
+    const fetched = fetchLatestInfoForComponent(allocator, component);
+    try cache.append(allocator, fetched);
+    return fetched;
 }
 
 fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]const []const u8 {
@@ -80,14 +186,33 @@ fn splitLaunchCommand(allocator: std.mem.Allocator, launch_cmd: []const u8) ![]c
 
 /// GET /api/updates — check for updates across all installed instances.
 pub fn handleCheckUpdates(allocator: std.mem.Allocator, s: *state_mod.State) ApiResponse {
+    return handleCheckUpdatesTarget(allocator, s, "/api/updates");
+}
+
+pub fn handleCheckUpdatesTarget(allocator: std.mem.Allocator, s: *state_mod.State, target: []const u8) ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
 
-    buildUpdatesJson(allocator, &buf, s) catch return serverError();
+    buildUpdatesJson(allocator, &buf, s, target) catch return serverError();
 
     return jsonOk(buf.items);
 }
 
-fn buildUpdatesJson(allocator: std.mem.Allocator, buf: *std.array_list.Managed(u8), s: *state_mod.State) !void {
+fn buildUpdatesJson(
+    allocator: std.mem.Allocator,
+    buf: *std.array_list.Managed(u8),
+    s: *state_mod.State,
+    target: []const u8,
+) !void {
+    const filters = try parseUpdateFiltersAlloc(allocator, target);
+    defer filters.deinit(allocator);
+    var latest_cache: std.ArrayListUnmanaged(CachedLatestInfo) = .empty;
+    defer {
+        for (latest_cache.items) |entry| {
+            if (entry.owns_latest_version) allocator.free(entry.latest_version);
+        }
+        latest_cache.deinit(allocator);
+    }
+
     try buf.appendSlice("{\"updates\":[");
 
     var first = true;
@@ -95,18 +220,13 @@ fn buildUpdatesJson(allocator: std.mem.Allocator, buf: *std.array_list.Managed(u
     while (comp_it.next()) |comp_entry| {
         var inst_it = comp_entry.value_ptr.iterator();
         while (inst_it.next()) |inst_entry| {
+            if (!matchesFilters(filters, comp_entry.key_ptr.*, inst_entry.key_ptr.*)) continue;
             if (!first) try buf.append(',');
             first = false;
 
             const current_version = inst_entry.value_ptr.version;
-            const latest_owned = fetchLatestTagForComponent(allocator, comp_entry.key_ptr.*);
-            defer if (latest_owned) |v| allocator.free(v);
-
-            const latest_version = if (latest_owned) |v| v else "unknown";
-            const update_available = if (latest_owned) |v|
-                !versionsEqual(current_version, v)
-            else
-                false;
+            const latest_info = try getOrFetchCachedLatestInfo(allocator, &latest_cache, comp_entry.key_ptr.*);
+            const update_available = latest_info.has_platform_asset and !versionsEqual(current_version, latest_info.latest_version);
 
             try buf.appendSlice("{\"component\":\"");
             try appendEscaped(buf, comp_entry.key_ptr.*);
@@ -115,7 +235,7 @@ fn buildUpdatesJson(allocator: std.mem.Allocator, buf: *std.array_list.Managed(u
             try buf.appendSlice("\",\"current_version\":\"");
             try appendEscaped(buf, current_version);
             try buf.appendSlice("\",\"latest_version\":\"");
-            try appendEscaped(buf, latest_version);
+            try appendEscaped(buf, latest_info.latest_version);
             try buf.appendSlice("\",\"update_available\":");
             try buf.appendSlice(if (update_available) "true" else "false");
             try buf.appendSlice("}");
@@ -341,6 +461,61 @@ test "handleCheckUpdates with instances returns correct structure" {
     // In unit tests network is disabled, so this remains unknown.
     try std.testing.expectEqualStrings("unknown", parsed.value.updates[0].latest_version);
     try std.testing.expect(parsed.value.updates[0].update_available == false);
+}
+
+test "parseUpdateFilters extracts component and instance filters" {
+    const allocator = std.testing.allocator;
+    const filters = try parseUpdateFiltersAlloc(allocator, "/api/updates?component=nullclaw&instance=my-agent");
+    defer filters.deinit(allocator);
+    try std.testing.expect(filters.component != null);
+    try std.testing.expect(filters.instance != null);
+    try std.testing.expectEqualStrings("nullclaw", filters.component.?);
+    try std.testing.expectEqualStrings("my-agent", filters.instance.?);
+}
+
+test "parseUpdateFilters decodes percent-encoded values" {
+    const allocator = std.testing.allocator;
+    const filters = try parseUpdateFiltersAlloc(
+        allocator,
+        "/api/updates?component=nullclaw&instance=my+agent%2Fdev",
+    );
+    defer filters.deinit(allocator);
+    try std.testing.expect(filters.instance != null);
+    try std.testing.expectEqualStrings("my agent/dev", filters.instance.?);
+}
+
+test "handleCheckUpdatesTarget filters updates by component and instance" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-updates-api-filtered.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = true });
+    try s.addInstance("nullclaw", "other-agent", .{ .version = "2026.3.1", .auto_start = false });
+    try s.addInstance("nulltickets", "tracker", .{ .version = "2026.3.1", .auto_start = false });
+
+    const resp = handleCheckUpdatesTarget(
+        allocator,
+        &s,
+        "/api/updates?component=nullclaw&instance=my-agent",
+    );
+    defer allocator.free(resp.body);
+
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            updates: []const struct {
+                component: []const u8,
+                instance: []const u8,
+            },
+        },
+        allocator,
+        resp.body,
+        .{ .allocate = .alloc_always },
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.updates.len);
+    try std.testing.expectEqualStrings("nullclaw", parsed.value.updates[0].component);
+    try std.testing.expectEqualStrings("my-agent", parsed.value.updates[0].instance);
 }
 
 test "handleApplyUpdate returns 404 for missing instance" {
