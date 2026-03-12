@@ -50,6 +50,7 @@
   const selectedSession = $derived(
     sessions.find((session) => session.session_id === selectedSessionId) || null,
   );
+  const visibleMessages = $derived([...messages].reverse());
   const canLoadOlder = $derived(selectedSessionId !== "" && messagesOffset > 0 && !olderMessagesLoading);
   const canShowNewerSessions = $derived(sessionsOffset > 0 && !sessionsLoading);
   const canShowOlderSessions = $derived(sessionsOffset + sessions.length < sessionsTotal && !sessionsLoading);
@@ -344,7 +345,7 @@
             <div class="panel-state">No messages found for this session.</div>
           {:else}
             <div class="message-list">
-              {#each messages as message}
+              {#each visibleMessages as message}
                 <article class={`message-card ${messageClass(message.role)}`}>
                   <header>
                     <span class="message-role">{message.role}</span>

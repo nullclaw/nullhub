@@ -169,7 +169,7 @@
     gap: 0.5rem;
     font-size: 0.8125rem;
     padding: 0.5rem;
-    background: rgba(0, 0, 0, 0.2);
+    background: color-mix(in srgb, var(--bg-surface) 84%, var(--accent) 8%);
     border: 1px solid var(--border);
     border-radius: 2px;
   }

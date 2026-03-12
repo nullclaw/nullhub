@@ -3,7 +3,6 @@
   import { browser } from "$app/environment";
   import { api } from "$lib/api/client";
 
-  let { title = "NullHub" } = $props();
   let hubOk = $state(true);
 
   let currentTheme = $state("theme-matrix");
@@ -65,9 +64,6 @@
 </script>
 
 <header class="topbar">
-  <a href="/" class="brand-link" aria-label="Go to dashboard">
-    <h1>{title}</h1>
-  </a>
   <div class="topbar-right">
     <div class="theme-controls">
       <label class="effect-toggle" title="Toggle CRT Effects">
@@ -95,30 +91,12 @@
   .topbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     padding: 0.875rem 1.5rem;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     backdrop-filter: blur(4px);
-  }
-
-  .topbar h1 {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    text-shadow: var(--text-glow);
-  }
-
-  .brand-link {
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .brand-link:hover {
-    text-decoration: none;
   }
 
   .topbar-right {
