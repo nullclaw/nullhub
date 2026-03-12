@@ -18,9 +18,10 @@
     { value: "ollama", label: "Ollama (local)" },
     { value: "lm-studio", label: "LM Studio (local)" },
     { value: "claude-cli", label: "Claude CLI (local)" },
-    { value: "codex-cli", label: "Codex CLI (local)" },
+    { value: "codex-cli", label: "Codex CLI (local CLI)" },
+    { value: "openai-codex", label: "OpenAI Codex (ChatGPT login)" },
   ];
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli"];
+  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
 
   let providers = $state<any[]>([]);
   let loading = $state(true);

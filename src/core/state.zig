@@ -74,6 +74,7 @@ fn providerLabel(provider: []const u8) []const u8 {
         .{ "lm-studio", "LM Studio" },
         .{ "claude-cli", "Claude CLI" },
         .{ "codex-cli", "Codex CLI" },
+        .{ "openai-codex", "OpenAI Codex" },
         .{ "together", "Together" },
         .{ "fireworks", "Fireworks" },
         .{ "perplexity", "Perplexity" },
