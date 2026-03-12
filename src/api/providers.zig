@@ -87,6 +87,7 @@ pub fn handleCreate(
 
     // Validate via probe
     const probe_result = probeProvider(allocator, component_name, bin_path, parsed.value.provider, parsed.value.api_key, parsed.value.model, "");
+    defer probe_result.deinit(allocator);
     if (!probe_result.live_ok) {
         var buf = std.array_list.Managed(u8).init(allocator);
         errdefer buf.deinit();
@@ -160,6 +161,7 @@ pub fn handleUpdate(
         const effective_model = parsed.value.model orelse existing.model;
 
         const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, effective_key, effective_model, "");
+        defer probe_result.deinit(allocator);
         if (!probe_result.live_ok) {
             var buf = std.array_list.Managed(u8).init(allocator);
             errdefer buf.deinit();
@@ -220,6 +222,7 @@ pub fn handleValidate(
     defer allocator.free(bin_path);
 
     const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, existing.api_key, existing.model, "");
+    defer probe_result.deinit(allocator);
 
     if (probe_result.live_ok) {
         const now = try nowIso8601(allocator);

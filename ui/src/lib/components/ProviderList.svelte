@@ -10,7 +10,7 @@
     validationResults = [] as Array<{ provider: string; live_ok: boolean; reason: string }>,
   } = $props();
 
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli"];
+  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
   const MODEL_RESULTS_LIMIT = 80;
 
   type ProviderOption = {
@@ -289,6 +289,23 @@
     if (!query) return models.length;
     return models.filter((model) => model.toLowerCase().includes(query)).length;
   }
+
+  function modelPlaceholder(entry: ProviderEntry) {
+    if (entry.provider === "codex-cli" || entry.provider === "openai-codex") {
+      return "e.g. gpt-5.4";
+    }
+    return "e.g. anthropic/claude-sonnet-4";
+  }
+
+  function modelFieldHint(entry: ProviderEntry) {
+    if (entry.provider === "codex-cli") {
+      return "Loads models from your local Codex cache in ~/.codex/models_cache.json.";
+    }
+    if (entry.provider === "openai-codex") {
+      return "Uses ChatGPT/Codex auth from ~/.codex/auth.json. No API key required here.";
+    }
+    return "Click to load models, then filter as you type.";
+  }
 </script>
 
 <div class="provider-list">
@@ -361,7 +378,7 @@
             oninput={(e) => handleModelInput(i, e.currentTarget.value)}
             onfocus={() => openModelDropdown(i)}
             onblur={() => scheduleModelDropdownClose(i)}
-            placeholder="e.g. anthropic/claude-sonnet-4"
+            placeholder={modelPlaceholder(entry)}
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
@@ -406,7 +423,7 @@
             </div>
           {/if}
         </div>
-        <div class="provider-field-hint">Click to load models, then filter as you type.</div>
+        <div class="provider-field-hint">{modelFieldHint(entry)}</div>
       </div>
     </div>
   {/each}

@@ -16,7 +16,15 @@ const integration_mod = @import("../core/integration.zig");
 const providers_api = @import("providers.zig");
 
 const appendEscaped = helpers.appendEscaped;
-pub const ProviderProbeResult = struct { live_ok: bool, reason: []const u8 };
+pub const ProviderProbeResult = struct {
+    live_ok: bool,
+    reason: []const u8,
+    owned_reason: ?[]u8 = null,
+
+    pub fn deinit(self: ProviderProbeResult, allocator: std.mem.Allocator) void {
+        if (self.owned_reason) |reason| allocator.free(reason);
+    }
+};
 
 // ─── Path Parsing ────────────────────────────────────────────────────────────
 
@@ -294,6 +302,9 @@ fn augmentWizardManifest(
     state: *state_mod.State,
     paths: paths_mod.Paths,
 ) ?[]const u8 {
+    if (std.mem.eql(u8, component_name, "nullclaw")) {
+        return null;
+    }
     if (!std.mem.eql(u8, component_name, "nullboiler")) return null;
 
     const trackers = integration_mod.listNullTickets(allocator, state, paths) catch return null;
@@ -460,11 +471,11 @@ fn findInstalledComponentBinary(allocator: std.mem.Allocator, component: []const
 }
 
 fn findOrFetchComponentBinary(allocator: std.mem.Allocator, component: []const u8, paths: paths_mod.Paths) ?[]const u8 {
-    if (findInstalledComponentBinary(allocator, component, paths)) |bin| {
-        return bin;
-    }
     if (builtin.is_test) return null;
     if (local_binary.find(allocator, component)) |bin| {
+        return bin;
+    }
+    if (findInstalledComponentBinary(allocator, component, paths)) |bin| {
         return bin;
     }
     return fetchLatestComponentBinary(allocator, component, paths);
@@ -593,10 +604,6 @@ pub fn handleValidateProviders(
 ) ?[]const u8 {
     if (registry.findKnownComponent(component_name) == null) return null;
 
-    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse
-        return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
-    defer allocator.free(bin_path);
-
     const parsed = std.json.parseFromSlice(struct {
         providers: []const struct {
             provider: []const u8,
@@ -609,6 +616,10 @@ pub fn handleValidateProviders(
         .ignore_unknown_fields = true,
     }) catch return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
     defer parsed.deinit();
+
+    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse
+        return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
+    defer allocator.free(bin_path);
 
     // Create temp directory for probes
     const timestamp = @abs(std.time.milliTimestamp());
@@ -639,6 +650,7 @@ pub fn handleValidateProviders(
         };
 
         const result = probeProviderViaComponentBinary(allocator, component_name, bin_path, tmp_dir, prov.provider, prov.model);
+        defer result.deinit(allocator);
         appendProviderResult(&buf, prov.provider, result.live_ok, result.reason) catch return null;
         probe_results.append(.{ .live_ok = result.live_ok }) catch return null;
     }
@@ -759,8 +771,13 @@ fn probeProviderViaComponentBinary(
     };
     defer probe_parsed.deinit();
 
-    const reason = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "auth_check_failed");
-    return .{ .live_ok = probe_parsed.value.live_ok, .reason = reason };
+    const reason_src = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "auth_check_failed");
+    const owned_reason = allocator.dupe(u8, reason_src) catch null;
+    return .{
+        .live_ok = probe_parsed.value.live_ok,
+        .reason = owned_reason orelse reason_src,
+        .owned_reason = owned_reason,
+    };
 }
 
 fn appendProviderResult(buf: *std.array_list.Managed(u8), provider: []const u8, live_ok: bool, reason: []const u8) !void {
@@ -868,7 +885,10 @@ pub fn handleValidateChannels(
             };
             defer probe_parsed.deinit();
 
-            const reason = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "probe_failed");
+            const reason_src = probe_parsed.value.reason orelse (if (probe_parsed.value.live_ok) "ok" else "probe_failed");
+            const owned_reason = allocator.dupe(u8, reason_src) catch null;
+            defer if (owned_reason) |reason| allocator.free(reason);
+            const reason = owned_reason orelse reason_src;
             if (probe_parsed.value.live_ok) {
                 validated_pairs.append(.{ .channel_type = channel_type, .account = account_name }) catch {};
             }
