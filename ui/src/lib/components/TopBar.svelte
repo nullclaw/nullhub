@@ -40,6 +40,7 @@
       const body = document.body;
       body.classList.remove(
         "theme-matrix",
+        "theme-8bit-lobster",
         "theme-dracula",
         "theme-synthwave",
         "theme-amber",
@@ -66,6 +67,7 @@
       </label>
       <select bind:value={currentTheme} class="theme-select" title="Theme">
         <option value="theme-matrix">Matrix</option>
+        <option value="theme-8bit-lobster">Lobster</option>
         <option value="theme-dracula">Dracula</option>
         <option value="theme-synthwave">Synthwave</option>
         <option value="theme-amber">Amber</option>
@@ -159,7 +161,7 @@
   .theme-select {
     background: color-mix(in srgb, var(--bg-surface) 50%, transparent);
     border: 1px solid var(--border);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     padding: 0.25rem 0.5rem;
     color: var(--accent);
     font-family: var(--font-mono);
