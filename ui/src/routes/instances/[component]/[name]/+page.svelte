@@ -1340,7 +1340,7 @@
     width: 36px;
     height: 20px;
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 2px;
     transition: all 0.2s ease;
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
@@ -1357,7 +1357,6 @@
   }
   .toggle-btn.on .toggle-track {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-color: var(--accent);
     box-shadow: inset 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
   }
   .toggle-btn.on .toggle-thumb {

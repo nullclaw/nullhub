@@ -412,11 +412,13 @@
     box-shadow: 0 0 6px var(--warning, #ca0);
   }
 
-  :global(body.theme-8bit-lobster) .status-dot {
+  :global(body.theme-8bit-lobster) .status-dot,
+  :global(body.theme-8bit-lobster-light) .status-dot {
     border-radius: var(--radius) !important;
   }
 
-  :global(body.theme-8bit-lobster) .status-dot.validated {
+  :global(body.theme-8bit-lobster) .status-dot.validated,
+  :global(body.theme-8bit-lobster-light) .status-dot.validated {
     background: var(--success) !important;
     box-shadow: 0 0 8px var(--success) !important;
   }

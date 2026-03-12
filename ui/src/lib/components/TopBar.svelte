@@ -42,6 +42,7 @@
       const themeClasses = [
         "theme-matrix",
         "theme-8bit-lobster",
+        "theme-8bit-lobster-light",
         "theme-dracula",
         "theme-synthwave",
         "theme-amber",
@@ -76,6 +77,7 @@
       <select bind:value={currentTheme} class="theme-select" title="Theme">
         <option value="theme-matrix">Matrix</option>
         <option value="theme-8bit-lobster">Lobster</option>
+        <option value="theme-8bit-lobster-light">Lobster Light</option>
         <option value="theme-dracula">Dracula</option>
         <option value="theme-synthwave">Synthwave</option>
         <option value="theme-amber">Amber</option>
@@ -133,7 +135,8 @@
     border-right: 1px dashed var(--border);
   }
 
-  :global(body.theme-8bit-lobster) .theme-controls {
+  :global(body.theme-8bit-lobster) .theme-controls,
+  :global(body.theme-8bit-lobster-light) .theme-controls {
     border-right-style: solid;
   }
 

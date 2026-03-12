@@ -128,7 +128,8 @@
     border-radius: var(--radius);
   }
 
-  :global(body.theme-8bit-lobster) .empty-state {
+  :global(body.theme-8bit-lobster) .empty-state,
+  :global(body.theme-8bit-lobster-light) .empty-state {
     border-style: solid;
   }
   .empty-state p {
@@ -151,7 +152,8 @@
     text-shadow: var(--text-glow);
   }
 
-  :global(body.theme-8bit-lobster:not(.effects-disabled)) .empty-state .btn {
+  :global(body.theme-8bit-lobster:not(.effects-disabled)) .empty-state .btn,
+  :global(body.theme-8bit-lobster-light:not(.effects-disabled)) .empty-state .btn {
     animation: lobsterPulse 1.5s steps(6, end) infinite;
   }
 

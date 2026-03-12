@@ -80,6 +80,31 @@ body.theme-light {
   --text-glow: none;
 }
 
+html.theme-8bit-lobster-light,
+body.theme-8bit-lobster-light {
+  /* Bright lobster palette on a light CRT paper base */
+  --bg: #f8eee7;
+  --bg-surface: rgba(255, 247, 242, 0.88);
+  --bg-hover: rgba(255, 227, 220, 0.95);
+  --fg: #341313;
+  --fg-dim: #8e5454;
+  --accent: #ff3333;
+  --accent-dim: #cc0000;
+  --error: #ff0000;
+  --success: #4caf50;
+  --warning: #c57a00;
+  --fx-accent: #4caf50;
+  --fx-accent-glow: rgba(76, 175, 80, 0.45);
+  --border: rgba(255, 51, 51, 0.28);
+  --border-glow: rgba(255, 51, 51, 0.35);
+  --text-glow: 0 0 4px rgba(255, 51, 51, 0.18);
+  --font-mono: 'VT323', 'JetBrains Mono', 'Fira Code', monospace;
+  --ui-font-size: 19px;
+  --ui-line-height: 1.55;
+  --radius: 0px;
+  --radius-sm: 0px;
+}
+
 html.theme-8bit-lobster,
 body.theme-8bit-lobster {
   /* Really blocky, vivid, dark pixel theme */
@@ -170,6 +195,14 @@ body:not(.effects-disabled)::before {
   will-change: background-position;
 }
 
+body.theme-8bit-lobster-light:not(.effects-disabled)::before {
+  background: linear-gradient(
+    rgba(255, 255, 255, 0) 50%,
+    rgba(120, 20, 20, 0.08) 50%
+  );
+  background-size: 100% 4px;
+}
+
 /* CRT Flicker/Pulse */
 @keyframes crt-scanline-drift {
   0% {
@@ -213,6 +246,15 @@ body:not(.effects-disabled)::after {
   animation: crt-pulse 4s infinite linear;
 }
 
+body.theme-8bit-lobster-light:not(.effects-disabled)::after {
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(160, 48, 48, 0.08) 55%,
+    rgba(80, 10, 10, 0.18) 120%
+  );
+}
+
 /* Base Inputs */
 input,
 button,
@@ -252,13 +294,15 @@ button:hover:not(:disabled) {
   text-shadow: 0 0 8px var(--accent);
 }
 
-body.theme-8bit-lobster button:hover:not(:disabled) {
+body.theme-8bit-lobster button:hover:not(:disabled),
+body.theme-8bit-lobster-light button:hover:not(:disabled) {
   /* Flatten hover effect, no jumping shadow */
   box-shadow: 0 0 8px var(--border-glow);
   transform: none;
 }
 
-body.theme-8bit-lobster .status-dot {
+body.theme-8bit-lobster .status-dot,
+body.theme-8bit-lobster-light .status-dot {
   border-radius: var(--radius) !important;
 }
 
@@ -266,7 +310,15 @@ body.theme-8bit-lobster .status-dot {
 body.theme-8bit-lobster .status-dot.running,
 body.theme-8bit-lobster .status-dot.ok,
 body.theme-8bit-lobster .status-dot.validated,
+body.theme-8bit-lobster-light .status-dot.running,
+body.theme-8bit-lobster-light .status-dot.ok,
+body.theme-8bit-lobster-light .status-dot.validated,
 body.theme-8bit-lobster .badge.running::before {
+  background: var(--success) !important;
+  box-shadow: 0 0 8px var(--success) !important;
+}
+
+body.theme-8bit-lobster-light .badge.running::before {
   background: var(--success) !important;
   box-shadow: 0 0 8px var(--success) !important;
 }
@@ -274,7 +326,11 @@ body.theme-8bit-lobster .badge.running::before {
 body.theme-8bit-lobster:not(.effects-disabled) .status-dot.running,
 body.theme-8bit-lobster:not(.effects-disabled) .status-dot.ok,
 body.theme-8bit-lobster:not(.effects-disabled) .status-dot.validated,
-body.theme-8bit-lobster:not(.effects-disabled) .badge.running::before {
+body.theme-8bit-lobster:not(.effects-disabled) .badge.running::before,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.running,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.ok,
+body.theme-8bit-lobster-light:not(.effects-disabled) .status-dot.validated,
+body.theme-8bit-lobster-light:not(.effects-disabled) .badge.running::before {
   animation: retroPulse 1.6s steps(6, end) infinite;
 }
 
