@@ -113,7 +113,11 @@
     align-items: center;
     gap: 1rem;
     padding-right: 1.5rem;
-    border-right: 1px solid var(--border);
+    border-right: 1px dashed var(--border);
+  }
+
+  :global(body.theme-8bit-lobster) .theme-controls {
+    border-right-style: solid;
   }
 
   .effect-toggle {
@@ -133,7 +137,7 @@
     height: 14px;
     border: 1px solid var(--border);
     background: var(--bg-surface);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     position: relative;
     cursor: pointer;
     margin: 0;

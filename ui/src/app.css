@@ -97,7 +97,6 @@ body.theme-8bit-lobster {
   --font-mono: 'VT323', 'JetBrains Mono', 'Fira Code', monospace;
   --radius: 0px;
   --radius-sm: 0px;
-  
 }
 
 :root,
@@ -230,12 +229,17 @@ body.theme-8bit-lobster .status-dot.ok,
 body.theme-8bit-lobster .badge.running::before {
   background: #4caf50 !important;
   box-shadow: 0 0 8px #4caf50 !important;
-  animation: retroPulse 2s steps(2, start) infinite;
+}
+
+body.theme-8bit-lobster:not(.effects-disabled) .status-dot.running,
+body.theme-8bit-lobster:not(.effects-disabled) .status-dot.ok,
+body.theme-8bit-lobster:not(.effects-disabled) .badge.running::before {
+  animation: retroPulse 1.6s steps(6, end) infinite;
 }
 
 @keyframes retroPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%, 100% { opacity: 0.95; }
+  50% { opacity: 0.45; }
 }
 
 button:disabled {
