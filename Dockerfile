@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache/zig \
       arm64) zig_target="aarch64-linux-musl" ;; \
       *) echo "Unsupported TARGETARCH: ${arch}" >&2; exit 1 ;; \
     esac; \
-    zig build -Dtarget="${zig_target}" -Doptimize=ReleaseSmall
+    zig build -Dtarget="${zig_target}" -Doptimize=ReleaseSmall -Dembed-ui=false
 
 # -- Stage 3: Runtime Base ----------------------------------------------------
 FROM alpine:3.23 AS release-base
