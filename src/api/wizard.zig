@@ -93,6 +93,38 @@ pub fn isValidateChannelsPath(target: []const u8) bool {
     return std.mem.endsWith(u8, stripQuery(target), "/validate-channels");
 }
 
+fn stripVersionPrefix(tag: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, tag, "v")) tag[1..] else tag;
+}
+
+fn parseVersionSegmentOrZero(segment: ?[]const u8) ?u64 {
+    const value = segment orelse return 0;
+    if (value.len == 0) return 0;
+    return std.fmt.parseUnsigned(u64, value, 10) catch null;
+}
+
+fn compareVersionTags(a: []const u8, b: []const u8) std.math.Order {
+    var a_it = std.mem.splitScalar(u8, stripVersionPrefix(a), '.');
+    var b_it = std.mem.splitScalar(u8, stripVersionPrefix(b), '.');
+
+    while (true) {
+        const a_seg = a_it.next();
+        const b_seg = b_it.next();
+        if (a_seg == null and b_seg == null) return .eq;
+
+        const a_num = parseVersionSegmentOrZero(a_seg);
+        const b_num = parseVersionSegmentOrZero(b_seg);
+        if (a_num != null and b_num != null) {
+            if (a_num.? < b_num.?) return .lt;
+            if (a_num.? > b_num.?) return .gt;
+            continue;
+        }
+
+        const order = std.mem.order(u8, a_seg orelse "", b_seg orelse "");
+        if (order != .eq) return order;
+    }
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// Handle GET /api/wizard/{component} — runs component --export-manifest.
@@ -174,7 +206,7 @@ pub fn handleGetVersions(allocator: std.mem.Allocator, component_name: []const u
     for (releases.value) |rel| {
         if (rel.prerelease) continue;
         // Skip versions older than min_version
-        if (known.min_version.len > 0 and std.mem.order(u8, rel.tag_name, known.min_version) == .lt) continue;
+        if (known.min_version.len > 0 and compareVersionTags(rel.tag_name, known.min_version) == .lt) continue;
         if (count > 0) buf.append(',') catch return null;
         buf.appendSlice("{\"value\":\"") catch return null;
         buf.appendSlice(rel.tag_name) catch return null;
@@ -939,6 +971,13 @@ test "handleGetVersions returns null for unknown component" {
     const allocator = std.testing.allocator;
     const result = handleGetVersions(allocator, "nonexistent");
     try std.testing.expect(result == null);
+}
+
+test "compareVersionTags compares numeric version segments" {
+    try std.testing.expect(compareVersionTags("v2026.3.10", "v2026.3.2") == .gt);
+    try std.testing.expect(compareVersionTags("v2026.3.11", "v2026.3.10") == .gt);
+    try std.testing.expect(compareVersionTags("v2026.3.2", "v2026.3.2") == .eq);
+    try std.testing.expect(compareVersionTags("2026.3.2", "v2026.3.2") == .eq);
 }
 
 test "findInstalledComponentBinary finds binary in bin directory" {
