@@ -17,6 +17,7 @@ const wizard_api = @import("api/wizard.zig");
 const providers_api = @import("api/providers.zig");
 const channels_api = @import("api/channels.zig");
 const usage_api = @import("api/usage.zig");
+const orchestration_api = @import("api/orchestration.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
@@ -401,6 +402,16 @@ pub const Server = struct {
             self.port,
             target,
         });
+    }
+
+    fn getBoilerUrl(self: *Server) ?[]const u8 {
+        _ = self;
+        return std.posix.getenv("NULLBOILER_URL");
+    }
+
+    fn getBoilerToken(self: *Server) ?[]const u8 {
+        _ = self;
+        return std.posix.getenv("NULLBOILER_TOKEN");
     }
 
     fn route(self: *Server, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -930,6 +941,20 @@ pub const Server = struct {
             if (instances_api.dispatch(allocator, self.state, self.manager, self.mutex, self.paths, method, target, body)) |api_resp| {
                 return .{ .status = api_resp.status, .content_type = api_resp.content_type, .body = api_resp.body };
             }
+        }
+
+        // Orchestration API — proxy to NullBoiler
+        if (std.mem.startsWith(u8, target, "/api/orchestration/") or std.mem.eql(u8, target, "/api/orchestration")) {
+            const boiler_url = self.getBoilerUrl();
+            if (boiler_url) |url| {
+                const resp = orchestration_api.handle(allocator, method, target, body, url, self.getBoilerToken());
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            return .{
+                .status = "503 Service Unavailable",
+                .content_type = "application/json",
+                .body = "{\"error\":\"NullBoiler not configured\"}",
+            };
         }
 
         // Serve UI module files from data directory (~/.nullhub/ui/{name}@{version}/...)
