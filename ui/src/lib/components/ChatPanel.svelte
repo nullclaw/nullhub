@@ -115,6 +115,17 @@
     }
   }
 
+  function parseHistoryTimestamp(value: string, fallback: number): number {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return fallback;
+
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)
+      ? trimmed.replace(" ", "T") + "Z"
+      : trimmed;
+    const parsed = Date.parse(normalized);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
   async function loadLatestHistory(component: string, name: string): Promise<ChatSeedMessage[]> {
     const sessions = await api.getHistory(component, name, { limit: 1, offset: 0 });
     const latestSession = Array.isArray(sessions?.sessions)
@@ -137,12 +148,12 @@
       : [];
 
     return messages.map((message, index) => {
-      const parsedTimestamp = Date.parse(message.created_at || "");
+      const fallbackTimestamp = Date.now() + index;
       return {
         id: `history-${latestSession.session_id}-${offset + index}`,
         role: historyRoleToChatRole(message.role),
         content: message.content || "",
-        timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now() + index,
+        timestamp: parseHistoryTimestamp(message.created_at, fallbackTimestamp),
         order: offset + index,
       };
     });

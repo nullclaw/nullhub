@@ -59,7 +59,11 @@
 
   function formatTimestamp(value: string): string {
     if (!value) return "-";
-    const date = new Date(value);
+    const trimmed = value.trim();
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)
+      ? trimmed.replace(" ", "T") + "Z"
+      : trimmed;
+    const date = new Date(normalized);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
   }
 
