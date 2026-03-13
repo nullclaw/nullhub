@@ -48,6 +48,8 @@ pub const Server = struct {
         const state = try allocator.create(state_mod.State);
         state.* = state_mod.State.load(allocator, state_path) catch state_mod.State.init(allocator, state_path);
 
+        orchestrator.syncLocalUiModules(allocator, paths);
+
         return .{
             .allocator = allocator,
             .host = host,
@@ -126,10 +128,15 @@ pub const Server = struct {
         var buf: [4096]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
         const writer = stream.writer();
+        var modules: std.ArrayListUnmanaged(struct { name: []u8, version: []u8 }) = .empty;
+        defer {
+            for (modules.items) |entry| {
+                allocator.free(entry.name);
+                allocator.free(entry.version);
+            }
+            modules.deinit(allocator);
+        }
 
-        writer.writeAll("{\"modules\":{") catch return jsonResponse("{\"modules\":{}}");
-
-        var first = true;
         var it = dir.iterate();
         while (it.next() catch null) |entry| {
             if (entry.kind != .directory) continue;
@@ -138,15 +145,56 @@ pub const Server = struct {
             const mod_version = entry.name[at_idx + 1 ..];
             if (mod_name.len == 0 or mod_version.len == 0) continue;
 
-            if (!first) writer.writeAll(",") catch {};
-            first = false;
-            writer.print("\"{s}\":\"{s}\"", .{ mod_name, mod_version }) catch {};
+            var existing_index: ?usize = null;
+            for (modules.items, 0..) |existing, index| {
+                if (std.mem.eql(u8, existing.name, mod_name)) {
+                    existing_index = index;
+                    break;
+                }
+            }
+
+            if (existing_index) |index| {
+                if (preferUiModuleVersion(modules.items[index].version, mod_version)) {
+                    const new_version = allocator.dupe(u8, mod_version) catch continue;
+                    allocator.free(modules.items[index].version);
+                    modules.items[index].version = new_version;
+                }
+                continue;
+            }
+
+            const owned_name = allocator.dupe(u8, mod_name) catch continue;
+            const owned_version = allocator.dupe(u8, mod_version) catch {
+                allocator.free(owned_name);
+                continue;
+            };
+
+            modules.append(allocator, .{
+                .name = owned_name,
+                .version = owned_version,
+            }) catch {
+                allocator.free(owned_name);
+                allocator.free(owned_version);
+                continue;
+            };
         }
 
+        writer.writeAll("{\"modules\":{") catch return jsonResponse("{\"modules\":{}}");
+        var first = true;
+        for (modules.items) |entry| {
+            if (!first) writer.writeAll(",") catch {};
+            first = false;
+            writer.print("\"{s}\":\"{s}\"", .{ entry.name, entry.version }) catch {};
+        }
         writer.writeAll("}}") catch {};
 
         const json = allocator.dupe(u8, stream.getWritten()) catch return jsonResponse("{\"modules\":{}}");
         return jsonResponse(json);
+    }
+
+    fn preferUiModuleVersion(current: []const u8, candidate: []const u8) bool {
+        if (std.mem.eql(u8, candidate, "dev-local")) return !std.mem.eql(u8, current, "dev-local");
+        if (std.mem.eql(u8, current, "dev-local")) return false;
+        return std.mem.order(u8, candidate, current) == .gt;
     }
 
     fn handleAvailableUiModules(self: *Server, allocator: std.mem.Allocator) Response {
@@ -1241,6 +1289,34 @@ test "route GET /api/instances returns empty instances" {
     defer std.testing.allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("{\"instances\":{}}", resp.body);
+}
+
+test "route GET /api/ui-modules prefers dev-local and deduplicates module versions" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    std.fs.deleteTreeAbsolute(ctx.paths.root) catch {};
+    try ctx.paths.ensureDirs();
+
+    const release_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "v2026.3.1");
+    defer std.testing.allocator.free(release_dir);
+    try std.fs.makeDirAbsolute(release_dir);
+
+    const dev_local_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "dev-local");
+    defer std.testing.allocator.free(dev_local_dir);
+    try std.fs.makeDirAbsolute(dev_local_dir);
+
+    const other_release_dir = try ctx.paths.uiModule(std.testing.allocator, "other-ui", "v1.0.0");
+    defer std.testing.allocator.free(other_release_dir);
+    try std.fs.makeDirAbsolute(other_release_dir);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api/ui-modules", "");
+    defer std.testing.allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"nullclaw-chat-ui\":\"dev-local\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"nullclaw-chat-ui\":\"v2026.3.1\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"other-ui\":\"v1.0.0\"") != null);
 }
 
 test "route POST /api/instances/{component}/{name}/start returns 500 without binary" {

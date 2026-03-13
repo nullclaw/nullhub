@@ -549,16 +549,29 @@ pub fn installUiModule(
     ui_mod: registry.UiModuleRef,
     version: []const u8,
 ) !void {
+    if (!builtin.is_test) {
+        if (findLocalUiModuleDir(allocator, ui_mod.name)) |module_dir| {
+            defer allocator.free(module_dir);
+
+            const dev_local_version = "dev-local";
+            const dev_local_dest = try p.uiModule(allocator, ui_mod.name, dev_local_version);
+            defer allocator.free(dev_local_dest);
+
+            std.fs.deleteTreeAbsolute(dev_local_dest) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => {},
+            };
+
+            if (buildLocalUiModuleFromDir(allocator, module_dir, dev_local_dest)) return;
+            return error.DownloadFailed;
+        }
+    }
+
     const dest = try p.uiModule(allocator, ui_mod.name, version);
     defer allocator.free(dest);
 
     // Skip if already installed
     if (ui_modules_mod.isModuleInstalled(dest)) return;
-
-    // Try local dev build first (look for sibling repo)
-    if (!builtin.is_test) {
-        if (buildLocalUiModule(allocator, ui_mod.name, dest)) return;
-    }
 
     // Fall back to downloading from GitHub releases
     ui_modules_mod.downloadUiModule(allocator, ui_mod.repo, ui_mod.name, version, dest) catch {
@@ -570,20 +583,30 @@ pub fn installUiModule(
 /// Looks for ../{module_name}/ relative to CWD, runs `npm run build:module`,
 /// and copies the dist/ output to dest_dir.
 fn buildLocalUiModule(allocator: std.mem.Allocator, module_name: []const u8, dest_dir: []const u8) bool {
-    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch return false;
+    const module_dir = findLocalUiModuleDir(allocator, module_name) orelse return false;
+    defer allocator.free(module_dir);
+    return buildLocalUiModuleFromDir(allocator, module_dir, dest_dir);
+}
+
+fn findLocalUiModuleDir(allocator: std.mem.Allocator, module_name: []const u8) ?[]const u8 {
+    if (builtin.is_test) return null;
+
+    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
     defer allocator.free(cwd);
 
-    const parent = std.fs.path.dirname(cwd) orelse return false;
-    const module_dir = std.fs.path.join(allocator, &.{ parent, module_name }) catch return false;
-    defer allocator.free(module_dir);
+    const parent = std.fs.path.dirname(cwd) orelse return null;
+    const module_dir = std.fs.path.join(allocator, &.{ parent, module_name }) catch return null;
 
-    // Check if the module repo exists locally
-    {
-        var dir = std.fs.openDirAbsolute(module_dir, .{}) catch return false;
-        dir.close();
-    }
+    var dir = std.fs.openDirAbsolute(module_dir, .{}) catch {
+        allocator.free(module_dir);
+        return null;
+    };
+    dir.close();
+    return module_dir;
+}
 
-    std.debug.print("Building UI module '{s}' from local source: {s}\n", .{ module_name, module_dir });
+fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u8, dest_dir: []const u8) bool {
+    std.debug.print("Building UI module from local source: {s}\n", .{module_dir});
 
     const module_dir_z = allocator.dupeZ(u8, module_dir) catch return false;
     defer allocator.free(module_dir_z);
@@ -635,6 +658,19 @@ fn buildLocalUiModule(allocator: std.mem.Allocator, module_name: []const u8, des
         .Exited => |code| code == 0,
         else => false,
     };
+}
+
+pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void {
+    if (builtin.is_test) return;
+
+    for (&registry.known_components) |comp| {
+        for (comp.ui_modules) |ui_mod| {
+            if (findLocalUiModuleDir(allocator, ui_mod.name)) |module_dir| {
+                allocator.free(module_dir);
+                installUiModule(allocator, p, ui_mod, "latest") catch {};
+            }
+        }
+    }
 }
 
 /// Write content to a file at an absolute path, creating the file if needed.
