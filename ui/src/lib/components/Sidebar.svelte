@@ -57,6 +57,7 @@
     <a href="/orchestration" class:active={currentPath === "/orchestration"}>Dashboard</a>
     <a href="/orchestration/workflows" class:active={currentPath.startsWith("/orchestration/workflows")}>Workflows</a>
     <a href="/orchestration/runs" class:active={currentPath.startsWith("/orchestration/runs")}>Runs</a>
+    <a href="/orchestration/store" class:active={currentPath.startsWith('/orchestration/store')}>Store</a>
   </div>
 
   <div class="nav-section">

@@ -196,6 +196,12 @@ export const api = {
   listCheckpoints: (runId: string) => request<any[]>(`/api/orchestration/runs/${runId}/checkpoints`),
   getCheckpoint: (runId: string, cpId: string) => request<any>(`/api/orchestration/runs/${runId}/checkpoints/${cpId}`),
 
+  // Store API (proxied through NullBoiler or direct to NullTickets)
+  storeList: (namespace: string) => request<any[]>(`/api/orchestration/store/${namespace}`),
+  storeGet: (namespace: string, key: string) => request<any>(`/api/orchestration/store/${namespace}/${key}`),
+  storePut: (namespace: string, key: string, value: any) => request<any>(`/api/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  storeDelete: (namespace: string, key: string) => request<void>(`/api/orchestration/store/${namespace}/${key}`, { method: 'DELETE' }),
+
   // Orchestration - SSE
   streamRun: (runId: string, onEvent: (event: { type: string; data: any }) => void) => {
     const source = new EventSource(`/api/orchestration/runs/${runId}/stream`);
