@@ -2,7 +2,23 @@
   import { api } from "$lib/api/client";
   import ModuleFrame from "./ModuleFrame.svelte";
 
-  let { port = 0, moduleName = "", moduleVersion = "", instanceKey = "" } = $props();
+  let {
+    port = 0,
+    moduleName = "",
+    moduleVersion = "",
+    instanceKey = "",
+    onboardingPending = false,
+    starterMessage = "Wake up, my friend!",
+    onboardingMarker = "",
+  } = $props<{
+    port?: number;
+    moduleName?: string;
+    moduleVersion?: string;
+    instanceKey?: string;
+    onboardingPending?: boolean;
+    starterMessage?: string;
+    onboardingMarker?: string;
+  }>();
 
   type HistorySession = {
     session_id: string;
@@ -31,6 +47,51 @@
   let historyReady = $state(false);
   let initialMessages = $state<ChatSeedMessage[]>([]);
   let historyRequestSeq = 0;
+
+  function safeSessionStorageGet(key: string): string | null {
+    if (typeof sessionStorage === "undefined") return null;
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function safeSessionStorageSet(key: string, value: string) {
+    if (typeof sessionStorage === "undefined") return;
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+
+  function bootstrapAutostartKey(instance: string, marker: string): string {
+    const suffix = marker.trim().length > 0 ? marker.trim() : "default";
+    return `nullhub:bootstrap-autostart:${instance}:${suffix}`;
+  }
+
+  function shouldAutoStartBootstrap(
+    instance: string,
+    marker: string,
+    pending: boolean,
+    messages: ChatSeedMessage[],
+  ): boolean {
+    if (!pending || messages.length > 0 || !instance) return false;
+    return safeSessionStorageGet(bootstrapAutostartKey(instance, marker)) !== "1";
+  }
+
+  function markBootstrapAutostarted(instance: string, marker: string) {
+    if (!instance) return;
+    safeSessionStorageSet(bootstrapAutostartKey(instance, marker), "1");
+  }
+
+  let autoSendMessage = $derived.by(() => {
+    if (!shouldAutoStartBootstrap(instanceKey, onboardingMarker, onboardingPending, initialMessages)) {
+      return "";
+    }
+    return starterMessage.trim();
+  });
 
   function parseInstanceKey(value: string): { component: string; name: string } | null {
     const slashIndex = value.indexOf("/");
@@ -119,7 +180,13 @@
           {moduleName}
           {moduleVersion}
           instanceUrl={wsUrl}
-          moduleProps={{ wsUrl, pairingCode: "123456", initialMessages }}
+          moduleProps={{
+            wsUrl,
+            pairingCode: "123456",
+            initialMessages,
+            autoSendMessage,
+            onAutoSend: () => markBootstrapAutostarted(instanceKey, onboardingMarker),
+          }}
         />
       {/key}
     {:else}

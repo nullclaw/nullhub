@@ -76,6 +76,8 @@ export const api = {
         offset: params?.offset,
       }),
     ),
+  getOnboarding: (c: string, n: string) =>
+    request<any>(`/instances/${c}/${n}/onboarding`),
   getMemory: (
     c: string,
     n: string,

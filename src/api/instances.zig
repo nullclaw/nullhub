@@ -104,6 +104,95 @@ fn getStatusLocked(
     return manager.getStatus(component, name);
 }
 
+const NullclawOnboardingStatus = struct {
+    supported: bool = false,
+    pending: bool = false,
+    completed: bool = false,
+    bootstrap_exists: bool = false,
+    bootstrap_seeded_at: ?[]u8 = null,
+    onboarding_completed_at: ?[]u8 = null,
+
+    fn deinit(self: *NullclawOnboardingStatus, allocator: std.mem.Allocator) void {
+        if (self.bootstrap_seeded_at) |value| allocator.free(value);
+        if (self.onboarding_completed_at) |value| allocator.free(value);
+        self.* = .{};
+    }
+};
+
+fn fileExistsAbsolute(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn nullclawWorkspaceStatePath(allocator: std.mem.Allocator, workspace_dir: []const u8) ![]const u8 {
+    return std.fs.path.join(allocator, &.{ workspace_dir, ".nullclaw", "workspace-state.json" });
+}
+
+fn readNullclawOnboardingStatus(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) !NullclawOnboardingStatus {
+    var status = NullclawOnboardingStatus{};
+    errdefer status.deinit(allocator);
+
+    if (!std.mem.eql(u8, component, "nullclaw")) return status;
+    status.supported = true;
+
+    const inst_dir = try paths.instanceDir(allocator, component, name);
+    defer allocator.free(inst_dir);
+    const workspace_dir = try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
+    defer allocator.free(workspace_dir);
+
+    const bootstrap_path = try std.fs.path.join(allocator, &.{ workspace_dir, "BOOTSTRAP.md" });
+    defer allocator.free(bootstrap_path);
+    status.bootstrap_exists = fileExistsAbsolute(bootstrap_path);
+
+    const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
+    defer allocator.free(state_path);
+
+    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            status.pending = status.bootstrap_exists;
+            return status;
+        },
+        else => return err,
+    };
+    defer file.close();
+
+    const raw = file.readToEndAlloc(allocator, 64 * 1024) catch {
+        status.pending = status.bootstrap_exists;
+        return status;
+    };
+    defer allocator.free(raw);
+
+    const parsed = std.json.parseFromSlice(struct {
+        bootstrap_seeded_at: ?[]const u8 = null,
+        bootstrapSeededAt: ?[]const u8 = null,
+        onboarding_completed_at: ?[]const u8 = null,
+        onboardingCompletedAt: ?[]const u8 = null,
+    }, allocator, raw, .{
+        .allocate = .alloc_if_needed,
+        .ignore_unknown_fields = true,
+    }) catch {
+        status.pending = status.bootstrap_exists;
+        return status;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value.bootstrap_seeded_at orelse parsed.value.bootstrapSeededAt) |seeded| {
+        status.bootstrap_seeded_at = try allocator.dupe(u8, seeded);
+    }
+    if (parsed.value.onboarding_completed_at orelse parsed.value.onboardingCompletedAt) |completed| {
+        status.onboarding_completed_at = try allocator.dupe(u8, completed);
+    }
+
+    status.completed = status.onboarding_completed_at != null and !status.bootstrap_exists;
+    status.pending = status.bootstrap_exists or (status.bootstrap_seeded_at != null and !status.completed);
+    return status;
+}
+
 fn listNullTicketsLocked(
     allocator: std.mem.Allocator,
     mutex: *std.Thread.Mutex,
@@ -1730,6 +1819,33 @@ pub fn handleHistory(allocator: std.mem.Allocator, s: *state_mod.State, paths: p
     return runInstanceCliJson(allocator, s, paths, component, name, args.items);
 }
 
+/// GET /api/instances/{component}/{name}/onboarding
+pub fn handleOnboarding(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) ApiResponse {
+    if (s.getInstance(component, name) == null) return notFound();
+
+    var status = readNullclawOnboardingStatus(allocator, paths, component, name) catch
+        return helpers.serverError();
+    defer status.deinit(allocator);
+
+    const body = std.json.Stringify.valueAlloc(allocator, .{
+        .supported = status.supported,
+        .pending = status.pending,
+        .completed = status.completed,
+        .bootstrap_exists = status.bootstrap_exists,
+        .bootstrap_seeded_at = status.bootstrap_seeded_at,
+        .onboarding_completed_at = status.onboarding_completed_at,
+        .starter_message = if (status.supported) "Wake up, my friend!" else null,
+    }, .{}) catch return helpers.serverError();
+
+    return jsonOk(body);
+}
+
 /// GET /api/instances/{component}/{name}/memory?stats=1
 /// GET /api/instances/{component}/{name}/memory?key=...
 /// GET /api/instances/{component}/{name}/memory?query=...&limit=N
@@ -2384,6 +2500,10 @@ pub fn dispatch(
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleHistory(allocator, s, paths, parsed.component, parsed.name, target);
         }
+        if (std.mem.eql(u8, action, "onboarding")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleOnboarding(allocator, s, paths, parsed.component, parsed.name);
+        }
         if (std.mem.eql(u8, action, "memory")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleMemory(allocator, s, paths, parsed.component, parsed.name, target);
@@ -2546,6 +2666,13 @@ test "parsePath: usage action with query string" {
     try std.testing.expectEqualStrings("nullclaw", p.component);
     try std.testing.expectEqualStrings("default", p.name);
     try std.testing.expectEqualStrings("usage", p.action.?);
+}
+
+test "parsePath: onboarding action" {
+    const p = parsePath("/api/instances/nullclaw/default/onboarding").?;
+    try std.testing.expectEqualStrings("nullclaw", p.component);
+    try std.testing.expectEqualStrings("default", p.name);
+    try std.testing.expectEqualStrings("onboarding", p.action.?);
 }
 
 test "parseUsageWindow defaults to 24h" {
@@ -2974,6 +3101,106 @@ test "dispatch routes GET provider-health action" {
     // No config file exists in this test fixture, so health action returns 404.
     const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/provider-health", "").?;
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
+}
+
+test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+    const workspace_dir = try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
+    defer allocator.free(workspace_dir);
+    try ensurePath(workspace_dir);
+
+    const bootstrap_path = try std.fs.path.join(allocator, &.{ workspace_dir, "BOOTSTRAP.md" });
+    defer allocator.free(bootstrap_path);
+    const bootstrap_file = try std.fs.createFileAbsolute(bootstrap_path, .{ .truncate = true });
+    defer bootstrap_file.close();
+    try bootstrap_file.writeAll("# bootstrap\n");
+
+    const resp = handleOnboarding(allocator, &s, mctx.paths, "nullclaw", "my-agent");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"pending\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"starter_message\":\"Wake up, my friend!\"") != null);
+}
+
+test "handleOnboarding reports pending bootstrap from workspace state without disk bootstrap file" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+    const workspace_dir = try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
+    defer allocator.free(workspace_dir);
+    try ensurePath(workspace_dir);
+
+    const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
+    defer allocator.free(state_path);
+    try ensurePath(std.fs.path.dirname(state_path).?);
+    const state_file = try std.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    defer state_file.close();
+    try state_file.writeAll(
+        "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\"\n}\n",
+    );
+
+    const resp = handleOnboarding(allocator, &s, mctx.paths, "nullclaw", "my-agent");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"bootstrap_exists\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"pending\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"completed\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"bootstrap_seeded_at\":\"2026-03-13T01:17:17Z\"") != null);
+}
+
+test "dispatch routes GET onboarding action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+    const workspace_dir = try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
+    defer allocator.free(workspace_dir);
+    try ensurePath(workspace_dir);
+
+    const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
+    defer allocator.free(state_path);
+    try ensurePath(std.fs.path.dirname(state_path).?);
+    const state_file = try std.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    defer state_file.close();
+    try state_file.writeAll(
+        "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\",\n  \"onboarding_completed_at\": \"2026-03-13T01:30:41Z\"\n}\n",
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/onboarding", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"completed\":true") != null);
 }
 
 test "dispatch routes GET integration action for linked nullboiler" {

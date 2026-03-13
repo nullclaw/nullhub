@@ -19,6 +19,7 @@
   let loading = $state(false);
   let providerHealth = $state<any>(null);
   let providerHealthLoading = $state(false);
+  let onboardingStatus = $state<any>(null);
   let lastUsageRefreshAt = $state(0);
   type UsageWindow = "24h" | "7d" | "30d" | "all";
   let usageWindow = $state<UsageWindow>("24h");
@@ -65,6 +66,21 @@
       chatModuleName !== "" &&
       webPort != null &&
       providerStatus.configured,
+  );
+  let onboardingPending = $derived(
+    Boolean(onboardingStatus?.supported && onboardingStatus?.pending),
+  );
+  let onboardingStarterMessage = $derived(
+    typeof onboardingStatus?.starter_message === "string" &&
+      onboardingStatus.starter_message.length > 0
+      ? onboardingStatus.starter_message
+      : "Wake up, my friend!",
+  );
+  let onboardingMarker = $derived(
+    typeof onboardingStatus?.bootstrap_seeded_at === "string" &&
+      onboardingStatus.bootstrap_seeded_at.length > 0
+      ? onboardingStatus.bootstrap_seeded_at
+      : "",
   );
   let supportsIntegration = $derived(
     component === "nullboiler" || component === "nulltickets",
@@ -484,6 +500,15 @@
       config = null;
       providerHealth = null;
     }
+    if (component === "nullclaw") {
+      try {
+        onboardingStatus = await api.getOnboarding(component, name);
+      } catch {
+        onboardingStatus = null;
+      }
+    } else {
+      onboardingStatus = null;
+    }
     if (loadProviderHealth) {
       await refreshProviderHealth(loadedConfig);
     }
@@ -539,6 +564,7 @@
     usageData = null;
     integration = null;
     integrationError = null;
+    onboardingStatus = null;
     lastUsageRefreshAt = 0;
     void refresh(true, true);
   });
@@ -1135,14 +1161,31 @@
           Web channel not configured for this instance.
         </div>
       {:else}
-        {#key instanceRouteKey}
-          <ChatPanel
-            port={webPort}
-            moduleName={chatModuleName}
-            moduleVersion={chatModuleVersion}
-            instanceKey={instanceRouteKey}
-          />
-        {/key}
+        <div class="chat-stack">
+          {#if onboardingPending}
+            <div class="chat-onboarding">
+              <div class="chat-onboarding-title">Bootstrap In Progress</div>
+              <div class="chat-onboarding-desc">
+                This is the defining chat that makes the agent itself instead of a blank instance.
+              </div>
+              <div class="chat-onboarding-note">
+                Start with <code>{onboardingStarterMessage}</code>, then help it figure out its
+                name, nature, vibe, emoji, and how it should address you.
+              </div>
+            </div>
+          {/if}
+          {#key instanceRouteKey}
+            <ChatPanel
+              port={webPort}
+              moduleName={chatModuleName}
+              moduleVersion={chatModuleVersion}
+              instanceKey={instanceRouteKey}
+              onboardingPending={onboardingPending}
+              starterMessage={onboardingStarterMessage}
+              onboardingMarker={onboardingMarker}
+            />
+          {/key}
+        </div>
       {/if}
     {/if}
   </div>
@@ -1702,6 +1745,45 @@
     border-radius: 2px;
     font-family: var(--font-mono);
     font-size: 0.75rem;
+    color: var(--accent);
+  }
+  .chat-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .chat-onboarding {
+    border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+    background:
+      linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--accent) 8%, transparent),
+        transparent 55%
+      ),
+      var(--bg-surface);
+    padding: 1rem 1.125rem;
+    border-radius: 4px;
+    box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .chat-onboarding-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.35rem;
+  }
+  .chat-onboarding-desc,
+  .chat-onboarding-note {
+    color: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  .chat-onboarding-note {
+    margin-top: 0.55rem;
+  }
+  .chat-onboarding code {
     color: var(--accent);
   }
   .link-btn {
