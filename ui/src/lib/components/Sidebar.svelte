@@ -21,9 +21,9 @@
 </script>
 
 <nav class="sidebar">
-  <div class="logo">
+  <a href="/" class="logo" aria-label="Go to NullHub home">
     <h2>NullHub</h2>
-  </div>
+  </a>
 
   <div class="nav-section">
     <a href="/" class:active={currentPath === "/"}>System Status</a>
@@ -80,9 +80,19 @@
   }
 
   .logo {
+    display: block;
     padding: 1.5rem 1.25rem;
     border-bottom: 1px solid var(--border);
     text-align: center;
+    color: inherit;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .logo:hover,
+  .logo:focus-visible {
+    text-decoration: none;
+    background: var(--bg-hover);
+    box-shadow: inset 0 -1px 0 var(--accent-dim);
   }
 
   .logo h2 {
