@@ -51,7 +51,7 @@
   function connectStream() {
     try {
       eventSource = api.streamRun(id, (event) => {
-        events = [...events, { ...event, timestamp: Date.now() / 1000 }];
+        events = [...events, { ...event, timestamp: event.timestamp ?? Date.now() / 1000 }];
         // On significant events, refresh run data
         if (['step_completed', 'step_failed', 'run_completed', 'run_failed', 'interrupted', 'state_update', 'values', 'updates', 'task_result'].includes(event.type)) {
           void loadRun();

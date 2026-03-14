@@ -76,6 +76,26 @@ function normalizeValidation(raw: any): any {
   return raw;
 }
 
+function normalizeEventType(type: string | undefined): string {
+  if (!type) return 'message';
+  if (type === 'run.interrupted') return 'interrupted';
+  return type.replaceAll('.', '_');
+}
+
+function normalizeStreamEvent(raw: any): { type: string; data: any; timestamp?: number } {
+  const timestampMs = typeof raw?.ts_ms === 'number'
+    ? raw.ts_ms
+    : typeof raw?.timestamp_ms === 'number'
+      ? raw.timestamp_ms
+      : undefined;
+
+  return {
+    type: normalizeEventType(raw?.event || raw?.type || raw?.kind),
+    data: raw?.data ?? raw,
+    timestamp: timestampMs != null ? timestampMs / 1000 : undefined,
+  };
+}
+
 export function createOrchestrationApi(request: RequestFn, withQuery: WithQueryFn) {
   return {
     listWorkflows: async () => {
@@ -109,18 +129,20 @@ export function createOrchestrationApi(request: RequestFn, withQuery: WithQueryF
     storeGet: (namespace: string, key: string) => request<any>(orchestrationApiPaths.storeEntry(namespace, key)),
     storePut: (namespace: string, key: string, value: any) => request<void>(orchestrationApiPaths.storeEntry(namespace, key), { method: 'PUT', body: JSON.stringify({ value }) }),
     storeDelete: (namespace: string, key: string) => request<void>(orchestrationApiPaths.storeEntry(namespace, key), { method: 'DELETE' }),
-    streamRun: (runId: string, onEvent: (event: { type: string; data: any }) => void) => {
+    streamRun: (runId: string, onEvent: (event: { type: string; data: any; timestamp?: number }) => void) => {
       let active = true;
       let deliveredInitialSnapshot = false;
 
       const emitEvent = (ev: any) => {
-        onEvent({ type: ev.event || ev.type || ev.kind || 'message', data: ev.data ?? ev });
+        if (!active) return;
+        onEvent(normalizeStreamEvent(ev));
       };
 
       const poll = async () => {
         while (active) {
           try {
             const res = await request<any>(orchestrationApiPaths.runStream(runId));
+            if (!active) break;
             if (res?.stream_events) {
               for (const ev of res.stream_events) emitEvent(ev);
             }
@@ -132,8 +154,10 @@ export function createOrchestrationApi(request: RequestFn, withQuery: WithQueryF
               break;
             }
           } catch {
+            if (!active) break;
             // Ignore poll errors, will retry.
           }
+          if (!active) break;
           await new Promise(r => setTimeout(r, 1000));
         }
       };
