@@ -151,8 +151,8 @@
   }
   :global(.json-key) { color: var(--accent); }
   :global(.json-string) { color: var(--success); }
-  :global(.json-number) { color: #f5a623; }
-  :global(.json-boolean) { color: #7b61ff; }
+  :global(.json-number) { color: var(--warning); }
+  :global(.json-boolean) { color: var(--accent); }
   :global(.json-null) { color: var(--fg-dim); }
 
   .diff-view {

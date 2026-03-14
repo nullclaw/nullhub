@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
   import { api } from '$lib/api/client';
 
   let runs = $state<any[]>([]);
@@ -108,7 +109,7 @@
           </thead>
           <tbody>
             {#each runs.slice(0, 20) as run}
-              <tr onclick={() => location.href = `/orchestration/runs/${run.id}`} class="clickable">
+              <tr onclick={() => goto(`/orchestration/runs/${run.id}`)} class="clickable">
                 <td class="mono">{(run.id || '').slice(0, 8)}</td>
                 <td>{run.workflow_name || run.workflow_id || '-'}</td>
                 <td>
@@ -271,7 +272,7 @@
   }
   .error-banner {
     padding: 0.75rem 1rem;
-    background: rgba(255, 0, 0, 0.1);
+    background: color-mix(in srgb, var(--error) 10%, transparent);
     color: var(--error);
     border: 1px solid var(--error);
     border-radius: 4px;
@@ -279,7 +280,7 @@
     font-size: 0.875rem;
     font-weight: bold;
     text-shadow: 0 0 5px var(--error);
-    box-shadow: 0 0 10px rgba(255, 0, 0, 0.2);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--error) 20%, transparent);
   }
   .loading {
     text-align: center;

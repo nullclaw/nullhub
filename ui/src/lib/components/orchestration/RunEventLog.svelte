@@ -10,7 +10,7 @@
     step_started: 'var(--accent)',
     step_completed: 'var(--success)',
     step_failed: 'var(--error)',
-    agent_event: '#7b61ff',
+    agent_event: 'var(--accent)',
     interrupted: 'var(--warning)',
     run_completed: 'var(--success)',
     run_failed: 'var(--error)',
@@ -78,7 +78,7 @@
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 4px;
-    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+    box-shadow: inset 0 0 10px color-mix(in srgb, var(--bg) 50%, transparent);
   }
   .log-header {
     display: flex;

@@ -273,14 +273,14 @@
   }
   .error-banner {
     padding: 0.75rem 1rem;
-    background: rgba(255, 0, 0, 0.1);
+    background: color-mix(in srgb, var(--error) 10%, transparent);
     color: var(--error);
     border: 1px solid var(--error);
     border-radius: 4px;
     font-size: 0.875rem;
     font-weight: bold;
     text-shadow: 0 0 5px var(--error);
-    box-shadow: 0 0 10px rgba(255, 0, 0, 0.2);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--error) 20%, transparent);
     flex-shrink: 0;
   }
   .loading {
