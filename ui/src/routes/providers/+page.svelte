@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
 
   const PROVIDER_OPTIONS = [
@@ -27,6 +27,9 @@
   let loading = $state(true);
   let error = $state("");
   let message = $state("");
+  let messageTone = $state<"success" | "error">("success");
+  let validationStatusById = $state<Record<string, "ok" | "error">>({});
+  let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Add form state
   let showAddForm = $state(false);
@@ -53,12 +56,31 @@
     } catch {}
   });
 
+  onDestroy(() => {
+    if (messageTimer) clearTimeout(messageTimer);
+  });
+
+  function flashMessage(text: string, tone: "success" | "error" = "success", timeoutMs = 3000) {
+    message = text;
+    messageTone = tone;
+    if (messageTimer) clearTimeout(messageTimer);
+    messageTimer = setTimeout(() => {
+      message = "";
+      messageTimer = null;
+    }, timeoutMs);
+  }
+
   async function loadProviders() {
     loading = true;
     error = "";
     try {
       const data = await api.getSavedProviders();
-      providers = data.providers || [];
+      const nextProviders = data.providers || [];
+      const nextIds = new Set(nextProviders.map((provider: any) => provider.id));
+      providers = nextProviders;
+      validationStatusById = Object.fromEntries(
+        Object.entries(validationStatusById).filter(([id]) => nextIds.has(id)),
+      ) as Record<string, "ok" | "error">;
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -77,8 +99,7 @@
       });
       showAddForm = false;
       addForm = { provider: "openrouter", api_key: "", model: "" };
-      message = "Provider saved";
-      setTimeout(() => (message = ""), 3000);
+      flashMessage("Provider saved");
       await loadProviders();
     } catch (e) {
       addError = (e as Error).message;
@@ -106,8 +127,7 @@
       payload.model = editForm.model;
       await api.updateSavedProvider(id, payload);
       editingId = null;
-      message = "Provider updated";
-      setTimeout(() => (message = ""), 3000);
+      flashMessage("Provider updated");
       await loadProviders();
     } catch (e) {
       editError = (e as Error).message;
@@ -119,8 +139,7 @@
   async function handleDelete(id: string) {
     try {
       await api.deleteSavedProvider(id);
-      message = "Provider deleted";
-      setTimeout(() => (message = ""), 3000);
+      flashMessage("Provider deleted");
       await loadProviders();
     } catch (e) {
       error = (e as Error).message;
@@ -131,16 +150,22 @@
     revalidatingId = id;
     try {
       const result = await api.revalidateSavedProvider(id);
+      validationStatusById = {
+        ...validationStatusById,
+        [id]: result.live_ok ? "ok" : "error",
+      };
       if (result.live_ok) {
-        message = "Validation passed";
+        flashMessage("Validation passed", "success", 5000);
       } else {
-        message = `Validation failed: ${result.reason || "unknown error"}`;
+        flashMessage(`Validation failed: ${result.reason || "unknown error"}`, "error", 5000);
       }
-      setTimeout(() => (message = ""), 5000);
       await loadProviders();
     } catch (e) {
-      message = `Validation failed: ${(e as Error).message}`;
-      setTimeout(() => (message = ""), 5000);
+      validationStatusById = {
+        ...validationStatusById,
+        [id]: "error",
+      };
+      flashMessage(`Validation failed: ${(e as Error).message}`, "error", 5000);
     } finally {
       revalidatingId = null;
     }
@@ -163,6 +188,14 @@
       });
     } catch { return iso; }
   }
+
+  function providerIndicatorState(provider: any): "live-ok" | "live-error" | "has-history" | "needs-validation" {
+    const liveStatus = validationStatusById[provider.id];
+    if (liveStatus === "ok") return "live-ok";
+    if (liveStatus === "error") return "live-error";
+    if (provider.validated_at) return "has-history";
+    return "needs-validation";
+  }
 </script>
 
 <div class="providers-page">
@@ -176,7 +209,7 @@
   </div>
 
   {#if message}
-    <div class="message">{message}</div>
+    <div class="message" class:success={messageTone === "success"} class:error={messageTone === "error"}>{message}</div>
   {/if}
 
   {#if error}
@@ -255,9 +288,16 @@
               </div>
             </div>
           {:else}
+            {@const indicator = providerIndicatorState(p)}
             <div class="card-header">
               <div class="card-title">
-                <span class="status-dot" class:has-history={!!p.validated_at} class:needs-validation={!p.validated_at}></span>
+                <span
+                  class="status-dot"
+                  class:live-ok={indicator === "live-ok"}
+                  class:live-error={indicator === "live-error"}
+                  class:has-history={indicator === "has-history"}
+                  class:needs-validation={indicator === "needs-validation"}
+                ></span>
                 <h3>{p.name}</h3>
               </div>
               <span class="provider-type">{getProviderLabel(p.provider)}</span>
@@ -276,9 +316,21 @@
                   <span class="label">Last Successful Validation</span>
                   <span>{formatDate(p.validated_at)}</span>
                 </div>
-                <div class="card-note">Historical result only. Use Re-validate for the current live auth check.</div>
+                {#if indicator === "live-error"}
+                  <div class="card-note error">The latest live auth check failed. The timestamp above is only the last successful validation.</div>
+                {:else if indicator === "live-ok"}
+                  <div class="card-note success">The latest live auth check passed in this session.</div>
+                {:else}
+                  <div class="card-note">Historical result only. Use Re-validate for the current live auth check.</div>
+                {/if}
               {:else}
-                <div class="card-note">Not validated yet. Use Re-validate to run a live auth check.</div>
+                {#if indicator === "live-error"}
+                  <div class="card-note error">The latest live auth check failed.</div>
+                {:else if indicator === "live-ok"}
+                  <div class="card-note success">The latest live auth check passed in this session.</div>
+                {:else}
+                  <div class="card-note">Not validated yet. Use Re-validate to run a live auth check.</div>
+                {/if}
               {/if}
             </div>
             <div class="card-actions">
@@ -406,6 +458,16 @@
     flex-shrink: 0;
   }
 
+  .status-dot.live-ok {
+    background: var(--success, #4a4);
+    box-shadow: 0 0 6px var(--success, #4a4);
+  }
+
+  .status-dot.live-error {
+    background: var(--error, #e55);
+    box-shadow: 0 0 6px var(--error, #e55);
+  }
+
   .status-dot.has-history {
     background: var(--accent, #4af);
     box-shadow: 0 0 6px var(--accent, #4af);
@@ -419,6 +481,18 @@
   :global(body.theme-8bit-lobster) .status-dot,
   :global(body.theme-8bit-lobster-light) .status-dot {
     border-radius: var(--radius) !important;
+  }
+
+  :global(body.theme-8bit-lobster) .status-dot.live-ok,
+  :global(body.theme-8bit-lobster-light) .status-dot.live-ok {
+    background: var(--success) !important;
+    box-shadow: 0 0 8px var(--success) !important;
+  }
+
+  :global(body.theme-8bit-lobster) .status-dot.live-error,
+  :global(body.theme-8bit-lobster-light) .status-dot.live-error {
+    background: var(--error) !important;
+    box-shadow: 0 0 8px var(--error) !important;
   }
 
   :global(body.theme-8bit-lobster) .status-dot.has-history,
@@ -436,6 +510,14 @@
     font-size: 0.75rem;
     color: var(--fg-dim);
     line-height: 1.5;
+  }
+
+  .card-note.success {
+    color: var(--success, #4a4);
+  }
+
+  .card-note.error {
+    color: var(--error, #e55);
   }
 
   .card-field {
@@ -532,14 +614,24 @@
 
   .message {
     padding: 0.875rem 1.25rem;
-    background: color-mix(in srgb, var(--success) 10%, transparent);
-    border: 1px solid var(--success);
     border-radius: 2px;
     font-size: 0.875rem;
     font-weight: bold;
-    color: var(--success);
     margin-bottom: 1.5rem;
+  }
+
+  .message.success {
+    background: color-mix(in srgb, var(--success) 10%, transparent);
+    border: 1px solid var(--success);
+    color: var(--success);
     box-shadow: 0 0 10px color-mix(in srgb, var(--success) 30%, transparent);
+  }
+
+  .message.error {
+    background: color-mix(in srgb, var(--error, #e55) 10%, transparent);
+    border: 1px solid var(--error, #e55);
+    color: var(--error, #e55);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--error, #e55) 30%, transparent);
   }
 
   .error-message {
