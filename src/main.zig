@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 pub const root = @import("root.zig");
 const cli = root.cli;
+const api_cli = root.api_cli;
 const server = root.server;
 const service = root.service;
 const paths_mod = root.paths;
@@ -61,6 +62,18 @@ pub fn main() !void {
             try srv.run();
         },
         .status => |opts| try status_cli.run(allocator, opts),
+        .api => |opts| api_cli.run(allocator, opts) catch |err| {
+            const any_err: anyerror = err;
+            switch (any_err) {
+                error.InvalidMethod => std.debug.print("Invalid HTTP method: {s}\n", .{opts.method}),
+                error.InvalidTarget => std.debug.print("Invalid API target: {s}\n", .{opts.target}),
+                error.FileNotFound => std.debug.print("Body file not found.\n", .{}),
+                error.ConnectionRefused => std.debug.print("nullhub is not running on http://{s}:{d}\n", .{ opts.host, opts.port }),
+                error.RequestFailed => {},
+                else => std.debug.print("API request failed: {s}\n", .{@errorName(any_err)}),
+            }
+            std.process.exit(1);
+        },
         .install => |opts| {
             std.debug.print("install {s}", .{opts.component});
             if (opts.name) |n| std.debug.print(" --name {s}", .{n});

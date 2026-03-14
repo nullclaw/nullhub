@@ -42,6 +42,18 @@ pub const WizardOptions = struct {
     component: []const u8,
 };
 
+pub const ApiOptions = struct {
+    method: []const u8,
+    target: []const u8,
+    host: []const u8 = access.default_bind_host,
+    port: u16 = access.default_port,
+    body: ?[]const u8 = null,
+    body_file: ?[]const u8 = null,
+    token: ?[]const u8 = null,
+    content_type: []const u8 = "application/json",
+    pretty: bool = false,
+};
+
 pub const ServiceCommand = enum {
     install,
     uninstall,
@@ -82,6 +94,7 @@ pub const Command = union(enum) {
     update_all,
     config: ConfigOptions,
     wizard: WizardOptions,
+    api: ApiOptions,
     service: ServiceCommand,
     uninstall: UninstallOptions,
     add_source: AddSourceOptions,
@@ -148,6 +161,9 @@ pub fn parse(args: *std.process.ArgIterator) Command {
     }
     if (std.mem.eql(u8, cmd, "wizard")) {
         return parseWizard(args);
+    }
+    if (std.mem.eql(u8, cmd, "api")) {
+        return parseApi(args);
     }
     if (std.mem.eql(u8, cmd, "service")) {
         return parseService(args);
@@ -278,6 +294,36 @@ fn parseService(args: *std.process.ArgIterator) Command {
     return .{ .service = sc };
 }
 
+fn parseApi(args: *std.process.ArgIterator) Command {
+    const method = args.next() orelse return .help;
+    const target = args.next() orelse return .help;
+
+    var opts = ApiOptions{
+        .method = method,
+        .target = target,
+    };
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--host")) {
+            if (args.next()) |val| opts.host = val;
+        } else if (std.mem.eql(u8, arg, "--port")) {
+            if (args.next()) |val| {
+                opts.port = std.fmt.parseInt(u16, val, 10) catch access.default_port;
+            }
+        } else if (std.mem.eql(u8, arg, "--body")) {
+            if (args.next()) |val| opts.body = val;
+        } else if (std.mem.eql(u8, arg, "--body-file")) {
+            if (args.next()) |val| opts.body_file = val;
+        } else if (std.mem.eql(u8, arg, "--token")) {
+            if (args.next()) |val| opts.token = val;
+        } else if (std.mem.eql(u8, arg, "--content-type")) {
+            if (args.next()) |val| opts.content_type = val;
+        } else if (std.mem.eql(u8, arg, "--pretty")) {
+            opts.pretty = true;
+        }
+    }
+    return .{ .api = opts };
+}
+
 fn parseUninstall(args: *std.process.ArgIterator) Command {
     const arg = args.next() orelse return .help;
     const ref = parseInstanceRef(arg) orelse return .help;
@@ -320,10 +366,17 @@ pub fn printUsage() void {
         \\  check-updates             Check for updates
         \\  update <component/name>   Update an instance
         \\  update-all                Update all instances
+        \\  api <METHOD> <PATH>       Call any local nullhub HTTP API route
         \\  uninstall <component/name> Remove an instance
         \\  service <install|uninstall|status>  Manage OS service
         \\  add-source <repo-url>     Add custom component source
         \\  version, -v, --version    Show version
+        \\
+        \\API examples:
+        \\  nullhub api GET /api/instances
+        \\  nullhub api DELETE /api/instances/nullclaw/demo
+        \\  nullhub api POST providers/2/validate
+        \\  nullhub api PATCH instances/nullclaw/demo --body '{{"auto_start":true}}'
         \\
     , .{});
 }
@@ -413,4 +466,20 @@ test "UninstallOptions defaults" {
     const ref = InstanceRef{ .component = "comp", .name = "inst" };
     const opts = UninstallOptions{ .instance = ref };
     try std.testing.expect(!opts.remove_data);
+}
+
+test "ApiOptions defaults" {
+    const opts = ApiOptions{
+        .method = "GET",
+        .target = "/api/status",
+    };
+    try std.testing.expectEqualStrings("GET", opts.method);
+    try std.testing.expectEqualStrings("/api/status", opts.target);
+    try std.testing.expectEqualStrings(access.default_bind_host, opts.host);
+    try std.testing.expectEqual(access.default_port, opts.port);
+    try std.testing.expect(opts.body == null);
+    try std.testing.expect(opts.body_file == null);
+    try std.testing.expect(opts.token == null);
+    try std.testing.expectEqualStrings("application/json", opts.content_type);
+    try std.testing.expect(!opts.pretty);
 }

@@ -1,5 +1,6 @@
 pub const auth = @import("auth.zig");
 pub const access = @import("access.zig");
+pub const api_cli = @import("api_cli.zig");
 pub const builder = @import("installer/builder.zig");
 pub const cli = @import("cli.zig");
 pub const component_cli = @import("core/component_cli.zig");
@@ -39,6 +40,7 @@ pub const usage_api = @import("api/usage.zig");
 test {
     _ = auth;
     _ = access;
+    _ = api_cli;
     _ = builder;
     _ = cli;
     _ = component_cli;
