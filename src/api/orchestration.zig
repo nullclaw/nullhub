@@ -8,37 +8,93 @@ const Response = struct {
 };
 
 const prefix = "/api/orchestration";
+const store_prefix = "/api/orchestration/store";
 
-/// Proxies orchestration API requests to NullBoiler.
-/// Strips the /api/orchestration prefix and forwards to NullBoiler's REST API.
-pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body: []const u8, boiler_url: []const u8, boiler_token: ?[]const u8) Response {
-    if (!std.mem.startsWith(u8, target, prefix)) {
-        return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
+pub const Config = struct {
+    boiler_url: ?[]const u8 = null,
+    boiler_token: ?[]const u8 = null,
+    tickets_url: ?[]const u8 = null,
+    tickets_token: ?[]const u8 = null,
+};
+
+pub fn isProxyPath(target: []const u8) bool {
+    return std.mem.eql(u8, target, prefix) or std.mem.startsWith(u8, target, prefix ++ "/");
+}
+
+fn isStorePath(target: []const u8) bool {
+    return std.mem.eql(u8, target, store_prefix) or std.mem.startsWith(u8, target, store_prefix ++ "/");
+}
+
+const ProxyTarget = struct {
+    base_url: []const u8,
+    token: ?[]const u8,
+    unavailable_body: []const u8,
+    unreachable_body: []const u8,
+};
+
+fn resolveProxyTarget(target: []const u8, cfg: Config) ?ProxyTarget {
+    if (!isProxyPath(target)) return null;
+    if (isStorePath(target)) {
+        const base_url = cfg.tickets_url orelse return .{
+            .base_url = "",
+            .token = null,
+            .unavailable_body = "{\"error\":\"NullTickets not configured\"}",
+            .unreachable_body = "{\"error\":\"NullTickets unreachable\"}",
+        };
+        return .{
+            .base_url = base_url,
+            .token = cfg.tickets_token,
+            .unavailable_body = "",
+            .unreachable_body = "{\"error\":\"NullTickets unreachable\"}",
+        };
     }
 
-    const boiler_path = target[prefix.len..];
-    const path = if (boiler_path.len == 0) "/" else boiler_path;
+    const base_url = cfg.boiler_url orelse return .{
+        .base_url = "",
+        .token = null,
+        .unavailable_body = "{\"error\":\"NullBoiler not configured\"}",
+        .unreachable_body = "{\"error\":\"NullBoiler unreachable\"}",
+    };
+    return .{
+        .base_url = base_url,
+        .token = cfg.boiler_token,
+        .unavailable_body = "",
+        .unreachable_body = "{\"error\":\"NullBoiler unreachable\"}",
+    };
+}
 
-    // Build full URL: boiler_url + path
-    const url = std.fmt.allocPrint(allocator, "{s}{s}", .{ boiler_url, path }) catch
+/// Proxies orchestration API requests to the local orchestration stack.
+/// `/api/orchestration/store/*` goes to NullTickets; all other orchestration
+/// routes go to NullBoiler. The shared prefix is stripped before forwarding.
+pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body: []const u8, cfg: Config) Response {
+    if (!isProxyPath(target)) {
+        return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
+    }
+    const resolved = resolveProxyTarget(target, cfg) orelse
+        return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
+    if (resolved.unavailable_body.len > 0) {
+        return .{ .status = "503 Service Unavailable", .content_type = "application/json", .body = resolved.unavailable_body };
+    }
+
+    const proxied_path = target[prefix.len..];
+    const path = if (proxied_path.len == 0) "/" else proxied_path;
+
+    const url = std.fmt.allocPrint(allocator, "{s}{s}", .{ resolved.base_url, path }) catch
         return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
 
-    // Resolve HTTP method string to enum
     const http_method = parseMethod(method) orelse
         return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
 
-    // Build auth header if token provided
     var auth_header: ?[]const u8 = null;
     defer if (auth_header) |value| allocator.free(value);
     var header_buf: [1]std.http.Header = undefined;
-    const extra_headers: []const std.http.Header = if (boiler_token) |token| blk: {
+    const extra_headers: []const std.http.Header = if (resolved.token) |token| blk: {
         auth_header = std.fmt.allocPrint(allocator, "Bearer {s}", .{token}) catch
             return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
         header_buf[0] = .{ .name = "Authorization", .value = auth_header.? };
         break :blk header_buf[0..1];
     } else &.{};
 
-    // Make HTTP request to NullBoiler
     var client: std.http.Client = .{ .allocator = allocator };
     defer client.deinit();
 
@@ -52,7 +108,7 @@ pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body
         .response_writer = &response_body.writer,
         .extra_headers = extra_headers,
     }) catch {
-        return .{ .status = "502 Bad Gateway", .content_type = "application/json", .body = "{\"error\":\"NullBoiler unreachable\"}" };
+        return .{ .status = "502 Bad Gateway", .content_type = "application/json", .body = resolved.unreachable_body };
     };
 
     const status_code: u10 = @intFromEnum(result.status);
@@ -94,4 +150,27 @@ fn mapStatus(code: u10) []const u8 {
         503 => "503 Service Unavailable",
         else => if (code >= 200 and code < 300) "200 OK" else if (code >= 400 and code < 500) "400 Bad Request" else "500 Internal Server Error",
     };
+}
+
+test "isProxyPath matches orchestration namespace" {
+    try std.testing.expect(isProxyPath("/api/orchestration"));
+    try std.testing.expect(isProxyPath("/api/orchestration/runs"));
+    try std.testing.expect(isProxyPath("/api/orchestration/store/search"));
+    try std.testing.expect(!isProxyPath("/api/instances"));
+}
+
+test "handle routes store paths to NullTickets config" {
+    const resp = handle(std.testing.allocator, "GET", "/api/orchestration/store/search", "", .{
+        .boiler_url = "http://127.0.0.1:8080",
+    });
+    try std.testing.expectEqualStrings("503 Service Unavailable", resp.status);
+    try std.testing.expectEqualStrings("{\"error\":\"NullTickets not configured\"}", resp.body);
+}
+
+test "handle routes non-store paths to NullBoiler config" {
+    const resp = handle(std.testing.allocator, "GET", "/api/orchestration/runs", "", .{
+        .tickets_url = "http://127.0.0.1:7711",
+    });
+    try std.testing.expectEqualStrings("503 Service Unavailable", resp.status);
+    try std.testing.expectEqualStrings("{\"error\":\"NullBoiler not configured\"}", resp.body);
 }

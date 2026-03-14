@@ -442,7 +442,7 @@ pub const Server = struct {
     }
 
     fn routeWithoutServerMutex(target: []const u8) bool {
-        return instances_api.isIntegrationPath(target) or isOrchestrationProxyPath(target);
+        return instances_api.isIntegrationPath(target) or orchestration_api.isProxyPath(target);
     }
 
     fn route(self: *Server, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -974,32 +974,14 @@ pub const Server = struct {
             }
         }
 
-        // Store API — proxy to NullTickets (must be checked before NullBoiler catch-all)
-        if (std.mem.startsWith(u8, target, "/api/orchestration/store/") or std.mem.eql(u8, target, "/api/orchestration/store")) {
-            const tickets_url = self.getTicketsUrl();
-            if (tickets_url) |url| {
-                const resp = orchestration_api.handle(allocator, method, target, body, url, self.getTicketsToken());
-                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
-            }
-            return .{
-                .status = "503 Service Unavailable",
-                .content_type = "application/json",
-                .body = "{\"error\":\"NullTickets not configured\"}",
-            };
-        }
-
-        // Orchestration API — proxy to NullBoiler
-        if (std.mem.startsWith(u8, target, "/api/orchestration/") or std.mem.eql(u8, target, "/api/orchestration")) {
-            const boiler_url = self.getBoilerUrl();
-            if (boiler_url) |url| {
-                const resp = orchestration_api.handle(allocator, method, target, body, url, self.getBoilerToken());
-                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
-            }
-            return .{
-                .status = "503 Service Unavailable",
-                .content_type = "application/json",
-                .body = "{\"error\":\"NullBoiler not configured\"}",
-            };
+        if (orchestration_api.isProxyPath(target)) {
+            const resp = orchestration_api.handle(allocator, method, target, body, .{
+                .boiler_url = self.getBoilerUrl(),
+                .boiler_token = self.getBoilerToken(),
+                .tickets_url = self.getTicketsUrl(),
+                .tickets_token = self.getTicketsToken(),
+            });
+            return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
         }
 
         // Serve UI module files from data directory (~/.nullhub/ui/{name}@{version}/...)
@@ -1031,11 +1013,6 @@ const Response = struct {
     content_type: []const u8,
     body: []const u8,
 };
-
-fn isOrchestrationProxyPath(target: []const u8) bool {
-    return std.mem.eql(u8, target, "/api/orchestration") or
-        std.mem.startsWith(u8, target, "/api/orchestration/");
-}
 
 fn jsonResponse(body: []const u8) Response {
     return .{ .status = "200 OK", .content_type = "application/json", .body = body };
