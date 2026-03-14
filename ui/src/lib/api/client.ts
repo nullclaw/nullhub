@@ -10,6 +10,10 @@ function withQuery(path: string, params: Record<string, string | number | boolea
   return query ? `${path}?${query}` : path;
 }
 
+export function encodePathSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
 export type LogSource = 'instance' | 'nullhub';
 type InstanceStartOptions = {
   launch_mode?: string;
@@ -256,12 +260,12 @@ export const api = {
     const list = Array.isArray(raw) ? raw : raw?.items ?? [];
     return list.map(normalizeWorkflow);
   },
-  getWorkflow: async (id: string) => normalizeWorkflow(await request<any>(`/orchestration/workflows/${id}`)),
+  getWorkflow: async (id: string) => normalizeWorkflow(await request<any>(`/orchestration/workflows/${encodePathSegment(id)}`)),
   createWorkflow: (data: any) => request<any>('/orchestration/workflows', { method: 'POST', body: JSON.stringify(data) }),
-  updateWorkflow: (id: string, data: any) => request<any>(`/orchestration/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteWorkflow: (id: string) => request<any>(`/orchestration/workflows/${id}`, { method: 'DELETE' }),
-  validateWorkflow: async (id: string) => normalizeValidation(await request<any>(`/orchestration/workflows/${id}/validate`, { method: 'POST' })),
-  runWorkflow: (id: string, input: any) => request<any>(`/orchestration/workflows/${id}/run`, { method: 'POST', body: JSON.stringify(input) }),
+  updateWorkflow: (id: string, data: any) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteWorkflow: (id: string) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}`, { method: 'DELETE' }),
+  validateWorkflow: async (id: string) => normalizeValidation(await request<any>(`/orchestration/workflows/${encodePathSegment(id)}/validate`, { method: 'POST' })),
+  runWorkflow: (id: string, input: any) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}/run`, { method: 'POST', body: JSON.stringify(input) }),
 
   // Orchestration - Runs
   listRuns: async (params?: { status?: string; workflow_id?: string }) => {
@@ -270,25 +274,25 @@ export const api = {
     const list = Array.isArray(raw) ? raw : raw?.items ?? [];
     return list.map(normalizeRun);
   },
-  getRun: async (id: string) => normalizeRun(await request<any>(`/orchestration/runs/${id}`)),
-  cancelRun: (id: string) => request<any>(`/orchestration/runs/${id}/cancel`, { method: 'POST' }),
-  resumeRun: (id: string, updates: any) => request<any>(`/orchestration/runs/${id}/resume`, { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
+  getRun: async (id: string) => normalizeRun(await request<any>(`/orchestration/runs/${encodePathSegment(id)}`)),
+  cancelRun: (id: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/cancel`, { method: 'POST' }),
+  resumeRun: (id: string, updates: any) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/resume`, { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
   forkRun: (checkpointId: string, overrides?: any) => request<any>('/orchestration/runs/fork', { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, state_overrides: overrides }) }),
-  replayRun: (id: string, checkpointId: string) => request<any>(`/orchestration/runs/${id}/replay`, { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId }) }),
-  injectState: (id: string, updates: any, afterStep?: string) => request<any>(`/orchestration/runs/${id}/state`, { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
+  replayRun: (id: string, checkpointId: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/replay`, { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId }) }),
+  injectState: (id: string, updates: any, afterStep?: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/state`, { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
 
   // Orchestration - Checkpoints
   listCheckpoints: async (runId: string) => {
-    const cps = await request<any[]>(`/orchestration/runs/${runId}/checkpoints`);
+    const cps = await request<any[]>(`/orchestration/runs/${encodePathSegment(runId)}/checkpoints`);
     return (cps || []).map(normalizeCheckpoint);
   },
-  getCheckpoint: async (runId: string, cpId: string) => normalizeCheckpoint(await request<any>(`/orchestration/runs/${runId}/checkpoints/${cpId}`)),
+  getCheckpoint: async (runId: string, cpId: string) => normalizeCheckpoint(await request<any>(`/orchestration/runs/${encodePathSegment(runId)}/checkpoints/${encodePathSegment(cpId)}`)),
 
   // Store API (proxied through NullBoiler or direct to NullTickets)
-  storeList: (namespace: string) => request<any[]>(`/orchestration/store/${namespace}`),
-  storeGet: (namespace: string, key: string) => request<any>(`/orchestration/store/${namespace}/${key}`),
-  storePut: (namespace: string, key: string, value: any) => request<void>(`/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
-  storeDelete: (namespace: string, key: string) => request<void>(`/orchestration/store/${namespace}/${key}`, { method: 'DELETE' }),
+  storeList: (namespace: string) => request<any[]>(`/orchestration/store/${encodePathSegment(namespace)}`),
+  storeGet: (namespace: string, key: string) => request<any>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`),
+  storePut: (namespace: string, key: string, value: any) => request<void>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  storeDelete: (namespace: string, key: string) => request<void>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`, { method: 'DELETE' }),
 
   // Orchestration - Stream (poll-based: NullBoiler returns JSON, not true SSE)
   // NullBoiler's HTTP/1.1 server returns complete JSON responses, not held-open
@@ -298,7 +302,7 @@ export const api = {
     const poll = async () => {
       while (active) {
         try {
-          const res = await request<any>(`/orchestration/runs/${runId}/stream`);
+          const res = await request<any>(`/orchestration/runs/${encodePathSegment(runId)}/stream`);
           // NullBoiler returns {status, state?, events, stream_events}
           if (res?.stream_events) {
             for (const ev of res.stream_events) {

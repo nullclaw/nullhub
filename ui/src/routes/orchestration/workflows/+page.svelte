@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client';
+  import { api, encodePathSegment } from '$lib/api/client';
 
   let workflows = $state<any[]>([]);
   let loading = $state(true);
@@ -35,6 +35,10 @@
     if (!wf.nodes) return 0;
     return Object.keys(wf.nodes).length;
   }
+
+  function workflowHref(id: string): string {
+    return `/orchestration/workflows/${encodePathSegment(id)}`;
+  }
 </script>
 
 <div class="page">
@@ -66,8 +70,8 @@
             <div class="wf-id">{wf.id}</div>
           {/if}
           <div class="wf-actions">
-            <a href="/orchestration/workflows/{wf.id}" class="btn-edit">Edit</a>
-            <button class="btn-run" onclick={() => goto(`/orchestration/workflows/${wf.id}`)}>Run</button>
+            <a href={workflowHref(wf.id)} class="btn-edit">Edit</a>
+            <button class="btn-run" onclick={() => goto(workflowHref(wf.id))}>Run</button>
             {#if deleteConfirm === wf.id}
               <button class="btn-confirm-delete" onclick={() => deleteWorkflow(wf.id)}>Confirm</button>
               <button class="btn-cancel" onclick={() => deleteConfirm = null}>Cancel</button>

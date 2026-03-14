@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client';
+  import { api, encodePathSegment } from '$lib/api/client';
   import GraphViewer from '$lib/components/orchestration/GraphViewer.svelte';
   import WorkflowJsonEditor from '$lib/components/orchestration/WorkflowJsonEditor.svelte';
 
@@ -55,11 +55,11 @@
   });
 
   async function validate() {
-    if (isNew || !parsedWorkflow?.id) return;
+    if (isNew) return;
     validating = true;
     validationResult = null;
     try {
-      const result = await api.validateWorkflow(parsedWorkflow.id);
+      const result = await api.validateWorkflow(id);
       validationResult = result;
     } catch (e) {
       validationResult = { valid: false, errors: [(e as Error).message] };
@@ -75,7 +75,7 @@
     try {
       if (isNew) {
         const result = await api.createWorkflow(parsedWorkflow);
-        await goto(`/orchestration/workflows/${result.id || parsedWorkflow.id}`);
+        await goto(`/orchestration/workflows/${encodePathSegment(result.id || parsedWorkflow.id)}`);
       } else {
         await api.updateWorkflow(id, parsedWorkflow);
       }
@@ -91,7 +91,7 @@
     try {
       const result = await api.runWorkflow(id, {});
       if (result?.id) {
-        await goto(`/orchestration/runs/${result.id}`);
+        await goto(`/orchestration/runs/${encodePathSegment(result.id)}`);
       }
     } catch (e) {
       error = (e as Error).message;

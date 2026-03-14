@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { api } from '$lib/api/client';
+  import { api, encodePathSegment } from '$lib/api/client';
   import GraphViewer from '$lib/components/orchestration/GraphViewer.svelte';
   import StateInspector from '$lib/components/orchestration/StateInspector.svelte';
   import RunEventLog from '$lib/components/orchestration/RunEventLog.svelte';
@@ -101,6 +101,10 @@
     interrupted: 'var(--warning)',
     cancelled: 'var(--fg-dim)',
   };
+
+  function runForkHref(runId: string): string {
+    return `/orchestration/runs/${encodePathSegment(runId)}/fork`;
+  }
 </script>
 
 <div class="run-detail">
@@ -120,7 +124,7 @@
       {#if isActive}
         <button class="tool-btn cancel" onclick={cancelRun}>Cancel</button>
       {/if}
-      <a href="/orchestration/runs/{id}/fork" class="tool-btn">Fork</a>
+      <a href={runForkHref(id)} class="tool-btn">Fork</a>
     </div>
   </div>
 

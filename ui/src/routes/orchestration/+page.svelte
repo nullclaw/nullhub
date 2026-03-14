@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client';
+  import { api, encodePathSegment } from '$lib/api/client';
 
   let runs = $state<any[]>([]);
   let loading = $state(true);
@@ -54,6 +54,10 @@
   function formatTime(ts: string): string {
     if (!ts) return '-';
     return new Date(ts).toLocaleString();
+  }
+
+  function runHref(id: string): string {
+    return `/orchestration/runs/${encodePathSegment(id)}`;
   }
 </script>
 
@@ -109,7 +113,7 @@
           </thead>
           <tbody>
             {#each runs.slice(0, 20) as run}
-              <tr onclick={() => goto(`/orchestration/runs/${run.id}`)} class="clickable">
+              <tr onclick={() => goto(runHref(run.id))} class="clickable">
                 <td class="mono">{(run.id || '').slice(0, 8)}</td>
                 <td>{run.workflow_name || run.workflow_id || '-'}</td>
                 <td>

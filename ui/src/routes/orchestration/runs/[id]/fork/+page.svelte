@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client';
+  import { api, encodePathSegment } from '$lib/api/client';
   import CheckpointTimeline from '$lib/components/orchestration/CheckpointTimeline.svelte';
   import StateInspector from '$lib/components/orchestration/StateInspector.svelte';
 
@@ -58,7 +58,7 @@
       const overrides = JSON.parse(overridesJson);
       const result = await api.forkRun(selectedCp, Object.keys(overrides).length > 0 ? overrides : undefined);
       if (result?.id) {
-        await goto(`/orchestration/runs/${result.id}`);
+        await goto(`/orchestration/runs/${encodePathSegment(result.id)}`);
       }
     } catch (e) {
       error = (e as Error).message;
@@ -66,12 +66,16 @@
       forking = false;
     }
   }
+
+  function runHref(id: string): string {
+    return `/orchestration/runs/${encodePathSegment(id)}`;
+  }
 </script>
 
 <div class="fork-page">
   <div class="toolbar">
     <div class="toolbar-left">
-      <a href="/orchestration/runs/{runId}" class="back-link">Run {(runId || '').slice(0, 8)}</a>
+      <a href={runHref(runId)} class="back-link">Run {(runId || '').slice(0, 8)}</a>
       <span class="sep">/</span>
       <span class="page-title">Fork</span>
     </div>
