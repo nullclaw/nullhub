@@ -2,6 +2,7 @@
   import { page } from "$app/stores";
   import { onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { orchestrationUiRoutes } from "$lib/orchestration/routes";
 
   let instances = $state<Record<string, any>>({});
   let currentPath = $derived($page.url.pathname);
@@ -50,6 +51,14 @@
         {/each}
       </div>
     {/each}
+  </div>
+
+  <div class="nav-section">
+    <h3>Orchestration</h3>
+    <a href={orchestrationUiRoutes.dashboard()} class:active={currentPath === orchestrationUiRoutes.dashboard()}>Dashboard</a>
+    <a href={orchestrationUiRoutes.workflows()} class:active={currentPath.startsWith(orchestrationUiRoutes.workflows())}>Workflows</a>
+    <a href={orchestrationUiRoutes.runs()} class:active={currentPath.startsWith(orchestrationUiRoutes.runs())}>Runs</a>
+    <a href={orchestrationUiRoutes.store()} class:active={currentPath.startsWith(orchestrationUiRoutes.store())}>Store</a>
   </div>
 
   <div class="nav-section">

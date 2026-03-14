@@ -20,6 +20,7 @@ NullTickets).
 - **One-click updates** -- download, migrate config, rollback on failure
 - **Multi-instance** -- run multiple instances of the same component side by side
 - **Web UI + CLI** -- browser dashboard for humans, CLI for automation
+- **Orchestration UI** -- workflow editor, poll-based run monitoring, checkpoint forking, encoded workflow/run/store links, and key-value store browser (proxied to NullTickets through NullHub)
 
 ## Quick Start
 
@@ -103,6 +104,12 @@ UI modules. NullHub is a generic engine that interprets manifests.
 **Storage** -- all state lives under `~/.nullhub/` (config, instances, binaries,
 logs, cached manifests).
 
+**Orchestration proxy** -- requests to `/api/orchestration/*` are reverse-proxied
+to the local orchestration stack. Most routes go to NullBoiler's REST API via
+`NULLBOILER_URL` (e.g. `http://localhost:8080`) and optional `NULLBOILER_TOKEN`.
+`/api/orchestration/store/*` is proxied to NullTickets via `NULLTICKETS_URL` and
+optional `NULLTICKETS_TOKEN`.
+
 ## Development
 
 Backend:
@@ -127,7 +134,9 @@ End-to-end:
 
 - Zig 0.15.2
 - Svelte 5 + SvelteKit (static adapter)
-- JSON over HTTP/1.1, SSE for streaming
+- JSON over HTTP/1.1
+- SSE for instance log streaming
+- Poll-based orchestration run updates over the `/orchestration/runs/{id}/stream` API
 
 ## Project Layout
 
@@ -138,15 +147,17 @@ src/
   server.zig            # HTTP server (API + static UI)
   auth.zig              # Optional bearer token auth
   api/                  # REST endpoints (components, instances, wizard, ...)
+    orchestration.zig   # Reverse proxy to NullBoiler orchestration API
   core/                 # Manifest parser, state, platform, paths
   installer/            # Download, build, UI module fetching
   supervisor/           # Process spawn, health checks, manager
-  wizard/               # Manifest wizard engine, config writer
 ui/src/
-  routes/               # SvelteKit pages (dashboard, install, instances, settings)
+  routes/               # SvelteKit pages
+    orchestration/      # Orchestration pages (dashboard, workflows, runs, store)
   lib/components/       # Reusable Svelte components
+    orchestration/      # GraphViewer, StateInspector, RunEventLog, InterruptPanel,
+                        # CheckpointTimeline, WorkflowJsonEditor, NodeCard, SendProgressBar
   lib/api/              # Typed API client
-  lib/stores/           # Reactive state (instances, hub config)
 tests/
   test_e2e.sh           # End-to-end test script
 ```

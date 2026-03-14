@@ -1,3 +1,5 @@
+import { createOrchestrationApi } from '$lib/api/orchestration';
+
 const BASE = '/api';
 
 function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
@@ -9,6 +11,8 @@ function withQuery(path: string, params: Record<string, string | number | boolea
   const query = search.toString();
   return query ? `${path}?${query}` : path;
 }
+
+export { encodePathSegment } from '$lib/orchestration/routes';
 
 export type LogSource = 'instance' | 'nullhub';
 type InstanceStartOptions = {
@@ -23,9 +27,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.error || `HTTP ${res.status}`);
+    const errMsg = typeof body?.error === 'string' ? body.error : body?.error?.message || `HTTP ${res.status}`;
+    throw new Error(errMsg);
   }
-  return res.json();
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text);
 }
 
 export const api = {
@@ -174,4 +182,5 @@ export const api = {
     request<any>(`/channels/${id.replace('sc_', '')}`, { method: 'DELETE' }),
   revalidateSavedChannel: (id: string) =>
     request<any>(`/channels/${id.replace('sc_', '')}/validate`, { method: 'POST' }),
+  ...createOrchestrationApi(request, withQuery),
 };
