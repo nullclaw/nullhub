@@ -48,7 +48,8 @@
   async function viewEntry(entry: any) {
     try {
       const full = await api.storeGet(browsedNamespace, entry.key);
-      selectedEntry = { key: entry.key, value: full };
+      // nulltickets returns a StoreEntry {namespace, key, value, ...} — extract .value
+      selectedEntry = { key: entry.key, value: full?.value ?? full };
     } catch (e) {
       // fall back to inline value
       selectedEntry = { key: entry.key, value: entry.value ?? entry };

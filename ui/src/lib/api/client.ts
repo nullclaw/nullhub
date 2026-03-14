@@ -257,7 +257,7 @@ export const api = {
   // Store API (proxied through NullBoiler or direct to NullTickets)
   storeList: (namespace: string) => request<any[]>(`/orchestration/store/${namespace}`),
   storeGet: (namespace: string, key: string) => request<any>(`/orchestration/store/${namespace}/${key}`),
-  storePut: (namespace: string, key: string, value: any) => request<any>(`/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  storePut: (namespace: string, key: string, value: any) => request<void>(`/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
   storeDelete: (namespace: string, key: string) => request<void>(`/orchestration/store/${namespace}/${key}`, { method: 'DELETE' }),
 
   // Orchestration - SSE
