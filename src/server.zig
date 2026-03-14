@@ -389,7 +389,7 @@ pub const Server = struct {
         }
 
         // Route dispatch (lock mutex so supervisor thread doesn't race)
-        const response = if (instances_api.isIntegrationPath(target))
+        const response = if (routeWithoutServerMutex(target))
             self.route(alloc, method, target, body)
         else blk: {
             self.mutex.lock();
@@ -439,6 +439,10 @@ pub const Server = struct {
     fn getTicketsToken(self: *Server) ?[]const u8 {
         _ = self;
         return getEnv("NULLTICKETS_TOKEN");
+    }
+
+    fn routeWithoutServerMutex(target: []const u8) bool {
+        return instances_api.isIntegrationPath(target) or isOrchestrationProxyPath(target);
     }
 
     fn route(self: *Server, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -1028,6 +1032,11 @@ const Response = struct {
     body: []const u8,
 };
 
+fn isOrchestrationProxyPath(target: []const u8) bool {
+    return std.mem.eql(u8, target, "/api/orchestration") or
+        std.mem.startsWith(u8, target, "/api/orchestration/");
+}
+
 fn jsonResponse(body: []const u8) Response {
     return .{ .status = "200 OK", .content_type = "application/json", .body = body };
 }
@@ -1398,6 +1407,14 @@ test "requestOriginAllowed rejects foreign API origins" {
         "Host: 127.0.0.1:19800\r\n" ++
         "Origin: http://nullhub.localhost:19800\r\n\r\n";
     try std.testing.expect(requestOriginAllowed(local_raw, "/api/status", "127.0.0.1", 19800));
+}
+
+test "routeWithoutServerMutex keeps orchestration proxy requests off global lock" {
+    try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration"));
+    try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration/runs"));
+    try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration/store/search"));
+    try std.testing.expect(Server.routeWithoutServerMutex("/api/instances/nullclaw/demo/logs"));
+    try std.testing.expect(!Server.routeWithoutServerMutex("/api/components"));
 }
 
 test "extractBody returns body after headers" {
