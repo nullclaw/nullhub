@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
   import GraphViewer from '$lib/components/orchestration/GraphViewer.svelte';
   import WorkflowJsonEditor from '$lib/components/orchestration/WorkflowJsonEditor.svelte';
 
@@ -75,7 +76,7 @@
     try {
       if (isNew) {
         const result = await api.createWorkflow(parsedWorkflow);
-        await goto(`/orchestration/workflows/${encodePathSegment(result.id || parsedWorkflow.id)}`);
+        await goto(orchestrationUiRoutes.workflow(result.id || parsedWorkflow.id));
       } else {
         await api.updateWorkflow(id, parsedWorkflow);
       }
@@ -91,7 +92,7 @@
     try {
       const result = await api.runWorkflow(id, {});
       if (result?.id) {
-        await goto(`/orchestration/runs/${encodePathSegment(result.id)}`);
+        await goto(orchestrationUiRoutes.run(result.id));
       }
     } catch (e) {
       error = (e as Error).message;
@@ -102,7 +103,7 @@
 <div class="editor-page">
   <div class="toolbar">
     <div class="toolbar-left">
-      <a href="/orchestration/workflows" class="back-link">Workflows</a>
+      <a href={orchestrationUiRoutes.workflows()} class="back-link">Workflows</a>
       <span class="sep">/</span>
       <span class="page-title">{isNew ? 'New Workflow' : (parsedWorkflow?.name || id)}</span>
     </div>

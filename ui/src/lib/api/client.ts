@@ -1,3 +1,5 @@
+import { orchestrationApiPaths } from '$lib/orchestration/routes';
+
 const BASE = '/api';
 
 function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
@@ -10,9 +12,7 @@ function withQuery(path: string, params: Record<string, string | number | boolea
   return query ? `${path}?${query}` : path;
 }
 
-export function encodePathSegment(value: string): string {
-  return encodeURIComponent(value);
-}
+export { encodePathSegment } from '$lib/orchestration/routes';
 
 export type LogSource = 'instance' | 'nullhub';
 type InstanceStartOptions = {
@@ -256,43 +256,43 @@ export const api = {
 
   // Orchestration - Workflows
   listWorkflows: async () => {
-    const raw = await request<any>('/orchestration/workflows');
+    const raw = await request<any>(orchestrationApiPaths.workflows());
     const list = Array.isArray(raw) ? raw : raw?.items ?? [];
     return list.map(normalizeWorkflow);
   },
-  getWorkflow: async (id: string) => normalizeWorkflow(await request<any>(`/orchestration/workflows/${encodePathSegment(id)}`)),
-  createWorkflow: (data: any) => request<any>('/orchestration/workflows', { method: 'POST', body: JSON.stringify(data) }),
-  updateWorkflow: (id: string, data: any) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteWorkflow: (id: string) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}`, { method: 'DELETE' }),
-  validateWorkflow: async (id: string) => normalizeValidation(await request<any>(`/orchestration/workflows/${encodePathSegment(id)}/validate`, { method: 'POST' })),
-  runWorkflow: (id: string, input: any) => request<any>(`/orchestration/workflows/${encodePathSegment(id)}/run`, { method: 'POST', body: JSON.stringify(input) }),
+  getWorkflow: async (id: string) => normalizeWorkflow(await request<any>(orchestrationApiPaths.workflow(id))),
+  createWorkflow: (data: any) => request<any>(orchestrationApiPaths.workflows(), { method: 'POST', body: JSON.stringify(data) }),
+  updateWorkflow: (id: string, data: any) => request<any>(orchestrationApiPaths.workflow(id), { method: 'PUT', body: JSON.stringify(data) }),
+  deleteWorkflow: (id: string) => request<any>(orchestrationApiPaths.workflow(id), { method: 'DELETE' }),
+  validateWorkflow: async (id: string) => normalizeValidation(await request<any>(orchestrationApiPaths.workflowValidate(id), { method: 'POST' })),
+  runWorkflow: (id: string, input: any) => request<any>(orchestrationApiPaths.workflowRun(id), { method: 'POST', body: JSON.stringify(input) }),
 
   // Orchestration - Runs
   listRuns: async (params?: { status?: string; workflow_id?: string }) => {
-    const raw = await request<any>(withQuery('/orchestration/runs', params ?? {}));
+    const raw = await request<any>(withQuery(orchestrationApiPaths.runs(), params ?? {}));
     // NullBoiler returns paginated {items, limit, offset, has_more} or raw array
     const list = Array.isArray(raw) ? raw : raw?.items ?? [];
     return list.map(normalizeRun);
   },
-  getRun: async (id: string) => normalizeRun(await request<any>(`/orchestration/runs/${encodePathSegment(id)}`)),
-  cancelRun: (id: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/cancel`, { method: 'POST' }),
-  resumeRun: (id: string, updates: any) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/resume`, { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
-  forkRun: (checkpointId: string, overrides?: any) => request<any>('/orchestration/runs/fork', { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, state_overrides: overrides }) }),
-  replayRun: (id: string, checkpointId: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/replay`, { method: 'POST', body: JSON.stringify({ from_checkpoint_id: checkpointId }) }),
-  injectState: (id: string, updates: any, afterStep?: string) => request<any>(`/orchestration/runs/${encodePathSegment(id)}/state`, { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
+  getRun: async (id: string) => normalizeRun(await request<any>(orchestrationApiPaths.run(id))),
+  cancelRun: (id: string) => request<any>(orchestrationApiPaths.runCancel(id), { method: 'POST' }),
+  resumeRun: (id: string, updates: any) => request<any>(orchestrationApiPaths.runResume(id), { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
+  forkRun: (checkpointId: string, overrides?: any) => request<any>(orchestrationApiPaths.runsFork(), { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, state_overrides: overrides }) }),
+  replayRun: (id: string, checkpointId: string) => request<any>(orchestrationApiPaths.runReplay(id), { method: 'POST', body: JSON.stringify({ from_checkpoint_id: checkpointId }) }),
+  injectState: (id: string, updates: any, afterStep?: string) => request<any>(orchestrationApiPaths.runState(id), { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
 
   // Orchestration - Checkpoints
   listCheckpoints: async (runId: string) => {
-    const cps = await request<any[]>(`/orchestration/runs/${encodePathSegment(runId)}/checkpoints`);
+    const cps = await request<any[]>(orchestrationApiPaths.runCheckpoints(runId));
     return (cps || []).map(normalizeCheckpoint);
   },
-  getCheckpoint: async (runId: string, cpId: string) => normalizeCheckpoint(await request<any>(`/orchestration/runs/${encodePathSegment(runId)}/checkpoints/${encodePathSegment(cpId)}`)),
+  getCheckpoint: async (runId: string, cpId: string) => normalizeCheckpoint(await request<any>(orchestrationApiPaths.runCheckpoint(runId, cpId))),
 
   // Store API (proxied through NullBoiler or direct to NullTickets)
-  storeList: (namespace: string) => request<any[]>(`/orchestration/store/${encodePathSegment(namespace)}`),
-  storeGet: (namespace: string, key: string) => request<any>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`),
-  storePut: (namespace: string, key: string, value: any) => request<void>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`, { method: 'PUT', body: JSON.stringify({ value }) }),
-  storeDelete: (namespace: string, key: string) => request<void>(`/orchestration/store/${encodePathSegment(namespace)}/${encodePathSegment(key)}`, { method: 'DELETE' }),
+  storeList: (namespace: string) => request<any[]>(orchestrationApiPaths.storeNamespace(namespace)),
+  storeGet: (namespace: string, key: string) => request<any>(orchestrationApiPaths.storeEntry(namespace, key)),
+  storePut: (namespace: string, key: string, value: any) => request<void>(orchestrationApiPaths.storeEntry(namespace, key), { method: 'PUT', body: JSON.stringify({ value }) }),
+  storeDelete: (namespace: string, key: string) => request<void>(orchestrationApiPaths.storeEntry(namespace, key), { method: 'DELETE' }),
 
   // Orchestration - Stream (poll-based: NullBoiler returns JSON, not true SSE)
   // NullBoiler's HTTP/1.1 server returns complete JSON responses, not held-open
@@ -308,7 +308,7 @@ export const api = {
     const poll = async () => {
       while (active) {
         try {
-          const res = await request<any>(`/orchestration/runs/${encodePathSegment(runId)}/stream`);
+          const res = await request<any>(orchestrationApiPaths.runStream(runId));
           // NullBoiler returns {status, state?, events, stream_events}
           if (res?.stream_events) {
             for (const ev of res.stream_events) {

@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
   import CheckpointTimeline from '$lib/components/orchestration/CheckpointTimeline.svelte';
   import StateInspector from '$lib/components/orchestration/StateInspector.svelte';
 
@@ -58,7 +59,7 @@
       const overrides = JSON.parse(overridesJson);
       const result = await api.forkRun(selectedCp, Object.keys(overrides).length > 0 ? overrides : undefined);
       if (result?.id) {
-        await goto(`/orchestration/runs/${encodePathSegment(result.id)}`);
+        await goto(orchestrationUiRoutes.run(result.id));
       }
     } catch (e) {
       error = (e as Error).message;
@@ -68,7 +69,7 @@
   }
 
   function runHref(id: string): string {
-    return `/orchestration/runs/${encodePathSegment(id)}`;
+    return orchestrationUiRoutes.run(id);
   }
 </script>
 

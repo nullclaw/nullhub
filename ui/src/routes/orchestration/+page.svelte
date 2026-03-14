@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
 
   let runs = $state<any[]>([]);
   let loading = $state(true);
@@ -57,14 +58,14 @@
   }
 
   function runHref(id: string): string {
-    return `/orchestration/runs/${encodePathSegment(id)}`;
+    return orchestrationUiRoutes.run(id);
   }
 </script>
 
 <div class="dashboard">
   <div class="header">
     <h1>Orchestration</h1>
-    <a href="/orchestration/workflows" class="action-btn">New Run</a>
+    <a href={orchestrationUiRoutes.workflows()} class="action-btn">New Run</a>
   </div>
 
   {#if error}
@@ -95,7 +96,7 @@
   {:else if runs.length === 0}
     <div class="empty-state">
       <p>> No orchestration runs yet.</p>
-      <a href="/orchestration/workflows" class="btn">Create a Workflow</a>
+      <a href={orchestrationUiRoutes.workflows()} class="btn">Create a Workflow</a>
     </div>
   {:else}
     <div class="table-section">
@@ -131,7 +132,7 @@
       </div>
       {#if runs.length > 20}
         <div class="more-link">
-          <a href="/orchestration/runs">View all {runs.length} runs</a>
+          <a href={orchestrationUiRoutes.runs()}>View all {runs.length} runs</a>
         </div>
       {/if}
     </div>

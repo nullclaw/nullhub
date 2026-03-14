@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
   import GraphViewer from '$lib/components/orchestration/GraphViewer.svelte';
   import StateInspector from '$lib/components/orchestration/StateInspector.svelte';
   import RunEventLog from '$lib/components/orchestration/RunEventLog.svelte';
@@ -103,14 +104,14 @@
   };
 
   function runForkHref(runId: string): string {
-    return `/orchestration/runs/${encodePathSegment(runId)}/fork`;
+    return orchestrationUiRoutes.runFork(runId);
   }
 </script>
 
 <div class="run-detail">
   <div class="toolbar">
     <div class="toolbar-left">
-      <a href="/orchestration/runs" class="back-link">Runs</a>
+      <a href={orchestrationUiRoutes.runs()} class="back-link">Runs</a>
       <span class="sep">/</span>
       <span class="run-id">{(id || '').slice(0, 8)}</span>
       {#if run}

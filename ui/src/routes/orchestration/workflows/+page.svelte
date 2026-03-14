@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
 
   let workflows = $state<any[]>([]);
   let loading = $state(true);
@@ -37,14 +38,14 @@
   }
 
   function workflowHref(id: string): string {
-    return `/orchestration/workflows/${encodePathSegment(id)}`;
+    return orchestrationUiRoutes.workflow(id);
   }
 </script>
 
 <div class="page">
   <div class="header">
     <h1>Workflows</h1>
-    <a href="/orchestration/workflows/new" class="action-btn">+ New Workflow</a>
+    <a href={orchestrationUiRoutes.newWorkflow()} class="action-btn">+ New Workflow</a>
   </div>
 
   {#if error}
@@ -56,7 +57,7 @@
   {:else if workflows.length === 0}
     <div class="empty-state">
       <p>> No workflows defined yet.</p>
-      <a href="/orchestration/workflows/new" class="btn">Create Workflow</a>
+      <a href={orchestrationUiRoutes.newWorkflow()} class="btn">Create Workflow</a>
     </div>
   {:else}
     <div class="workflow-grid">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { api, encodePathSegment } from '$lib/api/client';
+  import { api } from '$lib/api/client';
+  import { orchestrationUiRoutes } from '$lib/orchestration/routes';
 
   let runs = $state<any[]>([]);
   let workflows = $state<any[]>([]);
@@ -60,7 +61,7 @@
   }
 
   function runHref(id: string): string {
-    return `/orchestration/runs/${encodePathSegment(id)}`;
+    return orchestrationUiRoutes.run(id);
   }
 </script>
 
