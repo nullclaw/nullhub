@@ -17,6 +17,25 @@ pub const Config = struct {
     tickets_token: ?[]const u8 = null,
 };
 
+const Backend = enum {
+    boiler,
+    tickets,
+
+    fn notConfiguredBody(self: Backend) []const u8 {
+        return switch (self) {
+            .boiler => "{\"error\":\"NullBoiler not configured\"}",
+            .tickets => "{\"error\":\"NullTickets not configured\"}",
+        };
+    }
+
+    fn unreachableBody(self: Backend) []const u8 {
+        return switch (self) {
+            .boiler => "{\"error\":\"NullBoiler unreachable\"}",
+            .tickets => "{\"error\":\"NullTickets unreachable\"}",
+        };
+    }
+};
+
 pub fn isProxyPath(target: []const u8) bool {
     return std.mem.eql(u8, target, prefix) or std.mem.startsWith(u8, target, prefix ++ "/");
 }
@@ -26,40 +45,35 @@ fn isStorePath(target: []const u8) bool {
 }
 
 const ProxyTarget = struct {
+    backend: Backend,
     base_url: []const u8,
     token: ?[]const u8,
-    unavailable_body: []const u8,
-    unreachable_body: []const u8,
 };
 
-fn resolveProxyTarget(target: []const u8, cfg: Config) ?ProxyTarget {
+fn backendForPath(target: []const u8) ?Backend {
     if (!isProxyPath(target)) return null;
-    if (isStorePath(target)) {
-        const base_url = cfg.tickets_url orelse return .{
-            .base_url = "",
-            .token = null,
-            .unavailable_body = "{\"error\":\"NullTickets not configured\"}",
-            .unreachable_body = "{\"error\":\"NullTickets unreachable\"}",
-        };
-        return .{
-            .base_url = base_url,
-            .token = cfg.tickets_token,
-            .unavailable_body = "",
-            .unreachable_body = "{\"error\":\"NullTickets unreachable\"}",
-        };
-    }
+    return if (isStorePath(target)) .tickets else .boiler;
+}
 
-    const base_url = cfg.boiler_url orelse return .{
-        .base_url = "",
-        .token = null,
-        .unavailable_body = "{\"error\":\"NullBoiler not configured\"}",
-        .unreachable_body = "{\"error\":\"NullBoiler unreachable\"}",
-    };
-    return .{
-        .base_url = base_url,
-        .token = cfg.boiler_token,
-        .unavailable_body = "",
-        .unreachable_body = "{\"error\":\"NullBoiler unreachable\"}",
+fn resolveProxyTarget(target: []const u8, cfg: Config) ?ProxyTarget {
+    const backend = backendForPath(target) orelse return null;
+    return switch (backend) {
+        .tickets => blk: {
+            const base_url = cfg.tickets_url orelse return null;
+            break :blk .{
+                .backend = .tickets,
+                .base_url = base_url,
+                .token = cfg.tickets_token,
+            };
+        },
+        .boiler => blk: {
+            const base_url = cfg.boiler_url orelse return null;
+            break :blk .{
+                .backend = .boiler,
+                .base_url = base_url,
+                .token = cfg.boiler_token,
+            };
+        },
     };
 }
 
@@ -70,11 +84,10 @@ pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body
     if (!isProxyPath(target)) {
         return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
     }
-    const resolved = resolveProxyTarget(target, cfg) orelse
+    const backend = backendForPath(target) orelse
         return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
-    if (resolved.unavailable_body.len > 0) {
-        return .{ .status = "503 Service Unavailable", .content_type = "application/json", .body = resolved.unavailable_body };
-    }
+    const resolved = resolveProxyTarget(target, cfg) orelse
+        return .{ .status = "503 Service Unavailable", .content_type = "application/json", .body = backend.notConfiguredBody() };
 
     const proxied_path = target[prefix.len..];
     const path = if (proxied_path.len == 0) "/" else proxied_path;
@@ -108,7 +121,7 @@ pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body
         .response_writer = &response_body.writer,
         .extra_headers = extra_headers,
     }) catch {
-        return .{ .status = "502 Bad Gateway", .content_type = "application/json", .body = resolved.unreachable_body };
+        return .{ .status = "502 Bad Gateway", .content_type = "application/json", .body = resolved.backend.unreachableBody() };
     };
 
     const status_code: u10 = @intFromEnum(result.status);
@@ -157,6 +170,11 @@ test "isProxyPath matches orchestration namespace" {
     try std.testing.expect(isProxyPath("/api/orchestration/runs"));
     try std.testing.expect(isProxyPath("/api/orchestration/store/search"));
     try std.testing.expect(!isProxyPath("/api/instances"));
+}
+
+test "backendForPath routes store requests to tickets backend" {
+    try std.testing.expectEqual(Backend.tickets, backendForPath("/api/orchestration/store/search").?);
+    try std.testing.expectEqual(Backend.boiler, backendForPath("/api/orchestration/runs").?);
 }
 
 test "handle routes store paths to NullTickets config" {
