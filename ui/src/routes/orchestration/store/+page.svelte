@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
 
   let namespace = $state('');
@@ -235,12 +234,12 @@
 
 <!-- Entry detail modal -->
 {#if selectedEntry}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="modal-backdrop" onclick={closeModal}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={closeModal}>
+    <div class="modal" role="dialog" aria-label="Entry detail" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') closeModal(); }}>
       <div class="modal-header">
         <span class="modal-title mono">{selectedEntry.key}</span>
-        <button class="modal-close" onclick={closeModal}>✕</button>
+        <button class="modal-close" onclick={closeModal} aria-label="Close">&#x2715;</button>
       </div>
       <div class="modal-body">
         <pre class="json-view">{formatValue(selectedEntry.value)}</pre>

@@ -20,6 +20,7 @@ NullTickets).
 - **One-click updates** -- download, migrate config, rollback on failure
 - **Multi-instance** -- run multiple instances of the same component side by side
 - **Web UI + CLI** -- browser dashboard for humans, CLI for automation
+- **Orchestration UI** -- workflow editor, run monitoring with live SSE streaming, checkpoint forking, and key-value store browser (proxied to NullBoiler)
 
 ## Quick Start
 
@@ -103,6 +104,10 @@ UI modules. NullHub is a generic engine that interprets manifests.
 **Storage** -- all state lives under `~/.nullhub/` (config, instances, binaries,
 logs, cached manifests).
 
+**Orchestration proxy** -- requests to `/api/orchestration/*` are reverse-proxied
+to NullBoiler's REST API. Set `NULLBOILER_URL` (e.g. `http://localhost:8080`) and
+optionally `NULLBOILER_TOKEN` for authentication.
+
 ## Development
 
 Backend:
@@ -138,15 +143,17 @@ src/
   server.zig            # HTTP server (API + static UI)
   auth.zig              # Optional bearer token auth
   api/                  # REST endpoints (components, instances, wizard, ...)
+    orchestration.zig   # Reverse proxy to NullBoiler orchestration API
   core/                 # Manifest parser, state, platform, paths
   installer/            # Download, build, UI module fetching
   supervisor/           # Process spawn, health checks, manager
-  wizard/               # Manifest wizard engine, config writer
 ui/src/
-  routes/               # SvelteKit pages (dashboard, install, instances, settings)
+  routes/               # SvelteKit pages
+    orchestration/      # Orchestration pages (dashboard, workflows, runs, store)
   lib/components/       # Reusable Svelte components
+    orchestration/      # GraphViewer, StateInspector, RunEventLog, InterruptPanel,
+                        # CheckpointTimeline, WorkflowJsonEditor, NodeCard, SendProgressBar
   lib/api/              # Typed API client
-  lib/stores/           # Reactive state (instances, hub config)
 tests/
   test_e2e.sh           # End-to-end test script
 ```

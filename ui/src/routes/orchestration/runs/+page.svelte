@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
 
   let runs = $state<any[]>([]);
@@ -28,9 +27,8 @@
     }
   }
 
-  onMount(() => { void loadData(); });
-
   $effect(() => {
+    // Re-load when filters change (also runs on initial mount)
     filterStatus;
     filterWorkflow;
     void loadData();

@@ -176,35 +176,35 @@ export const api = {
     request<any>(`/channels/${id.replace('sc_', '')}/validate`, { method: 'POST' }),
 
   // Orchestration - Workflows
-  listWorkflows: () => request<any[]>('/api/orchestration/workflows'),
-  getWorkflow: (id: string) => request<any>(`/api/orchestration/workflows/${id}`),
-  createWorkflow: (data: any) => request<any>('/api/orchestration/workflows', { method: 'POST', body: JSON.stringify(data) }),
-  updateWorkflow: (id: string, data: any) => request<any>(`/api/orchestration/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteWorkflow: (id: string) => request<void>(`/api/orchestration/workflows/${id}`, { method: 'DELETE' }),
-  validateWorkflow: (id: string) => request<any>(`/api/orchestration/workflows/${id}/validate`, { method: 'POST' }),
-  runWorkflow: (id: string, input: any) => request<any>(`/api/orchestration/workflows/${id}/run`, { method: 'POST', body: JSON.stringify(input) }),
+  listWorkflows: () => request<any[]>('/orchestration/workflows'),
+  getWorkflow: (id: string) => request<any>(`/orchestration/workflows/${id}`),
+  createWorkflow: (data: any) => request<any>('/orchestration/workflows', { method: 'POST', body: JSON.stringify(data) }),
+  updateWorkflow: (id: string, data: any) => request<any>(`/orchestration/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteWorkflow: (id: string) => request<void>(`/orchestration/workflows/${id}`, { method: 'DELETE' }),
+  validateWorkflow: (id: string) => request<any>(`/orchestration/workflows/${id}/validate`, { method: 'POST' }),
+  runWorkflow: (id: string, input: any) => request<any>(`/orchestration/workflows/${id}/run`, { method: 'POST', body: JSON.stringify(input) }),
 
   // Orchestration - Runs
-  listRuns: (params?: { status?: string; workflow_id?: string }) => request<any[]>(withQuery('/api/orchestration/runs', params ?? {})),
-  getRun: (id: string) => request<any>(`/api/orchestration/runs/${id}`),
-  cancelRun: (id: string) => request<void>(`/api/orchestration/runs/${id}/cancel`, { method: 'POST' }),
-  resumeRun: (id: string, updates: any) => request<any>(`/api/orchestration/runs/${id}/resume`, { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
-  forkRun: (checkpointId: string, overrides?: any) => request<any>('/api/orchestration/runs/fork', { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, state_overrides: overrides }) }),
-  injectState: (id: string, updates: any, afterStep?: string) => request<any>(`/api/orchestration/runs/${id}/state`, { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
+  listRuns: (params?: { status?: string; workflow_id?: string }) => request<any[]>(withQuery('/orchestration/runs', params ?? {})),
+  getRun: (id: string) => request<any>(`/orchestration/runs/${id}`),
+  cancelRun: (id: string) => request<void>(`/orchestration/runs/${id}/cancel`, { method: 'POST' }),
+  resumeRun: (id: string, updates: any) => request<any>(`/orchestration/runs/${id}/resume`, { method: 'POST', body: JSON.stringify({ state_updates: updates }) }),
+  forkRun: (checkpointId: string, overrides?: any) => request<any>('/orchestration/runs/fork', { method: 'POST', body: JSON.stringify({ checkpoint_id: checkpointId, state_overrides: overrides }) }),
+  injectState: (id: string, updates: any, afterStep?: string) => request<any>(`/orchestration/runs/${id}/state`, { method: 'POST', body: JSON.stringify({ updates, apply_after_step: afterStep }) }),
 
   // Orchestration - Checkpoints
-  listCheckpoints: (runId: string) => request<any[]>(`/api/orchestration/runs/${runId}/checkpoints`),
-  getCheckpoint: (runId: string, cpId: string) => request<any>(`/api/orchestration/runs/${runId}/checkpoints/${cpId}`),
+  listCheckpoints: (runId: string) => request<any[]>(`/orchestration/runs/${runId}/checkpoints`),
+  getCheckpoint: (runId: string, cpId: string) => request<any>(`/orchestration/runs/${runId}/checkpoints/${cpId}`),
 
   // Store API (proxied through NullBoiler or direct to NullTickets)
-  storeList: (namespace: string) => request<any[]>(`/api/orchestration/store/${namespace}`),
-  storeGet: (namespace: string, key: string) => request<any>(`/api/orchestration/store/${namespace}/${key}`),
-  storePut: (namespace: string, key: string, value: any) => request<any>(`/api/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
-  storeDelete: (namespace: string, key: string) => request<void>(`/api/orchestration/store/${namespace}/${key}`, { method: 'DELETE' }),
+  storeList: (namespace: string) => request<any[]>(`/orchestration/store/${namespace}`),
+  storeGet: (namespace: string, key: string) => request<any>(`/orchestration/store/${namespace}/${key}`),
+  storePut: (namespace: string, key: string, value: any) => request<any>(`/orchestration/store/${namespace}/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+  storeDelete: (namespace: string, key: string) => request<void>(`/orchestration/store/${namespace}/${key}`, { method: 'DELETE' }),
 
   // Orchestration - SSE
   streamRun: (runId: string, onEvent: (event: { type: string; data: any }) => void) => {
-    const source = new EventSource(`/api/orchestration/runs/${runId}/stream`);
+    const source = new EventSource(`${BASE}/orchestration/runs/${runId}/stream`);
     source.onmessage = (e) => onEvent({ type: 'message', data: JSON.parse(e.data) });
     ['state_update', 'step_started', 'step_completed', 'step_failed', 'agent_event', 'interrupted', 'run_completed', 'run_failed', 'send_progress'].forEach(type => {
       source.addEventListener(type, (e: any) => onEvent({ type, data: JSON.parse(e.data) }));

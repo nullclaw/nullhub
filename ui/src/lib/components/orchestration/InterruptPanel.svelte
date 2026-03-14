@@ -30,12 +30,9 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="overlay" onclick={reject}>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="panel" onclick={(e) => e.stopPropagation()}>
+<div class="overlay" role="button" tabindex="-1" onclick={reject}>
+  <div class="panel" role="dialog" aria-label="Run interrupted" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') reject(); }}>
     <div class="panel-header">
       <span class="panel-title">Run Interrupted</span>
     </div>

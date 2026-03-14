@@ -16,11 +16,11 @@
   };
 
   const statusColors: Record<string, string> = {
-    pending: '#666',
-    running: '#00d4ff',
-    completed: '#00c853',
-    failed: '#ff3d3d',
-    interrupted: '#f5a623',
+    pending: 'var(--fg-dim)',
+    running: 'var(--accent)',
+    completed: 'var(--success)',
+    failed: 'var(--error)',
+    interrupted: 'var(--warning)',
   };
 
   interface LayoutNode {
