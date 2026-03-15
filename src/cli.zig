@@ -42,6 +42,10 @@ pub const WizardOptions = struct {
     component: []const u8,
 };
 
+pub const RoutesOptions = struct {
+    json: bool = false,
+};
+
 pub const ApiOptions = struct {
     method: []const u8,
     target: []const u8,
@@ -94,6 +98,7 @@ pub const Command = union(enum) {
     update_all,
     config: ConfigOptions,
     wizard: WizardOptions,
+    routes: RoutesOptions,
     api: ApiOptions,
     service: ServiceCommand,
     uninstall: UninstallOptions,
@@ -161,6 +166,9 @@ pub fn parse(args: *std.process.ArgIterator) Command {
     }
     if (std.mem.eql(u8, cmd, "wizard")) {
         return parseWizard(args);
+    }
+    if (std.mem.eql(u8, cmd, "routes")) {
+        return parseRoutes(args);
     }
     if (std.mem.eql(u8, cmd, "api")) {
         return parseApi(args);
@@ -294,6 +302,18 @@ fn parseService(args: *std.process.ArgIterator) Command {
     return .{ .service = sc };
 }
 
+fn parseRoutes(args: *std.process.ArgIterator) Command {
+    var opts = RoutesOptions{};
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            opts.json = true;
+        } else {
+            return .help;
+        }
+    }
+    return .{ .routes = opts };
+}
+
 fn parseApi(args: *std.process.ArgIterator) Command {
     const method = args.next() orelse return .help;
     const target = args.next() orelse return .help;
@@ -363,6 +383,7 @@ pub fn printUsage() void {
         \\  logs <component/name>     View instance logs
         \\  config <component/name>   View/edit instance config
         \\  wizard <component>        Run setup wizard
+        \\  routes [--json]           List known nullhub API routes
         \\  check-updates             Check for updates
         \\  update <component/name>   Update an instance
         \\  update-all                Update all instances
@@ -373,7 +394,9 @@ pub fn printUsage() void {
         \\  version, -v, --version    Show version
         \\
         \\API examples:
+        \\  nullhub routes --json
         \\  nullhub api GET /api/instances
+        \\  nullhub api GET /api/meta/routes --pretty
         \\  nullhub api DELETE /api/instances/nullclaw/demo
         \\  nullhub api POST providers/2/validate
         \\  nullhub api PATCH instances/nullclaw/demo --body '{{"auto_start":true}}'

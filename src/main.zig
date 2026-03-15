@@ -9,6 +9,7 @@ const paths_mod = root.paths;
 const manager_mod = root.manager;
 const access = root.access;
 const mdns_mod = root.mdns;
+const routes_cli = @import("routes_cli.zig");
 const status_cli = root.status_cli;
 const version = root.version;
 
@@ -62,6 +63,7 @@ pub fn main() !void {
             try srv.run();
         },
         .status => |opts| try status_cli.run(allocator, opts),
+        .routes => |opts| try routes_cli.run(allocator, opts),
         .api => |opts| api_cli.run(allocator, opts) catch |err| {
             const any_err: anyerror = err;
             switch (any_err) {
