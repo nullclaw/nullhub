@@ -23,6 +23,7 @@ Rules:
 
 - Prefer `nullhub api` over deleting files directly when NullHub owns the cleanup.
 - If a route or payload is unclear, inspect `nullhub routes --json` again instead of guessing or asking the user for syntax.
+- If the needed route is absent from `nullhub routes --json`, say plainly that the current nullhub does not expose that API yet. Do not improvise hidden tool syntax or narrate internal tool-call retries.
 - Use `--pretty` for user-facing inspection output.
 - Use `--body` or `--body-file` for JSON request bodies.
 - If path segments come from arbitrary ids or names, percent-encode them before building the request path.
@@ -38,6 +39,7 @@ nullhub api GET /api/instances --pretty
 nullhub api GET /api/instances/nullclaw/instance-1 --pretty
 nullhub api GET /api/instances/nullclaw/instance-1/skills --pretty
 nullhub api DELETE /api/instances/nullclaw/instance-2
+nullhub api POST /api/instances/nullclaw/instance-1/clone --body '{"instance_name":"instance-3","start":true}'
 nullhub api POST /api/providers/2/validate
 ```
 

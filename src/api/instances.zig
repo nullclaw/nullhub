@@ -11,6 +11,7 @@ const launch_args_mod = @import("../core/launch_args.zig");
 const managed_skills = @import("../managed_skills.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
+const registry = @import("../installer/registry.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -21,6 +22,32 @@ const methodNotAllowed = helpers.methodNotAllowed;
 
 const default_tracker_prompt_template =
     "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}";
+
+const CreateFromConfigOptions = struct {
+    instance_name: []const u8,
+    version: []const u8,
+    config_json: []const u8,
+    auto_start: bool,
+    launch_mode: []const u8,
+    verbose: bool,
+    start: bool,
+    assign_fresh_ports: bool,
+};
+
+const CloneInstanceOptions = struct {
+    instance_name: []const u8,
+    copy_workspace: bool = true,
+    copy_data: bool = true,
+    start: bool = true,
+    assign_fresh_ports: bool = true,
+};
+
+const ManifestRuntimeInfo = struct {
+    launch_command: []const u8,
+    health_endpoint: []const u8,
+    default_port: u16,
+    port_from_config: []const u8,
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -2036,6 +2063,399 @@ fn instanceWorkspaceDir(allocator: std.mem.Allocator, paths: paths_mod.Paths, co
     return try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
 }
 
+fn componentCollectionPath(target: []const u8) ?[]const u8 {
+    const clean = stripQuery(target);
+    const prefix = "/api/instances/";
+    if (!std.mem.startsWith(u8, clean, prefix)) return null;
+    const rest = clean[prefix.len..];
+    if (rest.len == 0 or std.mem.indexOfScalar(u8, rest, '/') != null) return null;
+    return rest;
+}
+
+fn cloneFileAbsolute(source_path: []const u8, dest_path: []const u8) !void {
+    if (std.fs.path.dirname(dest_path)) |dir_path| try ensurePath(dir_path);
+    std.fs.copyFileAbsolute(source_path, dest_path, .{}) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            std.fs.deleteFileAbsolute(dest_path) catch {};
+            try std.fs.copyFileAbsolute(source_path, dest_path, .{});
+        },
+        else => return err,
+    };
+}
+
+fn readFileAbsoluteAlloc(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    max_bytes: usize,
+) ![]u8 {
+    const file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    return try file.readToEndAlloc(allocator, max_bytes);
+}
+
+fn copyTreeContentsAbsolute(allocator: std.mem.Allocator, src_dir: []const u8, dest_dir: []const u8) !void {
+    var dir = try std.fs.openDirAbsolute(src_dir, .{ .iterate = true });
+    defer dir.close();
+    try ensurePath(dest_dir);
+
+    var iterator = dir.iterateAssumeFirstIteration();
+    while (try iterator.next()) |entry| {
+        const src_path = try std.fs.path.join(allocator, &.{ src_dir, entry.name });
+        defer allocator.free(src_path);
+        const dest_path = try std.fs.path.join(allocator, &.{ dest_dir, entry.name });
+        defer allocator.free(dest_path);
+
+        switch (entry.kind) {
+            .directory => try copyTreeContentsAbsolute(allocator, src_path, dest_path),
+            .file => try cloneFileAbsolute(src_path, dest_path),
+            .sym_link => {},
+            else => {},
+        }
+    }
+}
+
+fn ensureInstanceLayout(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) !void {
+    try paths.ensureDirs();
+
+    const comp_dir = try std.fs.path.join(allocator, &.{ paths.root, "instances", component });
+    defer allocator.free(comp_dir);
+    try ensurePath(comp_dir);
+
+    const inst_dir = try paths.instanceDir(allocator, component, name);
+    defer allocator.free(inst_dir);
+    try ensurePath(inst_dir);
+
+    const data_dir = try paths.instanceData(allocator, component, name);
+    defer allocator.free(data_dir);
+    try ensurePath(data_dir);
+
+    const logs_dir = try paths.instanceLogs(allocator, component, name);
+    defer allocator.free(logs_dir);
+    try ensurePath(logs_dir);
+
+    const workspace_dir = try instanceWorkspaceDir(allocator, paths, component, name);
+    defer allocator.free(workspace_dir);
+    try ensurePath(workspace_dir);
+}
+
+fn ensureManagedBinaryPath(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    requested_version: []const u8,
+) !struct { version: []const u8, path: []const u8 } {
+    if (std.mem.eql(u8, requested_version, "latest")) {
+        if (local_binary.find(allocator, component)) |src_bin| {
+            defer allocator.free(src_bin);
+            const version = try allocator.dupe(u8, "dev-local");
+            errdefer allocator.free(version);
+            const bin_path = try paths.binary(allocator, component, version);
+            errdefer allocator.free(bin_path);
+            std.fs.deleteFileAbsolute(bin_path) catch {};
+            try cloneFileAbsolute(src_bin, bin_path);
+            if (comptime std.fs.has_executable_bit) {
+                if (std.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
+                    defer f.close();
+                    f.chmod(0o755) catch {};
+                } else |_| {}
+            }
+            return .{ .version = version, .path = bin_path };
+        }
+    }
+
+    const version = try allocator.dupe(u8, requested_version);
+    errdefer allocator.free(version);
+    const bin_path = try paths.binary(allocator, component, version);
+    errdefer allocator.free(bin_path);
+    std.fs.accessAbsolute(bin_path, .{}) catch return error.BinaryUnavailable;
+    return .{ .version = version, .path = bin_path };
+}
+
+fn readManifestRuntimeInfo(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    bin_path: []const u8,
+) ManifestRuntimeInfo {
+    const known = registry.findKnownComponent(component) orelse return .{
+        .launch_command = "gateway",
+        .health_endpoint = "/health",
+        .default_port = 3000,
+        .port_from_config = "",
+    };
+    const manifest_json = component_cli.exportManifest(allocator, bin_path) catch return .{
+        .launch_command = known.default_launch_command,
+        .health_endpoint = known.default_health_endpoint,
+        .default_port = known.default_port,
+        .port_from_config = "",
+    };
+    defer allocator.free(manifest_json);
+
+    const parsed_manifest = manifest_mod.parseManifest(allocator, manifest_json) catch return .{
+        .launch_command = known.default_launch_command,
+        .health_endpoint = known.default_health_endpoint,
+        .default_port = known.default_port,
+        .port_from_config = "",
+    };
+    defer parsed_manifest.deinit();
+
+    return .{
+        .launch_command = parsed_manifest.value.launch.command,
+        .health_endpoint = parsed_manifest.value.health.endpoint,
+        .default_port = if (parsed_manifest.value.ports.len > 0) parsed_manifest.value.ports[0].default else known.default_port,
+        .port_from_config = parsed_manifest.value.health.port_from_config,
+    };
+}
+
+fn readManifestRuntimeInfoWithFallback(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    bin_path: ?[]const u8,
+) ManifestRuntimeInfo {
+    if (bin_path) |path| return readManifestRuntimeInfo(allocator, component, path);
+    const known = registry.findKnownComponent(component) orelse return .{
+        .launch_command = "gateway",
+        .health_endpoint = "/health",
+        .default_port = 3000,
+        .port_from_config = "",
+    };
+    return .{
+        .launch_command = known.default_launch_command,
+        .health_endpoint = known.default_health_endpoint,
+        .default_port = known.default_port,
+        .port_from_config = if (std.mem.eql(u8, component, "nullclaw")) "gateway.port" else "port",
+    };
+}
+
+fn collectConfiguredInstancePorts(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    state: *state_mod.State,
+) !std.AutoHashMap(u16, void) {
+    var ports = std.AutoHashMap(u16, void).init(allocator);
+    errdefer ports.deinit();
+
+    var comp_it = state.instances.iterator();
+    while (comp_it.next()) |comp_entry| {
+        const component = comp_entry.key_ptr.*;
+        var inst_it = comp_entry.value_ptr.iterator();
+        while (inst_it.next()) |inst_entry| {
+            if (readPortFromConfig(allocator, paths, component, inst_entry.key_ptr.*, "gateway.port")) |port| {
+                try ports.put(port, {});
+                continue;
+            }
+            if (readPortFromConfig(allocator, paths, component, inst_entry.key_ptr.*, "port")) |port| {
+                try ports.put(port, {});
+            }
+        }
+    }
+
+    return ports;
+}
+
+fn isPortFree(port: u16) bool {
+    const addr = std.net.Address.resolveIp("127.0.0.1", port) catch return false;
+    const sock = std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP) catch return false;
+    defer std.posix.close(sock);
+    std.posix.bind(sock, &addr.any, addr.getOsSockLen()) catch return false;
+    return true;
+}
+
+fn findNextAvailableInstancePort(
+    allocator: std.mem.Allocator,
+    start: u16,
+    paths: paths_mod.Paths,
+    state: *state_mod.State,
+) u16 {
+    var used_ports = collectConfiguredInstancePorts(allocator, paths, state) catch return start;
+    defer used_ports.deinit();
+
+    var candidate = start;
+    while (candidate < 65535) : (candidate += 1) {
+        if (used_ports.contains(candidate)) continue;
+        if (isPortFree(candidate)) return candidate;
+    }
+    return start;
+}
+
+fn setJsonValueAtPath(
+    root: *std.json.Value,
+    allocator: std.mem.Allocator,
+    dot_path: []const u8,
+    value: std.json.Value,
+) !void {
+    if (root.* != .object) root.* = .{ .object = std.json.ObjectMap.init(allocator) };
+    var current = &root.object;
+    var parts = std.array_list.Managed([]const u8).init(allocator);
+    defer parts.deinit();
+    var tokens = std.mem.splitScalar(u8, dot_path, '.');
+    while (tokens.next()) |token| {
+        if (token.len == 0) continue;
+        try parts.append(token);
+    }
+    if (parts.items.len == 0) return;
+
+    for (parts.items, 0..) |token, index| {
+        const final = index == parts.items.len - 1;
+        const gop = try current.getOrPut(token);
+        if (final) {
+            gop.value_ptr.* = value;
+            return;
+        }
+        if (!gop.found_existing or gop.value_ptr.* != .object) {
+            gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        }
+        current = &gop.value_ptr.object;
+    }
+}
+
+fn renderConfigWithAssignedPort(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    config_json: []const u8,
+    port_path: []const u8,
+    assigned_port: u16,
+) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, config_json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidConfig;
+
+    if (std.mem.eql(u8, component, "nullclaw")) {
+        try setJsonValueAtPath(&parsed.value, allocator, "gateway.port", .{ .integer = assigned_port });
+        try setJsonValueAtPath(&parsed.value, allocator, "gateway_port", .{ .integer = assigned_port });
+        try setJsonValueAtPath(&parsed.value, allocator, "port", .{ .integer = assigned_port });
+    } else if (port_path.len > 0) {
+        try setJsonValueAtPath(&parsed.value, allocator, port_path, .{ .integer = assigned_port });
+    } else {
+        try setJsonValueAtPath(&parsed.value, allocator, "port", .{ .integer = assigned_port });
+    }
+
+    return std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+}
+
+fn renderConfigWithManagedPaths(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    instance_name: []const u8,
+    config_json: []const u8,
+) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, config_json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidConfig;
+
+    const inst_dir = try paths.instanceDir(allocator, component, instance_name);
+    defer allocator.free(inst_dir);
+    const workspace_dir = try instanceWorkspaceDir(allocator, paths, component, instance_name);
+    defer allocator.free(workspace_dir);
+    const data_dir = try paths.instanceData(allocator, component, instance_name);
+    defer allocator.free(data_dir);
+    const logs_dir = try paths.instanceLogs(allocator, component, instance_name);
+    defer allocator.free(logs_dir);
+
+    try setJsonValueAtPath(&parsed.value, allocator, "home", .{ .string = try allocator.dupe(u8, inst_dir) });
+    if (std.mem.eql(u8, component, "nullclaw")) {
+        try setJsonValueAtPath(&parsed.value, allocator, "workspace", .{ .string = try allocator.dupe(u8, workspace_dir) });
+    }
+    if (parsed.value.object.get("data_dir") != null) {
+        try setJsonValueAtPath(&parsed.value, allocator, "data_dir", .{ .string = try allocator.dupe(u8, data_dir) });
+    }
+    if (parsed.value.object.get("logs_dir") != null) {
+        try setJsonValueAtPath(&parsed.value, allocator, "logs_dir", .{ .string = try allocator.dupe(u8, logs_dir) });
+    }
+
+    return std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+}
+
+fn parseCreateFromConfigOptions(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    body: []const u8,
+) !CreateFromConfigOptions {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return error.InvalidJson;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidJson;
+    const obj = parsed.value.object;
+
+    const instance_name_value = obj.get("instance_name") orelse return error.MissingInstanceName;
+    if (instance_name_value != .string or instance_name_value.string.len == 0) return error.MissingInstanceName;
+
+    const version_value = obj.get("version") orelse return error.MissingVersion;
+    if (version_value != .string or version_value.string.len == 0) return error.MissingVersion;
+
+    const config_value = obj.get("config") orelse return error.MissingConfig;
+    if (config_value != .object) return error.InvalidConfig;
+
+    const runtime = readManifestRuntimeInfoWithFallback(allocator, component, null);
+    const rendered_config = try std.json.Stringify.valueAlloc(allocator, config_value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+
+    return .{
+        .instance_name = try allocator.dupe(u8, instance_name_value.string),
+        .version = try allocator.dupe(u8, version_value.string),
+        .config_json = rendered_config,
+        .auto_start = if (obj.get("auto_start")) |value| if (value == .bool) value.bool else false else false,
+        .launch_mode = if (obj.get("launch_mode")) |value|
+            if (value == .string and value.string.len > 0) try allocator.dupe(u8, value.string) else try allocator.dupe(u8, runtime.launch_command)
+        else
+            try allocator.dupe(u8, runtime.launch_command),
+        .verbose = if (obj.get("verbose")) |value| if (value == .bool) value.bool else false else false,
+        .start = if (obj.get("start")) |value| if (value == .bool) value.bool else false else false,
+        .assign_fresh_ports = if (obj.get("assign_fresh_ports")) |value| if (value == .bool) value.bool else true else true,
+    };
+}
+
+fn freeCreateFromConfigOptions(allocator: std.mem.Allocator, options: *CreateFromConfigOptions) void {
+    allocator.free(options.instance_name);
+    allocator.free(options.version);
+    allocator.free(options.config_json);
+    allocator.free(options.launch_mode);
+    options.* = undefined;
+}
+
+fn parseCloneInstanceOptions(allocator: std.mem.Allocator, body: []const u8) !CloneInstanceOptions {
+    const parsed = std.json.parseFromSlice(struct {
+        instance_name: []const u8,
+        copy_workspace: ?bool = null,
+        copy_data: ?bool = null,
+        start: ?bool = null,
+        assign_fresh_ports: ?bool = null,
+    }, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return error.InvalidJson;
+    defer parsed.deinit();
+    if (parsed.value.instance_name.len == 0) return error.MissingInstanceName;
+    return .{
+        .instance_name = try allocator.dupe(u8, parsed.value.instance_name),
+        .copy_workspace = parsed.value.copy_workspace orelse true,
+        .copy_data = parsed.value.copy_data orelse true,
+        .start = parsed.value.start orelse true,
+        .assign_fresh_ports = parsed.value.assign_fresh_ports orelse true,
+    };
+}
+
+fn freeCloneInstanceOptions(allocator: std.mem.Allocator, options: *CloneInstanceOptions) void {
+    allocator.free(options.instance_name);
+    options.* = undefined;
+}
+
 fn handleSkillsCatalog(allocator: std.mem.Allocator, component: []const u8) ApiResponse {
     const bundled = managed_skills.catalogForComponent(component);
     var entries = std.array_list.Managed(managed_skills.CatalogEntry).init(allocator);
@@ -2420,6 +2840,268 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     s.save() catch return helpers.serverError();
 
     return jsonOk("{\"status\":\"imported\",\"instance\":\"default\"}");
+}
+
+fn createManagedInstanceFromConfig(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    manager: *manager_mod.Manager,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    options: CreateFromConfigOptions,
+    source_workspace_dir: ?[]const u8,
+    source_data_dir: ?[]const u8,
+) ApiResponse {
+    if (registry.findKnownComponent(component) == null) return notFound();
+    if (s.getInstance(component, options.instance_name) != null) {
+        return jsonCliConflict(
+            allocator,
+            "instance_exists",
+            "Instance name already exists",
+            null,
+            null,
+        );
+    }
+
+    const ensured_binary = ensureManagedBinaryPath(allocator, paths, component, options.version) catch |err| switch (err) {
+        error.BinaryUnavailable => return jsonCliConflict(
+            allocator,
+            "binary_unavailable",
+            "Requested component binary is not available locally; install or update the component first",
+            null,
+            null,
+        ),
+        else => return helpers.serverError(),
+    };
+    defer allocator.free(ensured_binary.version);
+    defer allocator.free(ensured_binary.path);
+
+    const runtime = readManifestRuntimeInfo(allocator, component, ensured_binary.path);
+    const final_config = blk: {
+        if (!options.assign_fresh_ports) break :blk allocator.dupe(u8, options.config_json) catch return helpers.serverError();
+        const assigned_port = findNextAvailableInstancePort(allocator, runtime.default_port, paths, s);
+        break :blk renderConfigWithAssignedPort(
+            allocator,
+            component,
+            options.config_json,
+            runtime.port_from_config,
+            assigned_port,
+        ) catch return badRequest("{\"error\":\"invalid config JSON\"}");
+    };
+    defer allocator.free(final_config);
+
+    const managed_config = renderConfigWithManagedPaths(
+        allocator,
+        paths,
+        component,
+        options.instance_name,
+        final_config,
+    ) catch return badRequest("{\"error\":\"invalid config JSON\"}");
+    defer allocator.free(managed_config);
+
+    ensureInstanceLayout(allocator, paths, component, options.instance_name) catch return helpers.serverError();
+
+    const config_path = paths.instanceConfig(allocator, component, options.instance_name) catch return helpers.serverError();
+    defer allocator.free(config_path);
+    const config_file = std.fs.createFileAbsolute(config_path, .{ .truncate = true }) catch return helpers.serverError();
+    defer config_file.close();
+    config_file.writeAll(managed_config) catch return helpers.serverError();
+    config_file.writeAll("\n") catch return helpers.serverError();
+
+    if (source_data_dir) |data_dir| {
+        const dest_data_dir = paths.instanceData(allocator, component, options.instance_name) catch return helpers.serverError();
+        defer allocator.free(dest_data_dir);
+        copyTreeContentsAbsolute(allocator, data_dir, dest_data_dir) catch return helpers.serverError();
+    }
+    if (source_workspace_dir) |workspace_dir| {
+        const dest_workspace_dir = instanceWorkspaceDir(allocator, paths, component, options.instance_name) catch return helpers.serverError();
+        defer allocator.free(dest_workspace_dir);
+        copyTreeContentsAbsolute(allocator, workspace_dir, dest_workspace_dir) catch return helpers.serverError();
+    }
+
+    if (std.mem.eql(u8, component, "nullclaw")) {
+        if (options.assign_fresh_ports) {
+            _ = nullclaw_web_channel.assignFreshNullclawWebChannelPort(
+                allocator,
+                paths,
+                s,
+                component,
+                options.instance_name,
+            ) catch return helpers.serverError();
+        } else {
+            _ = nullclaw_web_channel.ensureNullclawWebChannelConfig(
+                allocator,
+                paths,
+                s,
+                component,
+                options.instance_name,
+            ) catch return helpers.serverError();
+        }
+
+        const workspace_dir = instanceWorkspaceDir(allocator, paths, component, options.instance_name) catch return helpers.serverError();
+        defer allocator.free(workspace_dir);
+        _ = managed_skills.installAlwaysBundledSkills(
+            allocator,
+            component,
+            workspace_dir,
+            config_path,
+        ) catch return helpers.serverError();
+    }
+
+    s.addInstance(component, options.instance_name, .{
+        .version = ensured_binary.version,
+        .auto_start = options.auto_start,
+        .launch_mode = options.launch_mode,
+        .verbose = options.verbose,
+    }) catch return helpers.serverError();
+    s.save() catch return helpers.serverError();
+
+    var started = false;
+    var start_error: ?[]const u8 = null;
+    if (options.start) {
+        const launch_args = launch_args_mod.buildLaunchArgs(allocator, options.launch_mode, options.verbose) catch return helpers.serverError();
+        defer allocator.free(launch_args);
+        const primary_cmd = if (launch_args.len > 0) launch_args[0] else options.launch_mode;
+        var configured_port = if (runtime.port_from_config.len > 0)
+            readPortFromConfig(allocator, paths, component, options.instance_name, runtime.port_from_config)
+        else
+            null;
+        if (configured_port == null and std.mem.eql(u8, component, "nullclaw")) {
+            configured_port = readPortFromConfig(allocator, paths, component, options.instance_name, "gateway.port");
+        }
+        if (configured_port == null) {
+            configured_port = readPortFromConfig(allocator, paths, component, options.instance_name, "port");
+        }
+        const effective_port: u16 = if (std.mem.eql(u8, primary_cmd, "agent")) 0 else (configured_port orelse runtime.default_port);
+
+        const inst_dir = paths.instanceDir(allocator, component, options.instance_name) catch return helpers.serverError();
+        defer allocator.free(inst_dir);
+        manager.startInstance(
+            component,
+            options.instance_name,
+            ensured_binary.path,
+            launch_args,
+            effective_port,
+            runtime.health_endpoint,
+            inst_dir,
+            "",
+            options.launch_mode,
+        ) catch {
+            start_error = "failed to start instance";
+        };
+        started = start_error == null;
+    }
+
+    const resp_body = std.json.Stringify.valueAlloc(allocator, .{
+        .status = "created",
+        .component = component,
+        .instance = options.instance_name,
+        .version = ensured_binary.version,
+        .started = started,
+        .start_error = start_error,
+        .auto_start = options.auto_start,
+        .launch_mode = options.launch_mode,
+        .assigned_fresh_ports = options.assign_fresh_ports,
+    }, .{
+        .emit_null_optional_fields = false,
+    }) catch return helpers.serverError();
+    return jsonOk(resp_body);
+}
+
+fn handleCreateFromConfig(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    manager: *manager_mod.Manager,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    body: []const u8,
+) ApiResponse {
+    var options = parseCreateFromConfigOptions(allocator, component, body) catch |err| switch (err) {
+        error.InvalidJson => return badRequest("{\"error\":\"invalid JSON body\"}"),
+        error.MissingInstanceName => return badRequest("{\"error\":\"instance_name is required\"}"),
+        error.MissingVersion => return badRequest("{\"error\":\"version is required\"}"),
+        error.MissingConfig => return badRequest("{\"error\":\"config is required\"}"),
+        error.InvalidConfig => return badRequest("{\"error\":\"config must be a JSON object\"}"),
+        else => return helpers.serverError(),
+    };
+    defer freeCreateFromConfigOptions(allocator, &options);
+    return createManagedInstanceFromConfig(allocator, s, manager, paths, component, options, null, null);
+}
+
+fn handleCloneInstance(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    manager: *manager_mod.Manager,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    const source_entry = s.getInstance(component, name) orelse return notFound();
+
+    var clone_options = parseCloneInstanceOptions(allocator, body) catch |err| switch (err) {
+        error.InvalidJson => return badRequest("{\"error\":\"invalid JSON body\"}"),
+        error.MissingInstanceName => return badRequest("{\"error\":\"instance_name is required\"}"),
+        else => return helpers.serverError(),
+    };
+    defer freeCloneInstanceOptions(allocator, &clone_options);
+
+    const source_config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
+    defer allocator.free(source_config_path);
+    const source_config = readFileAbsoluteAlloc(allocator, source_config_path, 8 * 1024 * 1024) catch return helpers.serverError();
+    defer allocator.free(source_config);
+
+    const cloned_instance_name = allocator.dupe(u8, clone_options.instance_name) catch return helpers.serverError();
+    const cloned_version = allocator.dupe(u8, source_entry.version) catch {
+        allocator.free(cloned_instance_name);
+        return helpers.serverError();
+    };
+    const cloned_config = allocator.dupe(u8, source_config) catch {
+        allocator.free(cloned_instance_name);
+        allocator.free(cloned_version);
+        return helpers.serverError();
+    };
+    const cloned_launch_mode = allocator.dupe(u8, source_entry.launch_mode) catch {
+        allocator.free(cloned_instance_name);
+        allocator.free(cloned_version);
+        allocator.free(cloned_config);
+        return helpers.serverError();
+    };
+
+    var create_options = CreateFromConfigOptions{
+        .instance_name = cloned_instance_name,
+        .version = cloned_version,
+        .config_json = cloned_config,
+        .auto_start = source_entry.auto_start,
+        .launch_mode = cloned_launch_mode,
+        .verbose = source_entry.verbose,
+        .start = clone_options.start,
+        .assign_fresh_ports = clone_options.assign_fresh_ports,
+    };
+    defer freeCreateFromConfigOptions(allocator, &create_options);
+
+    const source_workspace_dir = if (clone_options.copy_workspace)
+        instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError()
+    else
+        null;
+    defer if (source_workspace_dir) |path| allocator.free(path);
+
+    const source_data_dir = if (clone_options.copy_data)
+        paths.instanceData(allocator, component, name) catch return helpers.serverError()
+    else
+        null;
+    defer if (source_data_dir) |path| allocator.free(path);
+
+    return createManagedInstanceFromConfig(
+        allocator,
+        s,
+        manager,
+        paths,
+        component,
+        create_options,
+        source_workspace_dir,
+        source_data_dir,
+    );
 }
 
 /// PATCH /api/instances/{component}/{name} — update settings (auto_start).
@@ -2833,6 +3515,12 @@ pub fn dispatch(
         return methodNotAllowed();
     }
 
+    if (std.mem.eql(u8, method, "POST")) {
+        if (componentCollectionPath(target)) |component| {
+            return handleCreateFromConfig(allocator, s, manager, paths, component, body);
+        }
+    }
+
     const parsed = parsePath(target) orelse return null;
 
     if (parsed.action) |action| {
@@ -2866,6 +3554,10 @@ pub fn dispatch(
             if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, mutex, paths, parsed.component, parsed.name);
             if (std.mem.eql(u8, method, "POST")) return handleIntegrationPost(allocator, s, manager, mutex, paths, parsed.component, parsed.name, body);
             return methodNotAllowed();
+        }
+        if (std.mem.eql(u8, action, "clone")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleCloneInstance(allocator, s, manager, paths, parsed.component, parsed.name, body);
         }
 
         // Remaining actions are POST-only.
@@ -4128,13 +4820,13 @@ test "dispatch routes POST bundled skill install" {
     defer allocator.free(inst_dir);
     const skill_path = try std.fs.path.join(allocator, &.{ inst_dir, "workspace", "skills", "nullhub-admin", "SKILL.md" });
     defer allocator.free(skill_path);
-    const installed = std.fs.readFileAbsolute(allocator, skill_path, 64 * 1024) catch @panic("missing skill");
+    const installed = readFileAbsoluteAlloc(allocator, skill_path, 64 * 1024) catch @panic("missing skill");
     defer allocator.free(installed);
     try std.testing.expect(std.mem.indexOf(u8, installed, "nullhub api <METHOD> <PATH>") != null);
 
     const config_path = try mctx.paths.instanceConfig(allocator, "nullclaw", "my-agent");
     defer allocator.free(config_path);
-    const config = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
+    const config = try readFileAbsoluteAlloc(allocator, config_path, 64 * 1024);
     defer allocator.free(config);
     try std.testing.expect(std.mem.indexOf(u8, config, "\"nullhub *\"") != null);
 }
@@ -4200,6 +4892,200 @@ test "dispatch routes POST source install returns conflict on CLI failure" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("409 Conflict", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"skills_install_failed\"") != null);
+}
+
+test "dispatch routes POST create instance from config" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "--export-manifest" ]; then
+        \\  printf '%s\n' '{"schema_version":1,"name":"nullclaw","display_name":"NullClaw","description":"AI agent","icon":"agent","repo":"nullclaw/nullclaw","platforms":{},"launch":{"command":"gateway","args":[]},"health":{"endpoint":"/health","port_from_config":"gateway.port","interval_ms":15000},"ports":[{"name":"gateway","config_key":"gateway.port","default":3013,"protocol":"http"}],"wizard":{"steps":[]},"depends_on":[],"connects_to":[]}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.5", script);
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw",
+        "{\"instance_name\":\"instance-3\",\"version\":\"1.0.5\",\"config\":{\"autonomy\":{\"level\":\"supervised\"},\"gateway\":{\"port\":3013},\"channels\":{\"web\":{\"accounts\":{\"default\":{\"port\":32123}}}},\"home\":\"/tmp/source-home\",\"workspace\":\"/tmp/source-workspace\",\"data_dir\":\"/tmp/source-data\",\"logs_dir\":\"/tmp/source-logs\"},\"start\":false}",
+    ).?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"created\"") != null);
+    try std.testing.expect(s.getInstance("nullclaw", "instance-3") != null);
+
+    const config_path = try mctx.paths.instanceConfig(allocator, "nullclaw", "instance-3");
+    defer allocator.free(config_path);
+    const config = try readFileAbsoluteAlloc(allocator, config_path, 64 * 1024);
+    defer allocator.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "\"level\": \"supervised\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config, "\"nullhub *\"") != null);
+
+    var parsed_config = try std.json.parseFromSlice(std.json.Value, allocator, config, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_config.deinit();
+    const config_root = parsed_config.value.object;
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "instance-3");
+    defer allocator.free(inst_dir);
+    const workspace_dir = try instanceWorkspaceDir(allocator, mctx.paths, "nullclaw", "instance-3");
+    defer allocator.free(workspace_dir);
+    const data_dir = try mctx.paths.instanceData(allocator, "nullclaw", "instance-3");
+    defer allocator.free(data_dir);
+    const logs_dir = try mctx.paths.instanceLogs(allocator, "nullclaw", "instance-3");
+    defer allocator.free(logs_dir);
+
+    try std.testing.expectEqualStrings(inst_dir, config_root.get("home").?.string);
+    try std.testing.expectEqualStrings(workspace_dir, config_root.get("workspace").?.string);
+    try std.testing.expectEqualStrings(data_dir, config_root.get("data_dir").?.string);
+    try std.testing.expectEqualStrings(logs_dir, config_root.get("logs_dir").?.string);
+
+    const skill_path = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw", "instance-3", "workspace", "skills", "nullhub-admin", "SKILL.md" });
+    defer allocator.free(skill_path);
+    const skill = try readFileAbsoluteAlloc(allocator, skill_path, 64 * 1024);
+    defer allocator.free(skill);
+    try std.testing.expect(std.mem.indexOf(u8, skill, "nullhub routes --json") != null);
+}
+
+test "dispatch routes POST clone instance copies workspace and freshens ports" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "--export-manifest" ]; then
+        \\  printf '%s\n' '{"schema_version":1,"name":"nullclaw","display_name":"NullClaw","description":"AI agent","icon":"agent","repo":"nullclaw/nullclaw","platforms":{},"launch":{"command":"gateway","args":[]},"health":{"endpoint":"/health","port_from_config":"gateway.port","interval_ms":15000},"ports":[{"name":"gateway","config_key":"gateway.port","default":3013,"protocol":"http"}],"wizard":{"steps":[]},"depends_on":[],"connects_to":[]}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.6", script);
+    try s.addInstance("nullclaw", "source", .{
+        .version = "1.0.6",
+        .auto_start = true,
+        .launch_mode = "gateway",
+    });
+
+    const source_inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "source");
+    defer allocator.free(source_inst_dir);
+    const source_workspace = try instanceWorkspaceDir(allocator, mctx.paths, "nullclaw", "source");
+    defer allocator.free(source_workspace);
+    const source_data = try mctx.paths.instanceData(allocator, "nullclaw", "source");
+    defer allocator.free(source_data);
+    const source_logs = try mctx.paths.instanceLogs(allocator, "nullclaw", "source");
+    defer allocator.free(source_logs);
+
+    const source_config_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"autonomy\":{{\"level\":\"supervised\"}},\"gateway\":{{\"port\":3013}},\"channels\":{{\"web\":{{\"accounts\":{{\"default\":{{\"port\":32123}}}}}}}},\"home\":\"{s}\",\"workspace\":\"{s}\",\"data_dir\":\"{s}\",\"logs_dir\":\"{s}\"}}",
+        .{ source_inst_dir, source_workspace, source_data, source_logs },
+    );
+    defer allocator.free(source_config_json);
+    try writeTestInstanceConfig(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "source",
+        source_config_json,
+    );
+    try ensurePath(source_workspace);
+    const note_path = try std.fs.path.join(allocator, &.{ source_workspace, "note.txt" });
+    defer allocator.free(note_path);
+    const note_file = try std.fs.createFileAbsolute(note_path, .{ .truncate = true });
+    defer note_file.close();
+    try note_file.writeAll("copied workspace");
+
+    try ensurePath(source_data);
+    const state_path = try std.fs.path.join(allocator, &.{ source_data, "state.txt" });
+    defer allocator.free(state_path);
+    const state_file = try std.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    defer state_file.close();
+    try state_file.writeAll("copied data");
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/source/clone",
+        "{\"instance_name\":\"instance-3\",\"start\":false}",
+    ).?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"created\"") != null);
+    try std.testing.expect(s.getInstance("nullclaw", "instance-3") != null);
+
+    const cloned_workspace_note = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw", "instance-3", "workspace", "note.txt" });
+    defer allocator.free(cloned_workspace_note);
+    const copied_note = try readFileAbsoluteAlloc(allocator, cloned_workspace_note, 1024);
+    defer allocator.free(copied_note);
+    try std.testing.expectEqualStrings("copied workspace", copied_note);
+
+    const cloned_data_state = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw", "instance-3", "data", "state.txt" });
+    defer allocator.free(cloned_data_state);
+    const copied_state = try readFileAbsoluteAlloc(allocator, cloned_data_state, 1024);
+    defer allocator.free(copied_state);
+    try std.testing.expectEqualStrings("copied data", copied_state);
+
+    const cloned_config_path = try mctx.paths.instanceConfig(allocator, "nullclaw", "instance-3");
+    defer allocator.free(cloned_config_path);
+    const cloned_config = try readFileAbsoluteAlloc(allocator, cloned_config_path, 64 * 1024);
+    defer allocator.free(cloned_config);
+    try std.testing.expect(std.mem.indexOf(u8, cloned_config, "\"level\": \"supervised\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cloned_config, "\"nullhub *\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, cloned_config, "\"port\": 32123") == null);
+
+    var parsed_cloned_config = try std.json.parseFromSlice(std.json.Value, allocator, cloned_config, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_cloned_config.deinit();
+    const cloned_root = parsed_cloned_config.value.object;
+
+    const cloned_inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "instance-3");
+    defer allocator.free(cloned_inst_dir);
+    const cloned_workspace = try instanceWorkspaceDir(allocator, mctx.paths, "nullclaw", "instance-3");
+    defer allocator.free(cloned_workspace);
+    const cloned_data = try mctx.paths.instanceData(allocator, "nullclaw", "instance-3");
+    defer allocator.free(cloned_data);
+    const cloned_logs = try mctx.paths.instanceLogs(allocator, "nullclaw", "instance-3");
+    defer allocator.free(cloned_logs);
+
+    try std.testing.expectEqualStrings(cloned_inst_dir, cloned_root.get("home").?.string);
+    try std.testing.expectEqualStrings(cloned_workspace, cloned_root.get("workspace").?.string);
+    try std.testing.expectEqualStrings(cloned_data, cloned_root.get("data_dir").?.string);
+    try std.testing.expectEqualStrings(cloned_logs, cloned_root.get("logs_dir").?.string);
 }
 
 test "dispatch returns null for non-matching path" {

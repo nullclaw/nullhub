@@ -83,6 +83,71 @@ pub fn ensureNullclawWebChannelConfig(
     };
 }
 
+pub fn assignFreshNullclawWebChannelPort(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    state: *const state_mod.State,
+    component: []const u8,
+    name: []const u8,
+) !EnsureWebChannelResult {
+    if (!std.mem.eql(u8, component, "nullclaw")) return .{};
+
+    const config_path = paths.instanceConfig(allocator, component, name) catch return .{};
+    defer allocator.free(config_path);
+
+    const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, MAX_CONFIG_BYTES);
+    defer allocator.free(contents);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return .{};
+    const root = &parsed.value.object;
+
+    var used_ports = try collectUsedNullclawWebPorts(allocator, paths, state, name);
+    defer used_ports.deinit();
+    const web_port = pickAvailableWebPort(used_ports);
+
+    var changed = false;
+    const channels_obj = (try ensureObjectField(allocator, root, "channels", &changed)) orelse return .{};
+    const web_obj = (try ensureObjectField(allocator, channels_obj, "web", &changed)) orelse return .{};
+    const accounts_obj = (try ensureObjectField(allocator, web_obj, "accounts", &changed)) orelse return .{};
+    const default_obj = (try ensureObjectField(allocator, accounts_obj, "default", &changed)) orelse return .{};
+
+    try setStringFieldIfMissing(default_obj, "account_id", "default", &changed);
+    try setStringFieldIfMissing(default_obj, "transport", "local", &changed);
+    try setIntegerField(default_obj, "port", web_port, &changed);
+    try setStringFieldIfMissing(default_obj, "listen", "127.0.0.1", &changed);
+    try setStringFieldIfMissing(default_obj, "path", "/ws", &changed);
+    try setIntegerFieldIfMissing(default_obj, "max_connections", 10, &changed);
+    try setStringFieldIfMissing(default_obj, "message_auth_mode", "pairing", &changed);
+    try setOriginsIfMissing(allocator, default_obj, &changed);
+
+    const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+    });
+    defer allocator.free(rendered);
+
+    var out = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer out.close();
+    try out.writeAll(rendered);
+    try out.writeAll("\n");
+
+    return .{
+        .changed = true,
+        .web_port = web_port,
+    };
+}
+
 fn ensureObjectField(
     allocator: std.mem.Allocator,
     obj: *std.json.ObjectMap,
@@ -117,6 +182,19 @@ fn setIntegerFieldIfMissing(
     changed: *bool,
 ) !void {
     if (obj.get(key) != null) return;
+    try obj.put(key, .{ .integer = value });
+    changed.* = true;
+}
+
+fn setIntegerField(
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+    value: u16,
+    changed: *bool,
+) !void {
+    if (obj.get(key)) |existing| {
+        if (existing == .integer and existing.integer == value) return;
+    }
     try obj.put(key, .{ .integer = value });
     changed.* = true;
 }

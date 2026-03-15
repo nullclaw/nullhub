@@ -248,6 +248,20 @@ const route_examples_skill_remove = [_]ExampleSpec{
     },
 };
 
+const route_examples_instance_create = [_]ExampleSpec{
+    .{
+        .command = "nullhub api POST /api/instances/nullclaw --body '{\"instance_name\":\"instance-3\",\"version\":\"dev-local\",\"config\":{\"gateway\":{\"port\":3013}},\"start\":false}'",
+        .description = "Create a managed instance directly from an explicit config payload.",
+    },
+};
+
+const route_examples_instance_clone = [_]ExampleSpec{
+    .{
+        .command = "nullhub api POST /api/instances/nullclaw/instance-1/clone --body '{\"instance_name\":\"instance-3\",\"start\":true}'",
+        .description = "Clone a managed instance, including workspace and data, onto fresh ports.",
+    },
+};
+
 const route_examples_meta = [_]ExampleSpec{
     .{
         .command = "nullhub routes --json",
@@ -631,6 +645,18 @@ const routes = [_]RouteSpec{
         .response = "Instance detail payload.",
     },
     .{
+        .id = "instances.create",
+        .method = "POST",
+        .path_template = "/api/instances/{component}",
+        .category = "instances",
+        .summary = "Create a managed instance from an explicit config JSON payload.",
+        .auth_mode = "optional_bearer",
+        .path_params = component_only_params[0..],
+        .body = "JSON body with instance_name, version, config, and optional start/launch metadata.",
+        .response = "Created instance payload.",
+        .examples = route_examples_instance_create[0..],
+    },
+    .{
         .id = "instances.patch",
         .method = "PATCH",
         .path_template = "/api/instances/{component}/{name}",
@@ -684,6 +710,18 @@ const routes = [_]RouteSpec{
         .path_params = common_instance_params[0..],
         .body = "Optional launch overrides such as launch_mode or verbose.",
         .response = "Restart status payload.",
+    },
+    .{
+        .id = "instances.clone",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/clone",
+        .category = "instances",
+        .summary = "Clone a managed instance into a new managed instance with fresh ports.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with instance_name and optional copy/start flags.",
+        .response = "Created clone payload.",
+        .examples = route_examples_instance_clone[0..],
     },
     .{
         .id = "instances.provider_health",
