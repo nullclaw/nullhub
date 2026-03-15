@@ -11,6 +11,7 @@ pub const CatalogEntry = struct {
     homepage_url: ?[]const u8 = null,
     clawhub_slug: ?[]const u8 = null,
     always: bool = false,
+    required_allowed_commands: []const []const u8 = &.{},
 };
 
 pub const InstallDisposition = enum {
@@ -35,6 +36,7 @@ const bundled_skills = [_]BundledSkill{
             .install_kind = "bundled",
             .homepage_url = clawhub_url,
             .always = true,
+            .required_allowed_commands = &.{"nullhub *"},
         },
         .instructions = @embedFile("bundled_skills/nullhub-admin/SKILL.md"),
     },
@@ -77,6 +79,30 @@ pub fn installBundledSkill(
     return .installed;
 }
 
+pub fn installAlwaysBundledSkills(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    workspace_dir: []const u8,
+    config_path: []const u8,
+) !bool {
+    var config_changed = false;
+    for (catalogForComponent(component)) |bundled| {
+        if (!bundled.entry.always) continue;
+        _ = try installBundledSkill(allocator, workspace_dir, bundled.entry.name);
+        config_changed = (try syncBundledSkillRuntime(allocator, config_path, bundled.entry.name)) or config_changed;
+    }
+    return config_changed;
+}
+
+pub fn syncBundledSkillRuntime(
+    allocator: std.mem.Allocator,
+    config_path: []const u8,
+    skill_name: []const u8,
+) !bool {
+    const bundled = findBundledSkill(skill_name) orelse return error.SkillNotFound;
+    return syncAllowedCommands(allocator, config_path, bundled.entry.required_allowed_commands);
+}
+
 fn ensurePathAbsolute(path: []const u8) !void {
     std.fs.cwd().makePath(path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -89,6 +115,101 @@ fn findBundledSkill(name: []const u8) ?BundledSkill {
         if (std.mem.eql(u8, bundled.entry.name, name)) return bundled;
     }
     return null;
+}
+
+fn syncAllowedCommands(
+    allocator: std.mem.Allocator,
+    config_path: []const u8,
+    required_allowed_commands: []const []const u8,
+) !bool {
+    if (required_allowed_commands.len == 0) return false;
+
+    const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
+    defer allocator.free(contents);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return error.InvalidConfig;
+    const root = &parsed.value.object;
+    const autonomy = try ensureObjectField(allocator, root, "autonomy");
+
+    if (autonomy.get("allowed_commands")) |existing_value| {
+        if (existing_value == .array) {
+            for (existing_value.array.items) |item| {
+                if (item == .string and std.mem.eql(u8, item.string, "*")) return false;
+            }
+        }
+    }
+
+    const allowed_value = try ensureArrayField(allocator, autonomy, "allowed_commands");
+    var changed = false;
+    for (required_allowed_commands) |command| {
+        if (arrayContainsString(allowed_value.*, command)) continue;
+        try allowed_value.append(.{ .string = command });
+        changed = true;
+    }
+    if (!changed) return false;
+
+    const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+    defer allocator.free(rendered);
+
+    const out = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer out.close();
+    try out.writeAll(rendered);
+    try out.writeAll("\n");
+    return true;
+}
+
+fn ensureObjectField(
+    allocator: std.mem.Allocator,
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.ObjectMap {
+    const gop = try obj.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        return &gop.value_ptr.object;
+    }
+    if (gop.value_ptr.* != .object) {
+        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+    }
+    return &gop.value_ptr.object;
+}
+
+fn ensureArrayField(
+    allocator: std.mem.Allocator,
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.Array {
+    const gop = try obj.getOrPut(key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .array = std.json.Array.init(allocator) };
+        return &gop.value_ptr.array;
+    }
+    if (gop.value_ptr.* != .array) {
+        gop.value_ptr.* = .{ .array = std.json.Array.init(allocator) };
+    }
+    return &gop.value_ptr.array;
+}
+
+fn arrayContainsString(values: std.json.Array, expected: []const u8) bool {
+    for (values.items) |value| {
+        if (value == .string and std.mem.eql(u8, value.string, expected)) return true;
+    }
+    return false;
 }
 
 fn readOptionalFileAlloc(
@@ -128,4 +249,57 @@ test "installBundledSkill writes embedded skill to workspace" {
     const content = try std.fs.readFileAbsolute(allocator, skill_path, 64 * 1024);
     defer allocator.free(content);
     try std.testing.expect(std.mem.indexOf(u8, content, "nullhub routes --json") != null);
+}
+
+test "syncBundledSkillRuntime adds nullhub command to allowed_commands" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cwd_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
+    defer allocator.free(config_path);
+
+    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll("{\"autonomy\":{\"level\":\"supervised\",\"allowed_commands\":[\"git\"]}}\n");
+
+    try std.testing.expect(try syncBundledSkillRuntime(allocator, config_path, "nullhub-admin"));
+
+    const rendered = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
+    defer allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"nullhub *\"") != null);
+}
+
+test "installAlwaysBundledSkills installs skill and syncs runtime access" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cwd_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const workspace_dir = try std.fs.path.join(allocator, &.{ cwd_path, "workspace" });
+    defer allocator.free(workspace_dir);
+    try ensurePathAbsolute(workspace_dir);
+
+    const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
+    defer allocator.free(config_path);
+    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll("{\"autonomy\":{\"level\":\"supervised\"}}\n");
+
+    try std.testing.expect(try installAlwaysBundledSkills(allocator, "nullclaw", workspace_dir, config_path));
+
+    const skill_path = try std.fs.path.join(allocator, &.{ workspace_dir, "skills", "nullhub-admin", "SKILL.md" });
+    defer allocator.free(skill_path);
+    const skill_content = try std.fs.readFileAbsolute(allocator, skill_path, 64 * 1024);
+    defer allocator.free(skill_content);
+    try std.testing.expect(std.mem.indexOf(u8, skill_content, "nullhub api <METHOD> <PATH>") != null);
+
+    const rendered = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
+    defer allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"nullhub *\"") != null);
 }

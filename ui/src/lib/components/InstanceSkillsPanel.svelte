@@ -32,6 +32,11 @@
     always?: boolean;
   };
 
+  type InstallResult = {
+    status?: string;
+    restart_required?: boolean;
+  };
+
   let { component, name, active = false } = $props<{
     component: string;
     name: string;
@@ -138,11 +143,14 @@
     actionMessage = null;
     busyAction = `bundled:${entry.name}`;
     try {
-      const result = await api.installBundledSkill(component, name, entry.name);
+      const result = await api.installBundledSkill(component, name, entry.name) as InstallResult;
       if (isInstanceCliError(result)) throw new Error(describeInstanceCliError(result, `Failed to install ${entry.name}.`));
-      actionMessage = result?.status === "updated"
+      const baseMessage = result?.status === "updated"
         ? `Updated ${entry.name}.`
         : `Installed ${entry.name}.`;
+      actionMessage = result?.restart_required
+        ? `${baseMessage} Restart this instance if it is already running to apply nullhub command access.`
+        : baseMessage;
       await refreshAll();
     } catch (err) {
       actionError = (err as Error).message || `Failed to install ${entry.name}.`;

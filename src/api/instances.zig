@@ -1494,6 +1494,14 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         name,
     ) catch return helpers.serverError();
 
+    if (std.mem.eql(u8, component, "nullclaw")) {
+        const workspace_dir = instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError();
+        defer allocator.free(workspace_dir);
+        const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
+        defer allocator.free(config_path);
+        _ = managed_skills.installAlwaysBundledSkills(allocator, component, workspace_dir, config_path) catch return helpers.serverError();
+    }
+
     // Check if body overrides startup settings.
     const StartBody = struct {
         launch_mode: ?[]const u8 = null,
@@ -2082,9 +2090,16 @@ fn handleSkillsInstall(
             error.SkillNotFound => return notFound(),
             else => return helpers.serverError(),
         };
+        const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
+        defer allocator.free(config_path);
+        const restart_required = managed_skills.syncBundledSkillRuntime(allocator, config_path, value) catch |err| switch (err) {
+            error.SkillNotFound => return notFound(),
+            else => return helpers.serverError(),
+        };
         const resp_body = std.json.Stringify.valueAlloc(allocator, .{
             .status = @tagName(disposition),
             .bundled = value,
+            .restart_required = restart_required,
         }, .{}) catch return helpers.serverError();
         return jsonOk(resp_body);
     }
@@ -4092,6 +4107,7 @@ test "dispatch routes POST bundled skill install" {
     defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"autonomy\":{\"level\":\"supervised\"}}");
 
     const resp = dispatch(
         allocator,
@@ -4106,6 +4122,7 @@ test "dispatch routes POST bundled skill install" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"bundled\":\"nullhub-admin\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"restart_required\":true") != null);
 
     const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
     defer allocator.free(inst_dir);
@@ -4114,6 +4131,12 @@ test "dispatch routes POST bundled skill install" {
     const installed = std.fs.readFileAbsolute(allocator, skill_path, 64 * 1024) catch @panic("missing skill");
     defer allocator.free(installed);
     try std.testing.expect(std.mem.indexOf(u8, installed, "nullhub api <METHOD> <PATH>") != null);
+
+    const config_path = try mctx.paths.instanceConfig(allocator, "nullclaw", "my-agent");
+    defer allocator.free(config_path);
+    const config = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
+    defer allocator.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "\"nullhub *\"") != null);
 }
 
 test "dispatch routes DELETE skills action" {
