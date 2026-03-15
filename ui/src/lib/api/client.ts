@@ -27,7 +27,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const errMsg = typeof body?.error === 'string' ? body.error : body?.error?.message || `HTTP ${res.status}`;
+    const errMsg =
+      typeof body?.message === 'string'
+        ? body.message
+        : typeof body?.error === 'string'
+          ? body.error
+          : body?.error?.message || `HTTP ${res.status}`;
     throw new Error(errMsg);
   }
   if (res.status === 204) return undefined as T;
@@ -102,6 +107,27 @@ export const api = {
     ),
   getSkills: (c: string, n: string, name?: string) =>
     request<any>(withQuery(`/instances/${c}/${n}/skills`, { name })),
+  getSkillCatalog: (c: string, n: string) =>
+    request<any>(withQuery(`/instances/${c}/${n}/skills`, { catalog: 1 })),
+  installBundledSkill: (c: string, n: string, bundled: string) =>
+    request<any>(`/instances/${c}/${n}/skills`, {
+      method: 'POST',
+      body: JSON.stringify({ bundled }),
+    }),
+  installSkillFromClawhub: (c: string, n: string, clawhub_slug: string) =>
+    request<any>(`/instances/${c}/${n}/skills`, {
+      method: 'POST',
+      body: JSON.stringify({ clawhub_slug }),
+    }),
+  installSkillFromSource: (c: string, n: string, source: string) =>
+    request<any>(`/instances/${c}/${n}/skills`, {
+      method: 'POST',
+      body: JSON.stringify({ source }),
+    }),
+  removeSkill: (c: string, n: string, skillName: string) =>
+    request<any>(withQuery(`/instances/${c}/${n}/skills`, { name: skillName }), {
+      method: 'DELETE',
+    }),
   getIntegration: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/integration`),
   linkIntegration: (c: string, n: string, payload: any) =>

@@ -5,6 +5,7 @@ const platform = @import("core/platform.zig");
 const components_api = @import("api/components.zig");
 const config_api = @import("api/config.zig");
 const logs_api = @import("api/logs.zig");
+const meta_api = @import("api/meta.zig");
 const status_api = @import("api/status.zig");
 const settings_api = @import("api/settings.zig");
 const updates_api = @import("api/updates.zig");
@@ -458,6 +459,10 @@ pub const Server = struct {
                 const now = std.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
                 const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.currentAccessOptions());
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            if (meta_api.isRoutesPath(target)) {
+                const resp = meta_api.handleRoutes(allocator);
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (std.mem.eql(u8, target, "/api/components")) {
@@ -1274,6 +1279,18 @@ test "route GET /api/status returns version and platform" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "platform") != null);
     // Body should contain uptime_seconds
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "uptime_seconds") != null);
+}
+
+test "route GET /api/meta/routes returns route catalog" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api/meta/routes", "");
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\": \"meta.routes.get\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "/api/instances/{component}/{name}") != null);
 }
 
 test "route unknown non-API path attempts static file serving" {

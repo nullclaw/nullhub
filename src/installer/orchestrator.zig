@@ -12,6 +12,7 @@ const launch_args_mod = @import("../core/launch_args.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const ui_modules_mod = @import("ui_modules.zig");
+const managed_skills = @import("../managed_skills.zig");
 const MAX_CONFIG_BYTES = 4 * 1024 * 1024;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -241,6 +242,29 @@ pub fn install(
         setLastErrorDetail("failed to ensure nullclaw web channel config");
         return error.ConfigGenerationFailed;
     };
+
+    if (std.mem.eql(u8, opts.component, "nullclaw")) {
+        const workspace_dir = std.fs.path.join(allocator, &.{ inst_dir, "workspace" }) catch {
+            setLastErrorDetail("failed to resolve nullclaw workspace directory");
+            return error.ConfigGenerationFailed;
+        };
+        defer allocator.free(workspace_dir);
+        const config_path = p.instanceConfig(allocator, opts.component, opts.instance_name) catch {
+            setLastErrorDetail("failed to resolve nullclaw config path");
+            return error.ConfigGenerationFailed;
+        };
+        defer allocator.free(config_path);
+
+        _ = managed_skills.installAlwaysBundledSkills(
+            allocator,
+            opts.component,
+            workspace_dir,
+            config_path,
+        ) catch {
+            setLastErrorDetail("failed to seed managed nullclaw skills");
+            return error.ConfigGenerationFailed;
+        };
+    }
 
     // Use the generated config as the source of truth for health checks and
     // supervisor state after the component has rendered its final config.

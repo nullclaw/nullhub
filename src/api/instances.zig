@@ -8,6 +8,7 @@ const local_binary = @import("../core/local_binary.zig");
 const component_cli = @import("../core/component_cli.zig");
 const integration_mod = @import("../core/integration.zig");
 const launch_args_mod = @import("../core/launch_args.zig");
+const managed_skills = @import("../managed_skills.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 
@@ -1293,29 +1294,49 @@ fn jsonCliError(
     return jsonOk(body);
 }
 
-fn runInstanceCliJson(
+fn jsonCliConflict(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    message: []const u8,
+    stderr: ?[]const u8,
+    stdout: ?[]const u8,
+) ApiResponse {
+    const body = buildCliJsonError(allocator, code, message, stderr, stdout) catch return helpers.serverError();
+    return .{
+        .status = "409 Conflict",
+        .content_type = "application/json",
+        .body = body,
+    };
+}
+
+const CapturedInstanceCli = union(enum) {
+    response: ApiResponse,
+    result: component_cli.RunResult,
+};
+
+fn runInstanceCliCaptured(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
     args: []const []const u8,
-) ApiResponse {
-    const entry = s.getInstance(component, name) orelse return notFound();
+) CapturedInstanceCli {
+    const entry = s.getInstance(component, name) orelse return .{ .response = notFound() };
 
-    const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
+    const bin_path = paths.binary(allocator, component, entry.version) catch return .{ .response = helpers.serverError() };
     defer allocator.free(bin_path);
     std.fs.accessAbsolute(bin_path, .{}) catch {
-        return jsonCliError(
+        return .{ .response = jsonCliError(
             allocator,
             "component_binary_missing",
             "Component binary is missing for this instance version",
             null,
             null,
-        );
+        ) };
     };
 
-    const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return .{ .response = helpers.serverError() };
     defer allocator.free(inst_dir);
 
     const result = component_cli.runWithComponentHome(
@@ -1326,13 +1347,30 @@ fn runInstanceCliJson(
         null,
         inst_dir,
     ) catch {
-        return jsonCliError(
+        return .{ .response = jsonCliError(
             allocator,
             "cli_exec_failed",
             "Failed to execute component CLI",
             null,
             null,
-        );
+        ) };
+    };
+
+    return .{ .result = result };
+}
+
+fn runInstanceCliJson(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    args: []const []const u8,
+) ApiResponse {
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
+    const result = switch (captured) {
+        .response => |resp| return resp,
+        .result => |value| value,
     };
     defer allocator.free(result.stderr);
 
@@ -1455,6 +1493,14 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         component,
         name,
     ) catch return helpers.serverError();
+
+    if (std.mem.eql(u8, component, "nullclaw")) {
+        const workspace_dir = instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError();
+        defer allocator.free(workspace_dir);
+        const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
+        defer allocator.free(config_path);
+        _ = managed_skills.installAlwaysBundledSkills(allocator, component, workspace_dir, config_path) catch return helpers.serverError();
+    }
 
     // Check if body overrides startup settings.
     const StartBody = struct {
@@ -1984,9 +2030,232 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     return runInstanceCliJson(allocator, s, paths, component, name, args.items);
 }
 
+fn instanceWorkspaceDir(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) ![]u8 {
+    const inst_dir = try paths.instanceDir(allocator, component, name);
+    defer allocator.free(inst_dir);
+    return try std.fs.path.join(allocator, &.{ inst_dir, "workspace" });
+}
+
+fn handleSkillsCatalog(allocator: std.mem.Allocator, component: []const u8) ApiResponse {
+    const bundled = managed_skills.catalogForComponent(component);
+    var entries = std.array_list.Managed(managed_skills.CatalogEntry).init(allocator);
+    defer entries.deinit();
+    for (bundled) |skill| {
+        entries.append(skill.entry) catch return helpers.serverError();
+    }
+    const body = std.json.Stringify.valueAlloc(allocator, entries.items, .{
+        .emit_null_optional_fields = false,
+    }) catch return helpers.serverError();
+    return jsonOk(body);
+}
+
+fn handleSkillsInstall(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    _ = s.getInstance(component, name) orelse return notFound();
+    if (!std.mem.eql(u8, component, "nullclaw")) {
+        return badRequest("{\"error\":\"skill installation is only supported for nullclaw instances\"}");
+    }
+
+    const parsed = std.json.parseFromSlice(struct {
+        bundled: ?[]const u8 = null,
+        clawhub_slug: ?[]const u8 = null,
+        source: ?[]const u8 = null,
+    }, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const bundled_name = if (parsed.value.bundled) |value| if (value.len > 0) value else null else null;
+    const clawhub_slug = if (parsed.value.clawhub_slug) |value| if (value.len > 0) value else null else null;
+    const source = if (parsed.value.source) |value| if (value.len > 0) value else null else null;
+
+    var selected: usize = 0;
+    if (bundled_name != null) selected += 1;
+    if (clawhub_slug != null) selected += 1;
+    if (source != null) selected += 1;
+    if (selected != 1) {
+        return badRequest("{\"error\":\"provide exactly one of bundled, clawhub_slug, or source\"}");
+    }
+
+    if (bundled_name) |value| {
+        const workspace_dir = instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError();
+        defer allocator.free(workspace_dir);
+        const disposition = managed_skills.installBundledSkill(allocator, workspace_dir, value) catch |err| switch (err) {
+            error.SkillNotFound => return notFound(),
+            else => return helpers.serverError(),
+        };
+        const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
+        defer allocator.free(config_path);
+        const restart_required = managed_skills.syncBundledSkillRuntime(allocator, config_path, value) catch |err| switch (err) {
+            error.SkillNotFound => return notFound(),
+            else => return helpers.serverError(),
+        };
+        const resp_body = std.json.Stringify.valueAlloc(allocator, .{
+            .status = @tagName(disposition),
+            .bundled = value,
+            .restart_required = restart_required,
+        }, .{}) catch return helpers.serverError();
+        return jsonOk(resp_body);
+    }
+
+    if (clawhub_slug) |value| {
+        const workspace_dir = instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError();
+        defer allocator.free(workspace_dir);
+
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "clawhub", "install", value },
+            .cwd = workspace_dir,
+            .max_output_bytes = 64 * 1024,
+        }) catch |err| switch (err) {
+            error.FileNotFound => return jsonCliConflict(
+                allocator,
+                "clawhub_not_available",
+                "clawhub CLI is not installed on the nullhub host",
+                null,
+                null,
+            ),
+            else => return jsonCliConflict(
+                allocator,
+                "clawhub_exec_failed",
+                "Failed to execute clawhub install",
+                null,
+                null,
+            ),
+        };
+        defer {
+            allocator.free(result.stdout);
+            allocator.free(result.stderr);
+        }
+
+        const success = switch (result.term) {
+            .Exited => |code| code == 0,
+            else => false,
+        };
+        if (!success) {
+            return jsonCliConflict(
+                allocator,
+                "clawhub_install_failed",
+                "clawhub install failed",
+                result.stderr,
+                result.stdout,
+            );
+        }
+
+        const resp_body = std.json.Stringify.valueAlloc(allocator, .{
+            .status = "installed",
+            .clawhub_slug = value,
+        }, .{}) catch return helpers.serverError();
+        return jsonOk(resp_body);
+    }
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "skills") catch return helpers.serverError();
+    args.append(allocator, "install") catch return helpers.serverError();
+    args.append(allocator, source.?) catch return helpers.serverError();
+
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const result = switch (captured) {
+        .response => |resp| {
+            if (std.mem.eql(u8, resp.status, "200 OK")) {
+                return .{
+                    .status = "409 Conflict",
+                    .content_type = resp.content_type,
+                    .body = resp.body,
+                };
+            }
+            return resp;
+        },
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (!result.success) {
+        return jsonCliConflict(
+            allocator,
+            "skills_install_failed",
+            "Failed to install skill from source",
+            result.stderr,
+            result.stdout,
+        );
+    }
+
+    const resp_body = std.json.Stringify.valueAlloc(allocator, .{
+        .status = "installed",
+        .source = source.?,
+    }, .{}) catch return helpers.serverError();
+    return jsonOk(resp_body);
+}
+
+fn handleSkillsRemove(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    target: []const u8,
+) ApiResponse {
+    if (!std.mem.eql(u8, component, "nullclaw")) {
+        return badRequest("{\"error\":\"skill removal is only supported for nullclaw instances\"}");
+    }
+    const skill_name = queryParamValueAlloc(allocator, target, "name") catch return helpers.serverError();
+    defer if (skill_name) |value| allocator.free(value);
+    if (skill_name == null or skill_name.?.len == 0) {
+        return badRequest("{\"error\":\"name is required\"}");
+    }
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "skills") catch return helpers.serverError();
+    args.append(allocator, "remove") catch return helpers.serverError();
+    args.append(allocator, skill_name.?) catch return helpers.serverError();
+
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const result = switch (captured) {
+        .response => |resp| {
+            if (std.mem.eql(u8, resp.status, "200 OK")) {
+                return .{
+                    .status = "409 Conflict",
+                    .content_type = resp.content_type,
+                    .body = resp.body,
+                };
+            }
+            return resp;
+        },
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (!result.success) {
+        return jsonCliConflict(
+            allocator,
+            "skills_remove_failed",
+            "Failed to remove skill",
+            result.stderr,
+            result.stdout,
+        );
+    }
+
+    const resp_body = std.json.Stringify.valueAlloc(allocator, .{
+        .status = "removed",
+        .name = skill_name.?,
+    }, .{}) catch return helpers.serverError();
+    return jsonOk(resp_body);
+}
+
 /// GET /api/instances/{component}/{name}/skills
 /// GET /api/instances/{component}/{name}/skills?name=...
+/// GET /api/instances/{component}/{name}/skills?catalog=1
 pub fn handleSkills(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    _ = s.getInstance(component, name) orelse return notFound();
+    if (queryParamBool(target, "catalog")) return handleSkillsCatalog(allocator, component);
     const skill_name = queryParamValueAlloc(allocator, target, "name") catch return helpers.serverError();
     defer if (skill_name) |value| allocator.free(value);
 
@@ -2588,8 +2857,10 @@ pub fn dispatch(
             return handleMemory(allocator, s, paths, parsed.component, parsed.name, target);
         }
         if (std.mem.eql(u8, action, "skills")) {
-            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
-            return handleSkills(allocator, s, paths, parsed.component, parsed.name, target);
+            if (std.mem.eql(u8, method, "GET")) return handleSkills(allocator, s, paths, parsed.component, parsed.name, target);
+            if (std.mem.eql(u8, method, "POST")) return handleSkillsInstall(allocator, s, paths, parsed.component, parsed.name, body);
+            if (std.mem.eql(u8, method, "DELETE")) return handleSkillsRemove(allocator, s, paths, parsed.component, parsed.name, target);
+            return methodNotAllowed();
         }
         if (std.mem.eql(u8, action, "integration")) {
             if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, mutex, paths, parsed.component, parsed.name);
@@ -3807,6 +4078,128 @@ test "dispatch routes GET skills action" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"checks\"") != null);
+}
+
+test "dispatch routes GET skills catalog" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/skills?catalog=1", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"nullhub-admin\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"install_kind\":\"bundled\"") != null);
+}
+
+test "dispatch routes POST bundled skill install" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"autonomy\":{\"level\":\"supervised\"}}");
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/skills",
+        "{\"bundled\":\"nullhub-admin\"}",
+    ).?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"bundled\":\"nullhub-admin\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"restart_required\":true") != null);
+
+    const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "my-agent");
+    defer allocator.free(inst_dir);
+    const skill_path = try std.fs.path.join(allocator, &.{ inst_dir, "workspace", "skills", "nullhub-admin", "SKILL.md" });
+    defer allocator.free(skill_path);
+    const installed = std.fs.readFileAbsolute(allocator, skill_path, 64 * 1024) catch @panic("missing skill");
+    defer allocator.free(installed);
+    try std.testing.expect(std.mem.indexOf(u8, installed, "nullhub api <METHOD> <PATH>") != null);
+
+    const config_path = try mctx.paths.instanceConfig(allocator, "nullclaw", "my-agent");
+    defer allocator.free(config_path);
+    const config = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
+    defer allocator.free(config);
+    try std.testing.expect(std.mem.indexOf(u8, config, "\"nullhub *\"") != null);
+}
+
+test "dispatch routes DELETE skills action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.3" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "remove" ] && [ "$3" = "nullhub-admin" ]; then
+        \\  printf '%s\n' 'Removed skill: nullhub-admin'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.3", script);
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "DELETE", "/api/instances/nullclaw/my-agent/skills?name=nullhub-admin", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"removed\"") != null);
+}
+
+test "dispatch routes POST source install returns conflict on CLI failure" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.4" });
+    const script =
+        \\#!/bin/sh
+        \\echo "network blocked" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.4", script);
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/skills",
+        "{\"source\":\"https://example.com/skill.git\"}",
+    ).?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("409 Conflict", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"skills_install_failed\"") != null);
 }
 
 test "dispatch returns null for non-matching path" {
