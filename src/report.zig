@@ -220,7 +220,7 @@ fn tryGhCreate(
 
     // Build label args
     const labels = report_type.toLabels();
-    var label_str = std.ArrayList(u8).init(allocator);
+    var label_str = std.array_list.Managed(u8).init(allocator);
     defer label_str.deinit();
     for (labels, 0..) |label, i| {
         if (i > 0) label_str.appendSlice(",") catch return null;
@@ -314,7 +314,7 @@ fn tryCurlCreate(
     defer allocator.free(auth_header);
 
     // Build JSON body
-    var json_buf = std.ArrayList(u8).init(allocator);
+    var json_buf = std.array_list.Managed(u8).init(allocator);
     defer json_buf.deinit();
     const jw = json_buf.writer();
     jw.writeAll("{\"title\":\"") catch return null;
