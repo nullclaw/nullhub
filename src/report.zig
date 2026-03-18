@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli.zig");
+const report_schema = @import("report_schema.zig");
 const version = @import("version.zig");
 const platform = @import("core/platform.zig");
 const paths_mod = @import("core/paths.zig");
@@ -112,6 +114,480 @@ fn collectInstalledComponents(allocator: std.mem.Allocator) ![]const ComponentIn
     return list.toOwnedSlice() catch &.{};
 }
 
+// ─── Template Loading ───────────────────────────────────────────────────────
+
+const TemplateFieldKind = enum {
+    markdown,
+    textarea,
+    input,
+    dropdown,
+    unsupported,
+
+    fn fromString(raw: []const u8) TemplateFieldKind {
+        if (std.mem.eql(u8, raw, "markdown")) return .markdown;
+        if (std.mem.eql(u8, raw, "textarea")) return .textarea;
+        if (std.mem.eql(u8, raw, "input")) return .input;
+        if (std.mem.eql(u8, raw, "dropdown")) return .dropdown;
+        return .unsupported;
+    }
+};
+
+const TemplateField = struct {
+    kind: TemplateFieldKind,
+    id: []const u8 = "",
+    label: []const u8 = "",
+    description: []const u8 = "",
+    placeholder: []const u8 = "",
+    markdown_value: []const u8 = "",
+    options: []const []const u8 = &.{},
+};
+
+const LoadedTemplate = struct {
+    arena: std.heap.ArenaAllocator,
+    fields: []const TemplateField = &.{},
+
+    fn deinit(self: *LoadedTemplate) void {
+        self.arena.deinit();
+    }
+};
+
+const TemplateFieldBuilder = struct {
+    allocator: std.mem.Allocator,
+    kind: TemplateFieldKind = .unsupported,
+    id: []const u8 = "",
+    label: []const u8 = "",
+    description: []const u8 = "",
+    placeholder_inline: []const u8 = "",
+    markdown_inline: []const u8 = "",
+    placeholder_buf: std.array_list.Managed(u8),
+    markdown_buf: std.array_list.Managed(u8),
+    options: std.array_list.Managed([]const u8),
+
+    fn init(allocator: std.mem.Allocator) TemplateFieldBuilder {
+        return .{
+            .allocator = allocator,
+            .placeholder_buf = std.array_list.Managed(u8).init(allocator),
+            .markdown_buf = std.array_list.Managed(u8).init(allocator),
+            .options = std.array_list.Managed([]const u8).init(allocator),
+        };
+    }
+
+    fn setId(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        self.id = try self.allocator.dupe(u8, raw);
+    }
+
+    fn setLabel(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        self.label = try self.allocator.dupe(u8, raw);
+    }
+
+    fn setDescription(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        self.description = try self.allocator.dupe(u8, raw);
+    }
+
+    fn setPlaceholderInline(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        self.placeholder_inline = try self.allocator.dupe(u8, raw);
+    }
+
+    fn setMarkdownInline(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        self.markdown_inline = try self.allocator.dupe(u8, raw);
+    }
+
+    fn appendPlaceholderLine(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        try self.placeholder_buf.appendSlice(raw);
+        try self.placeholder_buf.append('\n');
+    }
+
+    fn appendMarkdownLine(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        try self.markdown_buf.appendSlice(raw);
+        try self.markdown_buf.append('\n');
+    }
+
+    fn appendOption(self: *TemplateFieldBuilder, raw: []const u8) !void {
+        try self.options.append(try self.allocator.dupe(u8, raw));
+    }
+
+    fn finish(self: *TemplateFieldBuilder) !TemplateField {
+        return .{
+            .kind = self.kind,
+            .id = self.id,
+            .label = self.label,
+            .description = self.description,
+            .placeholder = if (self.placeholder_buf.items.len > 0)
+                try duplicateTrimmed(self.allocator, self.placeholder_buf.items)
+            else
+                self.placeholder_inline,
+            .markdown_value = if (self.markdown_buf.items.len > 0)
+                try duplicateTrimmed(self.allocator, self.markdown_buf.items)
+            else
+                self.markdown_inline,
+            .options = try self.options.toOwnedSlice(),
+        };
+    }
+};
+
+fn loadIssueTemplate(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+) !LoadedTemplate {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    if (try loadTemplateFromLocal(a, repo, report_type)) |text| {
+        if (parseIssueTemplateText(&arena, text)) |template| {
+            return template;
+        } else |_| {}
+    }
+    if (!builtin.is_test) {
+        if (try loadTemplateFromRemote(a, repo, report_type)) |text| {
+            if (parseIssueTemplateText(&arena, text)) |template| {
+                return template;
+            } else |_| {}
+        }
+    }
+
+    return buildFallbackTemplate(&arena, report_type);
+}
+
+fn loadTemplateFromLocal(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+) !?[]const u8 {
+    const local_path = report_schema.localTemplatePathAlloc(allocator, repo, report_type) catch return null;
+    defer allocator.free(local_path);
+
+    return std.fs.cwd().readFileAlloc(allocator, local_path, 256 * 1024) catch null;
+}
+
+fn loadTemplateFromRemote(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+) !?[]const u8 {
+    const url = report_schema.remoteTemplateUrlAlloc(allocator, repo, report_type) catch return null;
+    defer allocator.free(url);
+
+    return fetchText(allocator, url) catch null;
+}
+
+fn fetchText(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    var response_body = std.Io.Writer.Allocating.init(allocator);
+    defer response_body.deinit();
+
+    const result = try client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_writer = &response_body.writer,
+    });
+    if (@intFromEnum(result.status) < 200 or @intFromEnum(result.status) >= 300) {
+        return error.BadHttpStatus;
+    }
+
+    return response_body.toOwnedSlice();
+}
+
+fn parseIssueTemplateText(arena: *std.heap.ArenaAllocator, text: []const u8) !LoadedTemplate {
+    const a = arena.allocator();
+
+    var fields = std.array_list.Managed(TemplateField).init(a);
+    var current: ?TemplateFieldBuilder = null;
+    var in_body = false;
+    var in_attributes = false;
+    var lines = std.array_list.Managed([]const u8).init(a);
+    var line_iter = std.mem.splitScalar(u8, text, '\n');
+    while (line_iter.next()) |line_raw| {
+        try lines.append(std.mem.trimRight(u8, line_raw, "\r"));
+    }
+
+    const body_indent: usize = 2;
+    const item_indent: usize = 4;
+    const attr_indent: usize = 6;
+    const block_indent: usize = 8;
+
+    var i: usize = 0;
+    while (i < lines.items.len) {
+        const line = lines.items[i];
+        const indent = leadingSpaces(line);
+        const content = line[@min(indent, line.len)..];
+
+        if (indent == 0) {
+            if (std.mem.eql(u8, content, "body:")) {
+                in_body = true;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (!in_body) {
+            i += 1;
+            continue;
+        }
+
+        if (indent == body_indent and std.mem.startsWith(u8, content, "- type:")) {
+            if (current) |*builder| {
+                try fields.append(try builder.finish());
+            }
+            const raw_kind = stripQuotes(std.mem.trim(u8, content["- type:".len..], " "));
+            current = TemplateFieldBuilder.init(a);
+            current.?.kind = TemplateFieldKind.fromString(raw_kind);
+            in_attributes = false;
+            i += 1;
+            continue;
+        }
+
+        if (current == null) {
+            i += 1;
+            continue;
+        }
+
+        if (indent == item_indent) {
+            in_attributes = false;
+            if (std.mem.startsWith(u8, content, "id:")) {
+                const value = stripQuotes(std.mem.trim(u8, content["id:".len..], " "));
+                if (value.len > 0) try current.?.setId(value);
+                i += 1;
+                continue;
+            }
+            if (std.mem.eql(u8, content, "attributes:")) {
+                in_attributes = true;
+                i += 1;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (!in_attributes or indent != attr_indent) {
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, content, "label:")) {
+            const value = stripQuotes(std.mem.trim(u8, content["label:".len..], " "));
+            if (value.len > 0) try current.?.setLabel(value);
+            i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, content, "description:")) {
+            const value = stripQuotes(std.mem.trim(u8, content["description:".len..], " "));
+            if (value.len > 0) try current.?.setDescription(value);
+            i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, content, "placeholder:")) {
+            const raw = std.mem.trim(u8, content["placeholder:".len..], " ");
+            if (std.mem.eql(u8, raw, "|")) {
+                i += 1;
+                while (i < lines.items.len) : (i += 1) {
+                    const block_line = lines.items[i];
+                    const block_line_indent = leadingSpaces(block_line);
+                    if (block_line_indent < block_indent) break;
+                    const block_content = if (block_line.len >= block_indent) block_line[block_indent..] else "";
+                    try current.?.appendPlaceholderLine(block_content);
+                }
+            } else {
+                const value = stripQuotes(raw);
+                if (value.len > 0) try current.?.setPlaceholderInline(value);
+                i += 1;
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, content, "value:")) {
+            const raw = std.mem.trim(u8, content["value:".len..], " ");
+            if (std.mem.eql(u8, raw, "|")) {
+                i += 1;
+                while (i < lines.items.len) : (i += 1) {
+                    const block_line = lines.items[i];
+                    const block_line_indent = leadingSpaces(block_line);
+                    if (block_line_indent < block_indent) break;
+                    const block_content = if (block_line.len >= block_indent) block_line[block_indent..] else "";
+                    try current.?.appendMarkdownLine(block_content);
+                }
+            } else {
+                const value = stripQuotes(raw);
+                if (value.len > 0) try current.?.setMarkdownInline(value);
+                i += 1;
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, content, "options:")) {
+            i += 1;
+            while (i < lines.items.len) : (i += 1) {
+                const option_line = lines.items[i];
+                const option_indent = leadingSpaces(option_line);
+                const option_content = option_line[@min(option_indent, option_line.len)..];
+                if (option_indent < block_indent or !std.mem.startsWith(u8, option_content, "- ")) break;
+                const value = stripQuotes(std.mem.trim(u8, option_content[2..], " "));
+                if (value.len > 0) try current.?.appendOption(value);
+            }
+            continue;
+        }
+
+        i += 1;
+    }
+
+    if (current) |*builder| {
+        try fields.append(try builder.finish());
+    }
+
+    return .{
+        .arena = arena.*,
+        .fields = try fields.toOwnedSlice(),
+    };
+}
+
+fn buildFallbackTemplate(arena: *std.heap.ArenaAllocator, report_type: cli.ReportType) !LoadedTemplate {
+    const a = arena.allocator();
+    return .{
+        .arena = arena.*,
+        .fields = switch (report_type) {
+            .bug_crash, .bug_behavior => try a.dupe(TemplateField, &.{
+                .{ .kind = .textarea, .id = "description", .label = "Summary", .placeholder = "What happened?" },
+                .{ .kind = .textarea, .id = "reproduce", .label = "Steps to reproduce", .placeholder = "1. ...\n2. ...\n3. ..." },
+                .{ .kind = .textarea, .id = "expected", .label = "Expected behavior", .placeholder = "What should happen?" },
+                .{ .kind = .textarea, .id = "actual", .label = "Actual behavior", .placeholder = "What happened instead?" },
+                .{ .kind = .textarea, .id = "impact", .label = "Impact and severity", .placeholder = "Affected:\nSeverity:\nFrequency:\nConsequence:" },
+                .{ .kind = .input, .id = "version", .label = "Version" },
+                .{ .kind = .input, .id = "os", .label = "OS" },
+            }),
+            .regression => try a.dupe(TemplateField, &.{
+                .{ .kind = .textarea, .id = "description", .label = "Summary", .placeholder = "What regressed?" },
+                .{ .kind = .textarea, .id = "reproduce", .label = "Steps to reproduce", .placeholder = "1. ...\n2. ...\n3. ..." },
+                .{ .kind = .textarea, .id = "expected", .label = "Expected behavior", .placeholder = "What should happen?" },
+                .{ .kind = .textarea, .id = "actual", .label = "Actual behavior", .placeholder = "What happened instead?" },
+                .{ .kind = .textarea, .id = "impact", .label = "Impact and severity", .placeholder = "Affected:\nSeverity:\nFrequency:\nConsequence:" },
+                .{ .kind = .textarea, .id = "regression", .label = "Regression details", .placeholder = "Last known good version:\nFirst known bad version:" },
+                .{ .kind = .input, .id = "version", .label = "Version" },
+                .{ .kind = .input, .id = "os", .label = "OS" },
+            }),
+            .feature => try a.dupe(TemplateField, &.{
+                .{ .kind = .textarea, .id = "description", .label = "Summary", .placeholder = "What would you like to add?" },
+                .{ .kind = .textarea, .id = "problem", .label = "Problem to solve", .placeholder = "What pain or limitation are you trying to remove?" },
+                .{ .kind = .textarea, .id = "proposed_solution", .label = "Proposed solution", .placeholder = "Describe the desired behavior, API, or UI in concrete terms." },
+                .{ .kind = .textarea, .id = "alternatives", .label = "Alternatives considered", .placeholder = "What other approaches did you consider, and why are they weaker?" },
+                .{ .kind = .textarea, .id = "impact", .label = "Impact", .placeholder = "Affected:\nSeverity:\nFrequency:\nConsequence:" },
+                .{ .kind = .input, .id = "version", .label = "Version" },
+                .{ .kind = .input, .id = "os", .label = "OS" },
+            }),
+        },
+    };
+}
+
+fn duplicateTrimmed(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    return allocator.dupe(u8, std.mem.trimRight(u8, raw, "\r\n"));
+}
+
+fn leadingSpaces(line: []const u8) usize {
+    var count: usize = 0;
+    while (count < line.len and line[count] == ' ') : (count += 1) {}
+    return count;
+}
+
+fn stripQuotes(raw: []const u8) []const u8 {
+    if (raw.len >= 2 and ((raw[0] == '"' and raw[raw.len - 1] == '"') or (raw[0] == '\'' and raw[raw.len - 1] == '\''))) {
+        return raw[1 .. raw.len - 1];
+    }
+    return raw;
+}
+
+fn componentVersionForRepo(info: SystemInfo, repo: cli.ReportRepo) ?[]const u8 {
+    if (repo == .nullhub) return info.version;
+    const target = repo.value();
+    for (info.components) |component| {
+        if (std.mem.eql(u8, component.name, target)) return component.comp_version;
+    }
+    return null;
+}
+
+fn templateFieldLabel(field: TemplateField) []const u8 {
+    if (field.label.len > 0) return field.label;
+    if (field.id.len > 0) return field.id;
+    return "Details";
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (haystack.len < needle.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn writeFieldValue(
+    w: anytype,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+    message: []const u8,
+    info: SystemInfo,
+    field: TemplateField,
+) !void {
+    const id = field.id;
+    const label = templateFieldLabel(field);
+
+    if (field.kind == .markdown) {
+        if (field.markdown_value.len > 0) {
+            try w.writeAll(field.markdown_value);
+            try w.writeAll("\n\n");
+        }
+        return;
+    }
+
+    try w.print("### {s}\n\n", .{label});
+
+    if ((std.mem.eql(u8, id, "summary") or std.mem.eql(u8, id, "description")) and message.len > 0) {
+        try w.writeAll(message);
+    } else if (std.mem.eql(u8, id, "bug_type") or containsIgnoreCase(label, "bug type")) {
+        try w.writeAll(report_type.displayName());
+    } else if (std.mem.eql(u8, id, "version") or containsIgnoreCase(label, "version")) {
+        try w.writeAll(componentVersionForRepo(info, repo) orelse info.version);
+    } else if (std.mem.eql(u8, id, "os") or containsIgnoreCase(label, "operating system") or std.ascii.eqlIgnoreCase(label, "OS")) {
+        try w.print("{s} ({s})", .{ info.os_version, info.platform_key });
+    } else if (std.mem.eql(u8, id, "install_method")) {
+        try w.writeAll("Installed or managed via nullhub");
+    } else if (field.placeholder.len > 0) {
+        try w.writeAll(field.placeholder);
+    } else if (field.description.len > 0) {
+        try w.writeAll(field.description);
+    } else if (field.kind == .dropdown and field.options.len > 0) {
+        for (field.options, 0..) |option, i| {
+            if (i > 0) try w.writeAll("\n");
+            try w.print("- {s}", .{option});
+        }
+    } else {
+        try w.writeAll("...");
+    }
+
+    try w.writeAll("\n\n");
+}
+
+fn buildBodyFromTemplate(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+    message: []const u8,
+    info: SystemInfo,
+) ![]const u8 {
+    var template = try loadIssueTemplate(allocator, repo, report_type);
+    defer template.deinit();
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+
+    for (template.fields) |field| {
+        try writeFieldValue(w, repo, report_type, message, info, field);
+    }
+    try appendSystemInfo(w, info);
+
+    return buf.toOwnedSlice();
+}
+
 // ─── Markdown Generation ────────────────────────────────────────────────────
 
 pub fn buildTitle(
@@ -138,125 +614,14 @@ fn appendSystemInfo(w: anytype, info: SystemInfo) !void {
     }
 }
 
-pub fn buildBugBody(
-    allocator: std.mem.Allocator,
-    report_type: cli.ReportType,
-    message: []const u8,
-    info: SystemInfo,
-) ![]const u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    try w.print("### Bug type\n\n{s}\n\n", .{report_type.displayName()});
-    try w.print("### Summary\n\n{s}\n\n", .{message});
-    try w.writeAll(
-        \\### Steps to reproduce
-        \\
-        \\1. ...
-        \\2. ...
-        \\3. ...
-        \\
-        \\### Expected behavior
-        \\
-        \\...
-        \\
-        \\### Actual behavior
-        \\
-        \\...
-        \\
-        \\### Impact and severity
-        \\
-        \\Affected:
-        \\Severity:
-        \\Frequency:
-        \\Consequence:
-        \\
-        \\
-    );
-
-    if (report_type == .regression) {
-        try w.writeAll(
-            \\### Regression details
-            \\
-            \\Last known good version:
-            \\First known bad version:
-            \\
-        );
-    }
-
-    try w.writeAll(
-        \\### Logs, screenshots, and evidence
-        \\
-        \\```text
-        \\Paste redacted logs, screenshots, stack traces, or links here.
-        \\```
-        \\
-        \\### Additional information
-        \\
-        \\Temporary workaround, config details, or anything else that helps triage.
-        \\
-        \\
-    );
-    try appendSystemInfo(w, info);
-
-    return buf.toOwnedSlice();
-}
-
-pub fn buildFeatureBody(
-    allocator: std.mem.Allocator,
-    message: []const u8,
-    info: SystemInfo,
-) ![]const u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    try w.print("### Summary\n\n{s}\n\n", .{message});
-    try w.writeAll(
-        \\### Problem to solve
-        \\
-        \\What pain or limitation are you trying to remove?
-        \\
-        \\### Proposed solution
-        \\
-        \\Describe the desired behavior, API, or UI in concrete terms.
-        \\
-        \\### Alternatives considered
-        \\
-        \\What other approaches did you consider, and why are they weaker?
-        \\
-        \\### Impact
-        \\
-        \\Affected:
-        \\Severity:
-        \\Frequency:
-        \\Consequence:
-        \\
-        \\
-        \\### Evidence and examples
-        \\
-        \\Prior art, screenshots, metrics, logs, or links that support this request.
-        \\
-        \\### Additional information
-        \\
-        \\Constraints, compatibility concerns, or rollout notes.
-        \\
-        \\
-    );
-    try appendSystemInfo(w, info);
-
-    return buf.toOwnedSlice();
-}
-
 pub fn buildBody(
     allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
     report_type: cli.ReportType,
     message: []const u8,
     info: SystemInfo,
 ) ![]const u8 {
-    return switch (report_type) {
-        .bug_crash, .bug_behavior, .regression => buildBugBody(allocator, report_type, message, info),
-        .feature => buildFeatureBody(allocator, message, info),
-    };
+    return buildBodyFromTemplate(allocator, repo, report_type, message, info);
 }
 
 // ─── Submission ─────────────────────────────────────────────────────────────
@@ -386,10 +751,9 @@ fn tryGhCreate(
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "gh", "issue", "create",
-            "--repo",  repo.toGithubRepo(),
-            "--title", title,
-            "--body",  body,
+            "gh",      "issue",             "create",
+            "--repo",  repo.toGithubRepo(), "--title",
+            title,     "--body",            body,
             "--label", label_str.items,
         },
     }) catch |err| {
@@ -503,11 +867,11 @@ fn tryCurlCreate(
         .allocator = allocator,
         .argv = &.{
             "curl", "-sS",
-            "-X",  "POST",
-            "-H",  "Accept: application/vnd.github+json",
-            "-H",  "Content-Type: application/json",
-            "-H",  auth_header,
-            "-d",  json_buf.items,
+            "-X",   "POST",
+            "-H",   "Accept: application/vnd.github+json",
+            "-H",   "Content-Type: application/json",
+            "-H",   auth_header,
+            "-d",   json_buf.items,
             url,
         },
     }) catch |err| {
@@ -679,42 +1043,43 @@ test "buildTitle feature" {
     try std.testing.expectEqualStrings("[Feature]: Add dark mode", title);
 }
 
-test "buildBugBody contains required sections" {
-    const allocator = std.testing.allocator;
-    const info = SystemInfo{
-        .version = "2026.3.13",
-        .platform_key = "aarch64-macos",
-        .os_version = "Darwin 25.1.0",
-        .components = &.{},
-    };
-    const body = try buildBugBody(allocator, .bug_crash, "App crashes", info);
-    defer allocator.free(body);
-
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Bug type") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "Crash (process exits or hangs)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Summary") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "App crashes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Steps to reproduce") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Expected behavior") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Actual behavior") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Impact and severity") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.13") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "aarch64-macos") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "Darwin 25.1.0") != null);
-}
-
-test "buildBugBody includes components" {
+test "buildBody uses local bug template when available" {
     const allocator = std.testing.allocator;
     const info = SystemInfo{
         .version = "2026.3.13",
         .platform_key = "aarch64-macos",
         .os_version = "Darwin 25.1.0",
         .components = &.{
+            .{ .name = "nullclaw", .comp_version = "2026.3.14" },
+        },
+    };
+    const body = try buildBody(allocator, .nullclaw, .bug_crash, "App crashes", info);
+    defer allocator.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Description") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "App crashes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Steps to reproduce") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Expected behavior") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.14") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### OS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "aarch64-macos") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "Darwin 25.1.0") != null);
+}
+
+test "buildBody includes installed components table" {
+    const allocator = std.testing.allocator;
+    const info = SystemInfo{
+        .version = "2026.3.13",
+        .platform_key = "aarch64-macos",
+        .os_version = "Darwin 25.1.0",
+        .components = &.{
+            .{ .name = "nullclaw", .comp_version = "2026.3.14" },
             .{ .name = "main", .comp_version = "2026.3.14" },
         },
     };
-    const body = try buildBugBody(allocator, .bug_behavior, "Wrong output", info);
+    const body = try buildBody(allocator, .nullclaw, .bug_behavior, "Wrong output", info);
     defer allocator.free(body);
 
     try std.testing.expect(std.mem.indexOf(u8, body, "### Installed components") != null);
@@ -722,7 +1087,7 @@ test "buildBugBody includes components" {
     try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.14") != null);
 }
 
-test "buildBugBody includes regression section" {
+test "buildBody falls back when repo template is unavailable" {
     const allocator = std.testing.allocator;
     const info = SystemInfo{
         .version = "2026.3.13",
@@ -730,34 +1095,36 @@ test "buildBugBody includes regression section" {
         .os_version = "Darwin 25.1.0",
         .components = &.{},
     };
-    const body = try buildBugBody(allocator, .regression, "Update broke routing", info);
+    const body = try buildBody(allocator, .nullhub, .regression, "Update broke routing", info);
     defer allocator.free(body);
 
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Summary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "Update broke routing") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "### Regression details") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "Last known good version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
 }
 
-test "buildFeatureBody uses structured template" {
+test "buildBody uses local feature template when available" {
     const allocator = std.testing.allocator;
     const info = SystemInfo{
         .version = "2026.3.13",
         .platform_key = "aarch64-macos",
         .os_version = "Darwin 25.1.0",
         .components = &.{
-            .{ .name = "main", .comp_version = "2026.3.14" },
+            .{ .name = "nullboiler", .comp_version = "0.1.0" },
         },
     };
-    const body = try buildFeatureBody(allocator, "Add feature X", info);
+    const body = try buildBody(allocator, .nullboiler, .feature, "Add feature X", info);
     defer allocator.free(body);
 
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Summary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Description") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "Add feature X") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Problem to solve") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Proposed solution") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Impact") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Motivation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "Why is this feature useful?") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "0.1.0") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "Darwin 25.1.0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "main") != null);
 }
 
 test "buildBody dispatches correctly" {
@@ -769,13 +1136,13 @@ test "buildBody dispatches correctly" {
         .components = &.{},
     };
 
-    const bug_body = try buildBody(allocator, .regression, "Broke after update", info);
+    const bug_body = try buildBody(allocator, .nullhub, .regression, "Broke after update", info);
     defer allocator.free(bug_body);
-    try std.testing.expect(std.mem.indexOf(u8, bug_body, "### Bug type") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bug_body, "### Regression details") != null);
 
-    const feat_body = try buildBody(allocator, .feature, "Want X", info);
+    const feat_body = try buildBody(allocator, .nullboiler, .feature, "Want X", info);
     defer allocator.free(feat_body);
-    try std.testing.expect(std.mem.indexOf(u8, feat_body, "### Summary") != null);
+    try std.testing.expect(std.mem.indexOf(u8, feat_body, "### Motivation") != null);
 }
 
 test "buildManualIssueUrl includes repo, labels, and encoded body" {

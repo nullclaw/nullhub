@@ -1,6 +1,7 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const report = @import("report.zig");
+const report_schema = @import("report_schema.zig");
 
 // ─── Shared read buffer for stdin (avoids dangling stack pointers) ───────────
 
@@ -46,7 +47,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     defer allocator.free(title);
 
     var body_owned = false;
-    var body = try report.buildBody(allocator, report_type, message, info);
+    var body = try report.buildBody(allocator, repo, report_type, message, info);
 
     defer {
         if (body_owned) allocator.free(body);
@@ -152,13 +153,11 @@ fn printFallback(
 
 // ─── Interactive Prompts ────────────────────────────────────────────────────
 
-const repos = [_]cli.ReportRepo{ .nullhub, .nullclaw, .nullboiler, .nulltickets, .nullwatch };
-const types = [_]cli.ReportType{ .bug_crash, .bug_behavior, .regression, .feature };
-
 fn promptRepo(w: anytype) !?cli.ReportRepo {
     try w.writeAll("\nWhere is the problem?\n");
-    for (repos, 0..) |r, i| {
-        try w.print("  {d}. {s}\n", .{ i + 1, r.displayName() });
+    const repos = report_schema.repos();
+    for (repos, 0..) |repo_spec, i| {
+        try w.print("  {d}. {s}\n", .{ i + 1, repo_spec.display_name });
     }
     try w.writeAll("> ");
     try w.flush();
@@ -166,13 +165,14 @@ fn promptRepo(w: anytype) !?cli.ReportRepo {
     const line = readLine() orelse return null;
     const num = std.fmt.parseInt(usize, line, 10) catch return null;
     if (num < 1 or num > repos.len) return null;
-    return repos[num - 1];
+    return repos[num - 1].id;
 }
 
 fn promptType(w: anytype) !?cli.ReportType {
     try w.writeAll("\nReport type?\n");
-    for (types, 0..) |t, i| {
-        try w.print("  {d}. {s}\n", .{ i + 1, t.displayName() });
+    const types = report_schema.types();
+    for (types, 0..) |type_spec, i| {
+        try w.print("  {d}. {s}\n", .{ i + 1, type_spec.display_name });
     }
     try w.writeAll("> ");
     try w.flush();
@@ -180,7 +180,7 @@ fn promptType(w: anytype) !?cli.ReportType {
     const line = readLine() orelse return null;
     const num = std.fmt.parseInt(usize, line, 10) catch return null;
     if (num < 1 or num > types.len) return null;
-    return types[num - 1];
+    return types[num - 1].id;
 }
 
 fn promptMessage(allocator: std.mem.Allocator, w: anytype) !?[]const u8 {

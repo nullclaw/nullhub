@@ -1,5 +1,6 @@
 const std = @import("std");
 const access = @import("access.zig");
+const report_schema = @import("report_schema.zig");
 
 // ─── Option Types ────────────────────────────────────────────────────────────
 
@@ -80,92 +81,8 @@ pub const AddSourceOptions = struct {
     repo: []const u8,
 };
 
-pub const ReportRepo = enum {
-    nullhub,
-    nullclaw,
-    nullboiler,
-    nulltickets,
-    nullwatch,
-
-    pub fn fromStr(s: []const u8) ?ReportRepo {
-        const map = .{
-            .{ "nullhub", ReportRepo.nullhub },
-            .{ "nullclaw", ReportRepo.nullclaw },
-            .{ "nullboiler", ReportRepo.nullboiler },
-            .{ "nulltickets", ReportRepo.nulltickets },
-            .{ "nullwatch", ReportRepo.nullwatch },
-        };
-        inline for (map) |pair| {
-            if (std.mem.eql(u8, s, pair[0])) return pair[1];
-        }
-        return null;
-    }
-
-    pub fn toGithubRepo(self: ReportRepo) []const u8 {
-        return switch (self) {
-            .nullhub => "nullclaw/nullhub",
-            .nullclaw => "nullclaw/nullclaw",
-            .nullboiler => "nullclaw/NullBoiler",
-            .nulltickets => "nullclaw/nulltickets",
-            .nullwatch => "nullclaw/nullwatch",
-        };
-    }
-
-    pub fn displayName(self: ReportRepo) []const u8 {
-        return switch (self) {
-            .nullhub => "nullhub",
-            .nullclaw => "nullclaw",
-            .nullboiler => "nullboiler",
-            .nulltickets => "nulltickets",
-            .nullwatch => "nullwatch",
-        };
-    }
-};
-
-pub const ReportType = enum {
-    bug_crash,
-    bug_behavior,
-    regression,
-    feature,
-
-    pub fn fromStr(s: []const u8) ?ReportType {
-        const map = .{
-            .{ "bug:crash", ReportType.bug_crash },
-            .{ "bug:behavior", ReportType.bug_behavior },
-            .{ "regression", ReportType.regression },
-            .{ "feature", ReportType.feature },
-        };
-        inline for (map) |pair| {
-            if (std.mem.eql(u8, s, pair[0])) return pair[1];
-        }
-        return null;
-    }
-
-    pub fn toLabels(self: ReportType) []const []const u8 {
-        return switch (self) {
-            .bug_crash => &.{ "bug", "bug:crash" },
-            .bug_behavior => &.{ "bug", "bug:behavior" },
-            .regression => &.{ "bug", "regression" },
-            .feature => &.{ "enhancement" },
-        };
-    }
-
-    pub fn displayName(self: ReportType) []const u8 {
-        return switch (self) {
-            .bug_crash => "Crash (process exits or hangs)",
-            .bug_behavior => "Behavior bug (incorrect output/state)",
-            .regression => "Regression (worked before, now fails)",
-            .feature => "Feature request",
-        };
-    }
-
-    pub fn issuePrefix(self: ReportType) []const u8 {
-        return switch (self) {
-            .bug_crash, .bug_behavior, .regression => "[Bug]",
-            .feature => "[Feature]",
-        };
-    }
-};
+pub const ReportRepo = report_schema.ReportRepo;
+pub const ReportType = report_schema.ReportType;
 
 pub const ReportOptions = struct {
     repo: ?ReportRepo = null,

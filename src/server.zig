@@ -516,6 +516,10 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/ui-modules/available")) {
                 return self.handleAvailableUiModules(allocator);
             }
+            if (std.mem.eql(u8, target, "/api/report/meta")) {
+                const resp = report_api.handleMeta(allocator);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
         }
 
         // UI module install/uninstall

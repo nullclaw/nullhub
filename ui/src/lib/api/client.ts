@@ -15,6 +15,9 @@ function withQuery(path: string, params: Record<string, string | number | boolea
 export { encodePathSegment } from '$lib/orchestration/routes';
 
 export type LogSource = 'instance' | 'nullhub';
+export type ReportOption = { value: string; label: string };
+export type ReportTypeOption = ReportOption & { labels: string[] };
+export type ReportRepoOption = ReportOption & { repo: string };
 type InstanceStartOptions = {
   launch_mode?: string;
   verbose?: boolean;
@@ -213,6 +216,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  getReportMeta: () =>
+    request<{ repos: ReportRepoOption[]; types: ReportTypeOption[] }>('/report/meta'),
 
   submitReport: (data: { repo: string; type: string; message: string; markdown?: string }) =>
     request<{ status: string; url?: string; title?: string; markdown?: string; labels?: string[]; repo?: string; hint?: string; error?: string; manual_url?: string }>('/report', {

@@ -1,28 +1,17 @@
 <script lang="ts">
-  import { api } from "$lib/api/client";
+  import { api, type ReportOption } from "$lib/api/client";
+  import { onMount } from "svelte";
 
   type Step = "form" | "preview" | "result";
 
-  const REPOS = [
-    { value: "nullhub", label: "NullHub" },
-    { value: "nullclaw", label: "NullClaw" },
-    { value: "nullboiler", label: "NullBoiler" },
-    { value: "nulltickets", label: "NullTickets" },
-    { value: "nullwatch", label: "NullWatch" },
-  ];
-
-  const TYPES = [
-    { value: "bug:crash", label: "Bug: crash (process exits or hangs)" },
-    { value: "bug:behavior", label: "Bug: behavior (incorrect output/state)" },
-    { value: "regression", label: "Bug: regression (worked before, now fails)" },
-    { value: "feature", label: "Feature request" },
-  ];
-
   let step = $state<Step>("form");
-  let repo = $state("nullhub");
-  let type = $state("bug:crash");
+  let repoOptions = $state<ReportOption[]>([]);
+  let typeOptions = $state<ReportOption[]>([]);
+  let repo = $state("");
+  let type = $state("");
   let message = $state("");
   let loading = $state(false);
+  let metaLoading = $state(true);
   let error = $state("");
 
   // Preview state
@@ -42,7 +31,36 @@
   let resultMarkdown = $state("");
   let copied = $state(false);
 
+  onMount(() => {
+    void loadMeta();
+  });
+
+  async function loadMeta() {
+    metaLoading = true;
+    error = "";
+    try {
+      const meta = await api.getReportMeta();
+      repoOptions = meta.repos.map(({ value, label }) => ({ value, label }));
+      typeOptions = meta.types.map(({ value, label }) => ({ value, label }));
+
+      if (!repoOptions.some((option) => option.value === repo)) {
+        repo = repoOptions[0]?.value || "";
+      }
+      if (!typeOptions.some((option) => option.value === type)) {
+        type = typeOptions[0]?.value || "";
+      }
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      metaLoading = false;
+    }
+  }
+
   async function goToPreview() {
+    if (!repo || !type) {
+      error = metaLoading ? "Loading report metadata..." : "Report metadata is unavailable";
+      return;
+    }
     if (!message.trim()) {
       error = "Summary is required";
       return;
@@ -146,8 +164,8 @@
     <div class="form-section">
       <div class="field">
         <label for="report-repo">Repository</label>
-        <select id="report-repo" bind:value={repo}>
-          {#each REPOS as r}
+        <select id="report-repo" bind:value={repo} disabled={metaLoading || repoOptions.length === 0}>
+          {#each repoOptions as r}
             <option value={r.value}>{r.label}</option>
           {/each}
         </select>
@@ -155,8 +173,8 @@
 
       <div class="field">
         <label for="report-type">Report Type</label>
-        <select id="report-type" bind:value={type}>
-          {#each TYPES as t}
+        <select id="report-type" bind:value={type} disabled={metaLoading || typeOptions.length === 0}>
+          {#each typeOptions as t}
             <option value={t.value}>{t.label}</option>
           {/each}
         </select>
@@ -177,8 +195,8 @@
       {/if}
 
       <div class="actions">
-        <button class="primary-btn" onclick={goToPreview} disabled={loading}>
-          {loading ? "Loading..." : "Next"}
+        <button class="primary-btn" onclick={goToPreview} disabled={loading || metaLoading || !repo || !type}>
+          {metaLoading ? "Loading..." : loading ? "Loading..." : "Next"}
         </button>
       </div>
     </div>

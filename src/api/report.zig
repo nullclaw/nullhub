@@ -2,6 +2,43 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const cli = @import("../cli.zig");
 const report = @import("../report.zig");
+const report_schema = @import("../report_schema.zig");
+
+pub fn handleMeta(allocator: std.mem.Allocator) helpers.ApiResponse {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+
+    w.writeAll("{\"repos\":[") catch return helpers.serverError();
+    for (report_schema.repos(), 0..) |repo_spec, i| {
+        if (i > 0) w.writeAll(",") catch return helpers.serverError();
+        w.writeAll("{\"value\":\"") catch return helpers.serverError();
+        helpers.appendEscaped(&buf, repo_spec.value) catch return helpers.serverError();
+        w.writeAll("\",\"label\":\"") catch return helpers.serverError();
+        helpers.appendEscaped(&buf, repo_spec.display_name) catch return helpers.serverError();
+        w.writeAll("\",\"repo\":\"") catch return helpers.serverError();
+        helpers.appendEscaped(&buf, repo_spec.github_repo) catch return helpers.serverError();
+        w.writeAll("\"}") catch return helpers.serverError();
+    }
+    w.writeAll("],\"types\":[") catch return helpers.serverError();
+    for (report_schema.types(), 0..) |type_spec, i| {
+        if (i > 0) w.writeAll(",") catch return helpers.serverError();
+        w.writeAll("{\"value\":\"") catch return helpers.serverError();
+        helpers.appendEscaped(&buf, type_spec.value) catch return helpers.serverError();
+        w.writeAll("\",\"label\":\"") catch return helpers.serverError();
+        helpers.appendEscaped(&buf, type_spec.display_name) catch return helpers.serverError();
+        w.writeAll("\",\"labels\":[") catch return helpers.serverError();
+        for (type_spec.labels, 0..) |label, j| {
+            if (j > 0) w.writeAll(",") catch return helpers.serverError();
+            w.writeAll("\"") catch return helpers.serverError();
+            helpers.appendEscaped(&buf, label) catch return helpers.serverError();
+            w.writeAll("\"") catch return helpers.serverError();
+        }
+        w.writeAll("]}") catch return helpers.serverError();
+    }
+    w.writeAll("]}") catch return helpers.serverError();
+
+    return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
+}
 
 pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.ApiResponse {
     const parsed = parseRequest(allocator, body) orelse
@@ -19,7 +56,7 @@ pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.Api
     const title = report.buildTitle(allocator, parsed.report_type, parsed.message) catch
         return helpers.serverError();
     defer allocator.free(title);
-    const markdown = report.buildBody(allocator, parsed.report_type, parsed.message, info) catch
+    const markdown = report.buildBody(allocator, parsed.repo, parsed.report_type, parsed.message, info) catch
         return helpers.serverError();
     defer allocator.free(markdown);
 
@@ -65,8 +102,8 @@ pub fn handleSubmit(allocator: std.mem.Allocator, body: []const u8) helpers.ApiR
 
     // Use provided markdown (edited by user) or generate
     const markdown = parsed.markdown orelse
-        (report.buildBody(allocator, parsed.report_type, parsed.message, info) catch
-        return helpers.serverError());
+        (report.buildBody(allocator, parsed.repo, parsed.report_type, parsed.message, info) catch
+            return helpers.serverError());
     defer if (parsed.markdown == null) allocator.free(markdown);
 
     const result = report.submitIssue(allocator, parsed.repo, parsed.report_type, title, markdown) catch
@@ -249,6 +286,29 @@ test "handlePreview bad request" {
     const allocator = std.testing.allocator;
     const resp = handlePreview(allocator, "{}");
     try std.testing.expectEqualStrings("400 Bad Request", resp.status);
+}
+
+test "handleMeta returns shared report options" {
+    const allocator = std.testing.allocator;
+    const resp = handleMeta(allocator);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            repos: []const struct { value: []const u8, label: []const u8, repo: []const u8 },
+            types: []const struct { value: []const u8, label: []const u8, labels: []const []const u8 },
+        },
+        allocator,
+        resp.body,
+        .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("nullhub", parsed.value.repos[0].value);
+    try std.testing.expectEqualStrings("NullHub", parsed.value.repos[0].label);
+    try std.testing.expectEqualStrings("nullwatch", parsed.value.repos[4].value);
+    try std.testing.expectEqualStrings("bug:crash", parsed.value.types[0].value);
+    try std.testing.expectEqualStrings("enhancement", parsed.value.types[3].labels[0]);
 }
 
 test "parseRequest invalid type returns null" {

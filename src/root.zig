@@ -27,6 +27,7 @@ pub const registry = @import("installer/registry.zig");
 pub const report = @import("report.zig");
 pub const report_api = @import("api/report.zig");
 pub const report_cli = @import("report_cli.zig");
+pub const report_schema = @import("report_schema.zig");
 pub const server = @import("server.zig");
 pub const service = @import("service.zig");
 pub const settings_api = @import("api/settings.zig");
@@ -73,6 +74,7 @@ test {
     _ = report;
     _ = report_api;
     _ = report_cli;
+    _ = report_schema;
     _ = server;
     _ = service;
     _ = settings_api;
