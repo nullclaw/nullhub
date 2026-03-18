@@ -84,6 +84,7 @@
   </div>
 
   <div class="nav-bottom">
+    <a href="/report" class:active={currentPath === "/report"}>Report Issue</a>
     <a href="/settings" class:active={currentPath === "/settings"}>Settings</a>
   </div>
 </nav>

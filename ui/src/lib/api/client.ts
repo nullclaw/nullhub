@@ -208,5 +208,17 @@ export const api = {
     request<any>(`/channels/${id.replace('sc_', '')}`, { method: 'DELETE' }),
   revalidateSavedChannel: (id: string) =>
     request<any>(`/channels/${id.replace('sc_', '')}/validate`, { method: 'POST' }),
+  reportPreview: (data: { repo: string; type: string; message: string }) =>
+    request<{ title: string; markdown: string; labels: string[]; repo: string }>('/report/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  submitReport: (data: { repo: string; type: string; message: string; markdown?: string }) =>
+    request<{ status: string; url?: string; title?: string; markdown?: string; labels?: string[]; repo?: string; hint?: string }>('/report', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   ...createOrchestrationApi(request, withQuery),
 };
