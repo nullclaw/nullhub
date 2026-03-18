@@ -24,6 +24,7 @@ pub const platform = @import("core/platform.zig");
 pub const prereqs = @import("installer/prereqs.zig");
 pub const process = @import("supervisor/process.zig");
 pub const registry = @import("installer/registry.zig");
+pub const report = @import("report.zig");
 pub const server = @import("server.zig");
 pub const service = @import("service.zig");
 pub const settings_api = @import("api/settings.zig");
@@ -67,6 +68,7 @@ test {
     _ = prereqs;
     _ = process;
     _ = registry;
+    _ = report;
     _ = server;
     _ = service;
     _ = settings_api;
