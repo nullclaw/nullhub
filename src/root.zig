@@ -25,6 +25,7 @@ pub const prereqs = @import("installer/prereqs.zig");
 pub const process = @import("supervisor/process.zig");
 pub const registry = @import("installer/registry.zig");
 pub const report = @import("report.zig");
+pub const report_api = @import("api/report.zig");
 pub const report_cli = @import("report_cli.zig");
 pub const server = @import("server.zig");
 pub const service = @import("service.zig");
@@ -70,6 +71,7 @@ test {
     _ = process;
     _ = registry;
     _ = report;
+    _ = report_api;
     _ = report_cli;
     _ = server;
     _ = service;
