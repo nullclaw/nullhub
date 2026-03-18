@@ -201,7 +201,8 @@ pub fn submitIssue(
     }
 
     // 3. Try $GITHUB_TOKEN
-    if (getEnv("GITHUB_TOKEN")) |token| {
+    if (getEnv(allocator, "GITHUB_TOKEN")) |token| {
+        defer allocator.free(token);
         if (tryCurlCreate(allocator, repo, report_type, title, body, token)) |url| {
             return .{ .success = url };
         }
@@ -211,8 +212,8 @@ pub fn submitIssue(
     return .no_auth;
 }
 
-fn getEnv(key: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(std.heap.page_allocator, key) catch null;
+fn getEnv(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
 fn tryGhCreate(
@@ -269,12 +270,17 @@ fn tryGhCreate(
         },
     }
 
-    // Trim trailing newline from URL
-    var out = result.stdout;
+    // Trim trailing newline from URL and dupe so free size matches alloc size
+    var out: []const u8 = result.stdout;
     while (out.len > 0 and (out[out.len - 1] == '\n' or out[out.len - 1] == '\r')) {
         out = out[0 .. out.len - 1];
     }
-    return out;
+    const trimmed = allocator.dupe(u8, out) catch {
+        allocator.free(result.stdout);
+        return null;
+    };
+    allocator.free(result.stdout);
+    return trimmed;
 }
 
 fn tryGhAuthToken(allocator: std.mem.Allocator) ?[]const u8 {
@@ -297,7 +303,7 @@ fn tryGhAuthToken(allocator: std.mem.Allocator) ?[]const u8 {
         },
     }
 
-    var out = result.stdout;
+    var out: []const u8 = result.stdout;
     while (out.len > 0 and (out[out.len - 1] == '\n' or out[out.len - 1] == '\r')) {
         out = out[0 .. out.len - 1];
     }
@@ -305,7 +311,12 @@ fn tryGhAuthToken(allocator: std.mem.Allocator) ?[]const u8 {
         allocator.free(result.stdout);
         return null;
     }
-    return out;
+    const trimmed = allocator.dupe(u8, out) catch {
+        allocator.free(result.stdout);
+        return null;
+    };
+    allocator.free(result.stdout);
+    return trimmed;
 }
 
 fn tryCurlCreate(
