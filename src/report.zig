@@ -122,17 +122,7 @@ pub fn buildTitle(
     return std.fmt.allocPrint(allocator, "{s}: {s}", .{ report_type.issuePrefix(), message });
 }
 
-pub fn buildBugBody(
-    allocator: std.mem.Allocator,
-    report_type: cli.ReportType,
-    message: []const u8,
-    info: SystemInfo,
-) ![]const u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    try w.print("### Bug type\n\n{s}\n\n", .{report_type.displayName()});
-    try w.print("### Description\n\n{s}\n\n", .{message});
+fn appendSystemInfo(w: anytype, info: SystemInfo) !void {
     try w.writeAll("### System information\n\n");
     try w.writeAll("| Field | Value |\n|---|---|\n");
     try w.print("| nullhub version | {s} |\n", .{info.version});
@@ -146,6 +136,68 @@ pub fn buildBugBody(
             try w.print("| {s} | {s} |\n", .{ comp.name, comp.comp_version });
         }
     }
+}
+
+pub fn buildBugBody(
+    allocator: std.mem.Allocator,
+    report_type: cli.ReportType,
+    message: []const u8,
+    info: SystemInfo,
+) ![]const u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+
+    try w.print("### Bug type\n\n{s}\n\n", .{report_type.displayName()});
+    try w.print("### Summary\n\n{s}\n\n", .{message});
+    try w.writeAll(
+        \\### Steps to reproduce
+        \\
+        \\1. ...
+        \\2. ...
+        \\3. ...
+        \\
+        \\### Expected behavior
+        \\
+        \\...
+        \\
+        \\### Actual behavior
+        \\
+        \\...
+        \\
+        \\### Impact and severity
+        \\
+        \\Affected:
+        \\Severity:
+        \\Frequency:
+        \\Consequence:
+        \\
+        \\
+    );
+
+    if (report_type == .regression) {
+        try w.writeAll(
+            \\### Regression details
+            \\
+            \\Last known good version:
+            \\First known bad version:
+            \\
+        );
+    }
+
+    try w.writeAll(
+        \\### Logs, screenshots, and evidence
+        \\
+        \\```text
+        \\Paste redacted logs, screenshots, stack traces, or links here.
+        \\```
+        \\
+        \\### Additional information
+        \\
+        \\Temporary workaround, config details, or anything else that helps triage.
+        \\
+        \\
+    );
+    try appendSystemInfo(w, info);
 
     return buf.toOwnedSlice();
 }
@@ -159,10 +211,38 @@ pub fn buildFeatureBody(
     const w = buf.writer();
 
     try w.print("### Summary\n\n{s}\n\n", .{message});
-    try w.writeAll("### System information\n\n");
-    try w.writeAll("| Field | Value |\n|---|---|\n");
-    try w.print("| nullhub version | {s} |\n", .{info.version});
-    try w.print("| Platform | {s} |\n", .{info.platform_key});
+    try w.writeAll(
+        \\### Problem to solve
+        \\
+        \\What pain or limitation are you trying to remove?
+        \\
+        \\### Proposed solution
+        \\
+        \\Describe the desired behavior, API, or UI in concrete terms.
+        \\
+        \\### Alternatives considered
+        \\
+        \\What other approaches did you consider, and why are they weaker?
+        \\
+        \\### Impact
+        \\
+        \\Affected:
+        \\Severity:
+        \\Frequency:
+        \\Consequence:
+        \\
+        \\
+        \\### Evidence and examples
+        \\
+        \\Prior art, screenshots, metrics, logs, or links that support this request.
+        \\
+        \\### Additional information
+        \\
+        \\Constraints, compatibility concerns, or rollout notes.
+        \\
+        \\
+    );
+    try appendSystemInfo(w, info);
 
     return buf.toOwnedSlice();
 }
@@ -181,10 +261,54 @@ pub fn buildBody(
 
 // ─── Submission ─────────────────────────────────────────────────────────────
 
+pub const SubmitFailureKind = enum {
+    no_auth,
+    submit_failed,
+};
+
+pub const ManualSubmission = struct {
+    kind: SubmitFailureKind,
+    reason: []const u8,
+    hint: []const u8,
+    manual_url: []const u8,
+
+    pub fn deinit(self: ManualSubmission, allocator: std.mem.Allocator) void {
+        allocator.free(self.reason);
+        allocator.free(self.hint);
+        allocator.free(self.manual_url);
+    }
+};
+
 pub const SubmitResult = union(enum) {
     success: []const u8, // issue URL
-    no_auth: void,
+    manual: ManualSubmission,
 };
+
+const SubmissionAttempt = union(enum) {
+    success: []const u8,
+    skipped,
+    failed: []const u8,
+};
+
+pub fn buildManualIssueUrl(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+    title: []const u8,
+    body: []const u8,
+) ![]const u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+
+    try w.print("https://github.com/{s}/issues/new?title=", .{repo.toGithubRepo()});
+    try appendQueryValue(&buf, title);
+    try w.writeAll("&labels=");
+    try appendLabelsQueryValue(&buf, report_type.toLabels());
+    try w.writeAll("&body=");
+    try appendQueryValue(&buf, body);
+
+    return buf.toOwnedSlice();
+}
 
 pub fn submitIssue(
     allocator: std.mem.Allocator,
@@ -193,29 +317,40 @@ pub fn submitIssue(
     title: []const u8,
     body: []const u8,
 ) !SubmitResult {
-    // 1. Try `gh issue create`
-    if (tryGhCreate(allocator, repo, report_type, title, body)) |url| {
-        return .{ .success = url };
+    var failure_reason: ?[]const u8 = null;
+    defer if (failure_reason) |msg| allocator.free(msg);
+
+    switch (try tryGhCreate(allocator, repo, report_type, title, body)) {
+        .success => |url| return .{ .success = url },
+        .failed => |msg| replaceFailureReason(allocator, &failure_reason, msg),
+        .skipped => {},
     }
 
-    // 2. Try curl with `gh auth token`
     if (tryGhAuthToken(allocator)) |token| {
         defer allocator.free(token);
-        if (tryCurlCreate(allocator, repo, report_type, title, body, token)) |url| {
-            return .{ .success = url };
+        switch (try tryCurlCreate(allocator, repo, report_type, title, body, token)) {
+            .success => |url| return .{ .success = url },
+            .failed => |msg| replaceFailureReason(allocator, &failure_reason, msg),
+            .skipped => {},
         }
     }
 
-    // 3. Try $GITHUB_TOKEN
     if (getEnv(allocator, "GITHUB_TOKEN")) |token| {
         defer allocator.free(token);
-        if (tryCurlCreate(allocator, repo, report_type, title, body, token)) |url| {
-            return .{ .success = url };
+        switch (try tryCurlCreate(allocator, repo, report_type, title, body, token)) {
+            .success => |url| return .{ .success = url },
+            .failed => |msg| replaceFailureReason(allocator, &failure_reason, msg),
+            .skipped => {},
         }
     }
 
-    // 4. Fallback
-    return .no_auth;
+    if (failure_reason) |msg| {
+        const manual = try buildFailedManualSubmission(allocator, repo, report_type, title, body, msg);
+        failure_reason = null;
+        return .{ .manual = manual };
+    }
+
+    return .{ .manual = try buildNoAuthManualSubmission(allocator, repo, report_type, title, body) };
 }
 
 fn getEnv(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
@@ -228,27 +363,24 @@ fn tryGhCreate(
     report_type: cli.ReportType,
     title: []const u8,
     body: []const u8,
-) ?[]const u8 {
-    // Check gh auth status first
+) !SubmissionAttempt {
     const auth_check = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "gh", "auth", "status" },
-    }) catch return null;
+    }) catch return .skipped;
     defer allocator.free(auth_check.stdout);
     defer allocator.free(auth_check.stderr);
 
     switch (auth_check.term) {
-        .Exited => |code| if (code != 0) return null,
-        else => return null,
+        .Exited => |code| if (code != 0) return .skipped,
+        else => return .skipped,
     }
 
-    // Build label args
-    const labels = report_type.toLabels();
     var label_str = std.array_list.Managed(u8).init(allocator);
     defer label_str.deinit();
-    for (labels, 0..) |label, i| {
-        if (i > 0) label_str.appendSlice(",") catch return null;
-        label_str.appendSlice(label) catch return null;
+    for (report_type.toLabels(), 0..) |label, i| {
+        if (i > 0) try label_str.appendSlice(",");
+        try label_str.appendSlice(label);
     }
 
     const result = std.process.Child.run(.{
@@ -260,33 +392,37 @@ fn tryGhCreate(
             "--body",  body,
             "--label", label_str.items,
         },
-    }) catch return null;
+    }) catch |err| {
+        return .{ .failed = try std.fmt.allocPrint(allocator, "Failed to run `gh issue create`: {s}", .{@errorName(err)}) };
+    };
     defer allocator.free(result.stderr);
 
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
-                allocator.free(result.stdout);
-                return null;
+                defer allocator.free(result.stdout);
+                return .{ .failed = try buildProcessFailureMessage(
+                    allocator,
+                    "`gh issue create` failed",
+                    code,
+                    result.stdout,
+                    result.stderr,
+                ) };
             }
         },
         else => {
-            allocator.free(result.stdout);
-            return null;
+            defer allocator.free(result.stdout);
+            return .{ .failed = try allocator.dupe(u8, "`gh issue create` terminated unexpectedly.") };
         },
     }
 
-    // Trim trailing newline from URL and dupe so free size matches alloc size
     var out: []const u8 = result.stdout;
     while (out.len > 0 and (out[out.len - 1] == '\n' or out[out.len - 1] == '\r')) {
         out = out[0 .. out.len - 1];
     }
-    const trimmed = allocator.dupe(u8, out) catch {
-        allocator.free(result.stdout);
-        return null;
-    };
+    const trimmed = try allocator.dupe(u8, out);
     allocator.free(result.stdout);
-    return trimmed;
+    return .{ .success = trimmed };
 }
 
 fn tryGhAuthToken(allocator: std.mem.Allocator) ?[]const u8 {
@@ -332,80 +468,183 @@ fn tryCurlCreate(
     title: []const u8,
     body: []const u8,
     token: []const u8,
-) ?[]const u8 {
-    const url = std.fmt.allocPrint(
+) !SubmissionAttempt {
+    const url = try std.fmt.allocPrint(
         allocator,
         "https://api.github.com/repos/{s}/issues",
         .{repo.toGithubRepo()},
-    ) catch return null;
+    );
     defer allocator.free(url);
 
-    const auth_header = std.fmt.allocPrint(
+    const auth_header = try std.fmt.allocPrint(
         allocator,
         "Authorization: Bearer {s}",
         .{token},
-    ) catch return null;
+    );
     defer allocator.free(auth_header);
 
-    // Build JSON body
     var json_buf = std.array_list.Managed(u8).init(allocator);
     defer json_buf.deinit();
     const jw = json_buf.writer();
-    jw.writeAll("{\"title\":\"") catch return null;
-    writeJsonEscaped(jw, title) catch return null;
-    jw.writeAll("\",\"body\":\"") catch return null;
-    writeJsonEscaped(jw, body) catch return null;
-    jw.writeAll("\",\"labels\":[") catch return null;
-    const labels = report_type.toLabels();
-    for (labels, 0..) |label, i| {
-        if (i > 0) jw.writeAll(",") catch return null;
-        jw.writeAll("\"") catch return null;
-        jw.writeAll(label) catch return null;
-        jw.writeAll("\"") catch return null;
+    try jw.writeAll("{\"title\":\"");
+    try writeJsonEscaped(jw, title);
+    try jw.writeAll("\",\"body\":\"");
+    try writeJsonEscaped(jw, body);
+    try jw.writeAll("\",\"labels\":[");
+    for (report_type.toLabels(), 0..) |label, i| {
+        if (i > 0) try jw.writeAll(",");
+        try jw.writeAll("\"");
+        try jw.writeAll(label);
+        try jw.writeAll("\"");
     }
-    jw.writeAll("]}") catch return null;
+    try jw.writeAll("]}");
 
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
-            "curl", "-sf",
+            "curl", "-sS",
             "-X",  "POST",
             "-H",  "Accept: application/vnd.github+json",
+            "-H",  "Content-Type: application/json",
             "-H",  auth_header,
             "-d",  json_buf.items,
             url,
         },
-    }) catch return null;
+    }) catch |err| {
+        return .{ .failed = try std.fmt.allocPrint(allocator, "Failed to run GitHub API request: {s}", .{@errorName(err)}) };
+    };
     defer allocator.free(result.stderr);
 
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
-                allocator.free(result.stdout);
-                return null;
+                defer allocator.free(result.stdout);
+                return .{ .failed = try buildProcessFailureMessage(
+                    allocator,
+                    "GitHub API request failed",
+                    code,
+                    result.stdout,
+                    result.stderr,
+                ) };
             }
         },
         else => {
-            allocator.free(result.stdout);
-            return null;
+            defer allocator.free(result.stdout);
+            return .{ .failed = try allocator.dupe(u8, "GitHub API request terminated unexpectedly.") };
         },
     }
 
-    // Parse response to extract html_url
     const parsed = std.json.parseFromSlice(
-        struct { html_url: []const u8 },
+        struct {
+            html_url: ?[]const u8 = null,
+            message: ?[]const u8 = null,
+        },
         allocator,
         result.stdout,
         .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
     ) catch {
-        allocator.free(result.stdout);
-        return null;
+        defer allocator.free(result.stdout);
+        return .{ .failed = try buildProcessFailureMessage(
+            allocator,
+            "GitHub API returned an unreadable response",
+            0,
+            result.stdout,
+            result.stderr,
+        ) };
     };
     defer allocator.free(result.stdout);
     defer parsed.deinit();
 
-    const issue_url = allocator.dupe(u8, parsed.value.html_url) catch return null;
-    return issue_url;
+    if (parsed.value.html_url) |html_url| {
+        return .{ .success = try allocator.dupe(u8, html_url) };
+    }
+
+    if (parsed.value.message) |message| {
+        return .{ .failed = try std.fmt.allocPrint(allocator, "GitHub API error: {s}", .{message}) };
+    }
+
+    return .{ .failed = try allocator.dupe(u8, "GitHub API did not return an issue URL.") };
+}
+
+fn replaceFailureReason(allocator: std.mem.Allocator, slot: *?[]const u8, message: []const u8) void {
+    if (slot.*) |old| allocator.free(old);
+    slot.* = message;
+}
+
+fn buildNoAuthManualSubmission(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+    title: []const u8,
+    body: []const u8,
+) !ManualSubmission {
+    return .{
+        .kind = .no_auth,
+        .reason = try allocator.dupe(u8, "Automatic submission requires GitHub authentication."),
+        .hint = try allocator.dupe(u8, "Run `gh auth login` or set `GITHUB_TOKEN`, then retry. You can also open the prefilled GitHub URL below."),
+        .manual_url = try buildManualIssueUrl(allocator, repo, report_type, title, body),
+    };
+}
+
+fn buildFailedManualSubmission(
+    allocator: std.mem.Allocator,
+    repo: cli.ReportRepo,
+    report_type: cli.ReportType,
+    title: []const u8,
+    body: []const u8,
+    reason: []const u8,
+) !ManualSubmission {
+    return .{
+        .kind = .submit_failed,
+        .reason = reason,
+        .hint = try allocator.dupe(u8, "Automatic submission failed after reaching GitHub. Review the error below and use the prefilled GitHub URL or copied content to file the issue manually."),
+        .manual_url = try buildManualIssueUrl(allocator, repo, report_type, title, body),
+    };
+}
+
+fn buildProcessFailureMessage(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    exit_code: u8,
+    stdout: []const u8,
+    stderr: []const u8,
+) ![]const u8 {
+    const detail = firstNonEmptyTrimmed(stderr, stdout) orelse "unknown error";
+    if (exit_code == 0) {
+        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ prefix, detail });
+    }
+    return std.fmt.allocPrint(allocator, "{s} (exit {d}): {s}", .{ prefix, exit_code, detail });
+}
+
+fn firstNonEmptyTrimmed(a: []const u8, b: []const u8) ?[]const u8 {
+    const first = std.mem.trim(u8, a, " \r\n\t");
+    if (first.len > 0) return first;
+    const second = std.mem.trim(u8, b, " \r\n\t");
+    if (second.len > 0) return second;
+    return null;
+}
+
+fn appendLabelsQueryValue(buf: *std.array_list.Managed(u8), labels: []const []const u8) !void {
+    const w = buf.writer();
+    for (labels, 0..) |label, i| {
+        if (i > 0) try w.writeAll("%2C");
+        try appendQueryValue(buf, label);
+    }
+}
+
+fn appendQueryValue(buf: *std.array_list.Managed(u8), raw: []const u8) !void {
+    const w = buf.writer();
+    var start: usize = 0;
+    for (raw, 0..) |c, i| {
+        if (isQueryValueChar(c)) continue;
+        try w.print("{s}%{X:0>2}", .{ raw[start..i], c });
+        start = i + 1;
+    }
+    try w.writeAll(raw[start..]);
+}
+
+fn isQueryValueChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~';
 }
 
 fn writeJsonEscaped(writer: anytype, s: []const u8) !void {
@@ -453,8 +692,12 @@ test "buildBugBody contains required sections" {
 
     try std.testing.expect(std.mem.indexOf(u8, body, "### Bug type") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "Crash (process exits or hangs)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Description") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Summary") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "App crashes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Steps to reproduce") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Expected behavior") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Actual behavior") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Impact and severity") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.13") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "aarch64-macos") != null);
@@ -479,7 +722,22 @@ test "buildBugBody includes components" {
     try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.14") != null);
 }
 
-test "buildFeatureBody is lightweight" {
+test "buildBugBody includes regression section" {
+    const allocator = std.testing.allocator;
+    const info = SystemInfo{
+        .version = "2026.3.13",
+        .platform_key = "aarch64-macos",
+        .os_version = "Darwin 25.1.0",
+        .components = &.{},
+    };
+    const body = try buildBugBody(allocator, .regression, "Update broke routing", info);
+    defer allocator.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Regression details") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "Last known good version") != null);
+}
+
+test "buildFeatureBody uses structured template" {
     const allocator = std.testing.allocator;
     const info = SystemInfo{
         .version = "2026.3.13",
@@ -494,10 +752,12 @@ test "buildFeatureBody is lightweight" {
 
     try std.testing.expect(std.mem.indexOf(u8, body, "### Summary") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "Add feature X") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "2026.3.13") != null);
-    // Feature body should NOT include components or OS version
-    try std.testing.expect(std.mem.indexOf(u8, body, "### Installed components") == null);
-    try std.testing.expect(std.mem.indexOf(u8, body, "Darwin") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Problem to solve") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Proposed solution") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### Impact") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "### System information") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "Darwin 25.1.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "main") != null);
 }
 
 test "buildBody dispatches correctly" {
@@ -516,6 +776,25 @@ test "buildBody dispatches correctly" {
     const feat_body = try buildBody(allocator, .feature, "Want X", info);
     defer allocator.free(feat_body);
     try std.testing.expect(std.mem.indexOf(u8, feat_body, "### Summary") != null);
+}
+
+test "buildManualIssueUrl includes repo, labels, and encoded body" {
+    const allocator = std.testing.allocator;
+    const url = try buildManualIssueUrl(allocator, .nullhub, .bug_behavior, "[Bug]: Broken title", "Line 1\nLine 2");
+    defer allocator.free(url);
+
+    try std.testing.expect(std.mem.indexOf(u8, url, "https://github.com/nullclaw/nullhub/issues/new") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "labels=bug%2Cbug%3Abehavior") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "title=%5BBug%5D%3A%20Broken%20title") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "body=Line%201%0ALine%202") != null);
+}
+
+test "buildProcessFailureMessage prefers stderr" {
+    const allocator = std.testing.allocator;
+    const message = try buildProcessFailureMessage(allocator, "submit failed", 22, "{\"message\":\"ignored\"}", "validation failed\n");
+    defer allocator.free(message);
+
+    try std.testing.expectEqualStrings("submit failed (exit 22): validation failed", message);
 }
 
 test "writeJsonEscaped" {

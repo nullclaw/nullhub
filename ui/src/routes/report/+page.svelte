@@ -33,13 +33,18 @@
 
   // Result state
   let resultUrl = $state("");
+  let resultTitle = $state("");
+  let resultLabels = $state<string[]>([]);
+  let resultRepo = $state("");
+  let resultManualUrl = $state("");
+  let resultError = $state("");
   let resultHint = $state("");
   let resultMarkdown = $state("");
   let copied = $state(false);
 
   async function goToPreview() {
     if (!message.trim()) {
-      error = "Description is required";
+      error = "Summary is required";
       return;
     }
     loading = true;
@@ -70,12 +75,22 @@
       });
       if (res.status === "created" && res.url) {
         resultUrl = res.url;
+        resultTitle = previewTitle;
+        resultLabels = [...previewLabels];
+        resultRepo = previewRepo;
+        resultManualUrl = "";
+        resultError = "";
         resultHint = "";
         resultMarkdown = "";
       } else {
         resultUrl = "";
+        resultTitle = res.title || previewTitle;
+        resultLabels = res.labels || [...previewLabels];
+        resultRepo = res.repo || previewRepo;
+        resultManualUrl = res.manual_url || "";
+        resultError = res.error || "Automatic submission failed.";
         resultHint = res.hint || "";
-        resultMarkdown = previewMarkdown;
+        resultMarkdown = res.markdown || previewMarkdown;
       }
       step = "result";
     } catch (e) {
@@ -90,6 +105,11 @@
     message = "";
     error = "";
     resultUrl = "";
+    resultTitle = "";
+    resultLabels = [];
+    resultRepo = "";
+    resultManualUrl = "";
+    resultError = "";
     resultHint = "";
     resultMarkdown = "";
     copied = false;
@@ -143,14 +163,13 @@
       </div>
 
       <div class="field">
-        <label for="report-message">Description</label>
-        <input
+        <label for="report-message">Summary</label>
+        <textarea
           id="report-message"
-          type="text"
           bind:value={message}
-          placeholder="Describe the issue or feature..."
-          onkeydown={(e) => e.key === "Enter" && goToPreview()}
-        />
+          rows="4"
+          placeholder="One-line summary of the bug or feature. You'll be able to fill repro steps, impact, and the rest in the preview."
+        ></textarea>
       </div>
 
       {#if error}
@@ -188,6 +207,10 @@
         <textarea id="report-preview" bind:value={previewMarkdown} rows="16"></textarea>
       </div>
 
+      <p class="hint">
+        Fill in the placeholders before submitting. The preview is the exact issue body that will be sent to GitHub.
+      </p>
+
       {#if error}
         <div class="message message-error">{error}</div>
       {/if}
@@ -213,9 +236,35 @@
         <div class="message message-error">
           Could not submit automatically.
         </div>
+        {#if resultError}
+          <p class="hint"><strong>Error:</strong> {resultError}</p>
+        {/if}
         {#if resultHint}
           <p class="hint">{resultHint}</p>
         {/if}
+        <div class="manual-meta">
+          <div class="preview-header">
+            <span class="preview-label">Repository</span>
+            <code>{resultRepo}</code>
+          </div>
+          <div class="preview-header">
+            <span class="preview-label">Title</span>
+            <code>{resultTitle}</code>
+          </div>
+          <div class="preview-header">
+            <span class="preview-label">Labels</span>
+            <span class="label-list">
+              {#each resultLabels as label}
+                <span class="label-pill">{label}</span>
+              {/each}
+            </span>
+          </div>
+          {#if resultManualUrl}
+            <div class="result-link">
+              <a href={resultManualUrl} target="_blank" rel="noopener noreferrer">Open prefilled GitHub issue</a>
+            </div>
+          {/if}
+        </div>
         <div class="fallback-block">
           <div class="fallback-header">
             <span>Copy this content and create the issue manually:</span>
@@ -265,7 +314,6 @@
     letter-spacing: 1px;
   }
 
-  .field input[type="text"],
   .field select,
   .field textarea {
     width: 100%;
@@ -281,14 +329,13 @@
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
   }
 
-  .field input:focus,
   .field select:focus,
   .field textarea:focus {
     border-color: var(--accent);
     box-shadow: 0 0 8px var(--border-glow);
   }
 
-  .field input::placeholder {
+  .field textarea::placeholder {
     color: color-mix(in srgb, var(--fg-dim) 50%, transparent);
   }
 
@@ -327,6 +374,7 @@
   .label-list {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
   }
 
   .label-pill {
@@ -434,6 +482,11 @@
     color: var(--fg-dim);
     margin-bottom: 1rem;
     font-family: var(--font-mono);
+    line-height: 1.5;
+  }
+
+  .manual-meta {
+    margin-bottom: 1rem;
   }
 
   .fallback-block {
@@ -460,6 +513,10 @@
     margin-top: 0;
   }
 
+  .fallback-header {
+    gap: 1rem;
+  }
+
   .fallback-block pre {
     padding: 1rem;
     margin: 0;
@@ -471,5 +528,23 @@
     line-height: 1.5;
     max-height: 400px;
     overflow-y: auto;
+  }
+
+  @media (max-width: 700px) {
+    .report-page {
+      padding: 1.25rem;
+    }
+
+    .preview-header,
+    .fallback-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .actions-split {
+      gap: 0.75rem;
+      flex-direction: column;
+      align-items: stretch;
+    }
   }
 </style>

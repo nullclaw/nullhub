@@ -58,6 +58,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     try w.writeAll("──────────────────────────\n");
     try w.print("Title: {s}\n\n", .{title});
     try w.writeAll(body);
+    try w.writeAll("\n");
     try w.writeAll("──────────────────────────\n");
     try w.flush();
 
@@ -89,6 +90,9 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
                     allocator.free(body);
                     body = edited;
                     // body_owned remains true, defer will free the new body
+                } else {
+                    try w.writeAll("Editor launch failed; keeping the current draft.\n");
+                    try w.flush();
                 }
             }
         }
@@ -99,7 +103,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     try w.flush();
 
     const result = report.submitIssue(allocator, repo, report_type, title, body) catch {
-        try printFallback(w, title, body, report_type);
+        try w.writeAll("Unexpected error while preparing the manual fallback.\n");
         try w.flush();
         return;
     };
@@ -110,15 +114,27 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
             try w.print("Created: {s}\n", .{url});
             try w.flush();
         },
-        .no_auth => {
-            try printFallback(w, title, body, report_type);
+        .manual => |manual| {
+            defer manual.deinit(allocator);
+            try printFallback(w, repo, title, body, report_type, manual);
             try w.flush();
         },
     }
 }
 
-fn printFallback(w: anytype, title: []const u8, body: []const u8, report_type: cli.ReportType) !void {
+fn printFallback(
+    w: anytype,
+    repo: cli.ReportRepo,
+    title: []const u8,
+    body: []const u8,
+    report_type: cli.ReportType,
+    manual: report.ManualSubmission,
+) !void {
     try w.writeAll("\nCould not submit automatically. Copy the issue content below:\n\n");
+    try w.print("Reason: {s}\n", .{manual.reason});
+    try w.print("Hint: {s}\n", .{manual.hint});
+    try w.print("Repository: {s}\n", .{repo.toGithubRepo()});
+    try w.print("Open manually: {s}\n\n", .{manual.manual_url});
     try w.writeAll("──────────────────────────\n");
     try w.print("Title: {s}\n", .{title});
     try w.print("Labels: ", .{});
@@ -168,7 +184,7 @@ fn promptType(w: anytype) !?cli.ReportType {
 }
 
 fn promptMessage(allocator: std.mem.Allocator, w: anytype) !?[]const u8 {
-    try w.writeAll("\nDescription: ");
+    try w.writeAll("\nSummary: ");
     try w.flush();
 
     const line = readLine() orelse return null;
@@ -194,13 +210,15 @@ fn readLine() ?[]const u8 {
 fn openEditor(allocator: std.mem.Allocator, content: []const u8) ?[]const u8 {
     const editor = std.process.getEnvVarOwned(allocator, "EDITOR") catch {
         // Fallback to vi
-        return openEditorWith(allocator, "vi", content);
+        return openEditorWithCommand(allocator, "vi", content);
     };
     defer allocator.free(editor);
-    return openEditorWith(allocator, editor, content);
+    const trimmed = std.mem.trim(u8, editor, " \r\n\t");
+    if (trimmed.len == 0) return openEditorWithCommand(allocator, "vi", content);
+    return openEditorWithCommand(allocator, trimmed, content);
 }
 
-fn openEditorWith(allocator: std.mem.Allocator, editor: []const u8, content: []const u8) ?[]const u8 {
+fn openEditorWithCommand(allocator: std.mem.Allocator, editor: []const u8, content: []const u8) ?[]const u8 {
     // Write content to a temp file
     const tmp_path = "/tmp/nullhub-report.md";
     const file = std.fs.createFileAbsolute(tmp_path, .{}) catch return null;
@@ -211,12 +229,22 @@ fn openEditorWith(allocator: std.mem.Allocator, editor: []const u8, content: []c
     file.close();
     defer std.fs.deleteFileAbsolute(tmp_path) catch {};
 
-    // Run editor
-    var child = std.process.Child.init(&.{ editor, tmp_path }, allocator);
+    const shell = std.process.getEnvVarOwned(allocator, "SHELL") catch allocator.dupe(u8, "/bin/sh") catch return null;
+    defer allocator.free(shell);
+
+    const command = std.fmt.allocPrint(allocator, "{s} '{s}'", .{ editor, tmp_path }) catch return null;
+    defer allocator.free(command);
+
+    // Run editor through the user's shell so `$EDITOR` can include flags.
+    var child = std.process.Child.init(&.{ shell, "-lc", command }, allocator);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    _ = child.spawnAndWait() catch return null;
+    const term = child.spawnAndWait() catch return null;
+    switch (term) {
+        .Exited => |code| if (code != 0) return null,
+        else => return null,
+    }
 
     // Read back
     const edited_file = std.fs.openFileAbsolute(tmp_path, .{}) catch return null;

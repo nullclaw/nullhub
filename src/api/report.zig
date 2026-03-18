@@ -6,18 +6,22 @@ const report = @import("../report.zig");
 pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.ApiResponse {
     const parsed = parseRequest(allocator, body) orelse
         return helpers.badRequest("{\"status\":\"error\",\"error\":\"invalid request: repo, type, and message are required\"}");
+    defer parsed.deinit(allocator);
 
-    const info = report.collectSystemInfo(allocator) catch report.SystemInfo{
+    var info = report.collectSystemInfo(allocator) catch report.SystemInfo{
         .version = @import("../version.zig").string,
         .platform_key = @import("../core/platform.zig").detect().toString(),
         .os_version = "unknown",
         .components = &.{},
     };
+    defer info.deinit(allocator);
 
     const title = report.buildTitle(allocator, parsed.report_type, parsed.message) catch
         return helpers.serverError();
+    defer allocator.free(title);
     const markdown = report.buildBody(allocator, parsed.report_type, parsed.message, info) catch
         return helpers.serverError();
+    defer allocator.free(markdown);
 
     // Build JSON response
     var buf = std.array_list.Managed(u8).init(allocator);
@@ -45,27 +49,32 @@ pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.Api
 pub fn handleSubmit(allocator: std.mem.Allocator, body: []const u8) helpers.ApiResponse {
     const parsed = parseRequest(allocator, body) orelse
         return helpers.badRequest("{\"status\":\"error\",\"error\":\"invalid request: repo, type, and message are required\"}");
+    defer parsed.deinit(allocator);
 
-    const info = report.collectSystemInfo(allocator) catch report.SystemInfo{
+    var info = report.collectSystemInfo(allocator) catch report.SystemInfo{
         .version = @import("../version.zig").string,
         .platform_key = @import("../core/platform.zig").detect().toString(),
         .os_version = "unknown",
         .components = &.{},
     };
+    defer info.deinit(allocator);
 
     const title = report.buildTitle(allocator, parsed.report_type, parsed.message) catch
         return helpers.serverError();
+    defer allocator.free(title);
 
     // Use provided markdown (edited by user) or generate
     const markdown = parsed.markdown orelse
         (report.buildBody(allocator, parsed.report_type, parsed.message, info) catch
         return helpers.serverError());
+    defer if (parsed.markdown == null) allocator.free(markdown);
 
     const result = report.submitIssue(allocator, parsed.repo, parsed.report_type, title, markdown) catch
-        return buildNoAuthResponse(allocator, title, markdown, parsed.report_type, parsed.repo);
+        return helpers.serverError();
 
     switch (result) {
         .success => |url| {
+            defer allocator.free(url);
             var buf = std.array_list.Managed(u8).init(allocator);
             const w = buf.writer();
             w.writeAll("{\"status\":\"created\",\"url\":\"") catch return helpers.serverError();
@@ -73,7 +82,10 @@ pub fn handleSubmit(allocator: std.mem.Allocator, body: []const u8) helpers.ApiR
             w.writeAll("\"}") catch return helpers.serverError();
             return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
         },
-        .no_auth => return buildNoAuthResponse(allocator, title, markdown, parsed.report_type, parsed.repo),
+        .manual => |manual| {
+            defer manual.deinit(allocator);
+            return buildManualResponse(allocator, title, markdown, parsed.report_type, parsed.repo, manual);
+        },
     }
 }
 
@@ -84,6 +96,11 @@ const ParsedRequest = struct {
     report_type: cli.ReportType,
     message: []const u8,
     markdown: ?[]const u8 = null,
+
+    fn deinit(self: ParsedRequest, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        if (self.markdown) |markdown| allocator.free(markdown);
+    }
 };
 
 fn parseRequest(allocator: std.mem.Allocator, body: []const u8) ?ParsedRequest {
@@ -98,35 +115,52 @@ fn parseRequest(allocator: std.mem.Allocator, body: []const u8) ?ParsedRequest {
         body,
         .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
     ) catch return null;
-    // Don't deinit — we'll borrow the strings
+    defer parsed.deinit();
 
     const repo_str = parsed.value.repo orelse return null;
     const type_str = parsed.value.type orelse return null;
-    const message = parsed.value.message orelse return null;
-    if (message.len == 0) return null;
+    const message_raw = parsed.value.message orelse return null;
+    if (message_raw.len == 0) return null;
 
     const repo = cli.ReportRepo.fromStr(repo_str) orelse return null;
     const report_type = cli.ReportType.fromStr(type_str) orelse return null;
+
+    const message = allocator.dupe(u8, message_raw) catch return null;
+    errdefer allocator.free(message);
+
+    const markdown = if (parsed.value.markdown) |value|
+        allocator.dupe(u8, value) catch return null
+    else
+        null;
+    errdefer if (markdown) |value| allocator.free(value);
 
     return .{
         .repo = repo,
         .report_type = report_type,
         .message = message,
-        .markdown = parsed.value.markdown,
+        .markdown = markdown,
     };
 }
 
-fn buildNoAuthResponse(
+fn buildManualResponse(
     allocator: std.mem.Allocator,
     title: []const u8,
     markdown: []const u8,
     report_type: cli.ReportType,
     repo: cli.ReportRepo,
+    manual: report.ManualSubmission,
 ) helpers.ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
     const w = buf.writer();
 
-    w.writeAll("{\"status\":\"no_auth\",\"title\":\"") catch return helpers.serverError();
+    const status = switch (manual.kind) {
+        .no_auth => "no_auth",
+        .submit_failed => "failed",
+    };
+
+    w.writeAll("{\"status\":\"") catch return helpers.serverError();
+    w.writeAll(status) catch return helpers.serverError();
+    w.writeAll("\",\"title\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, title) catch return helpers.serverError();
     w.writeAll("\",\"markdown\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, markdown) catch return helpers.serverError();
@@ -140,7 +174,13 @@ fn buildNoAuthResponse(
     }
     w.writeAll("],\"repo\":\"") catch return helpers.serverError();
     w.writeAll(repo.toGithubRepo()) catch return helpers.serverError();
-    w.writeAll("\",\"hint\":\"Install and authenticate gh CLI to submit automatically: https://cli.github.com/\"}") catch return helpers.serverError();
+    w.writeAll("\",\"manual_url\":\"") catch return helpers.serverError();
+    helpers.appendEscaped(&buf, manual.manual_url) catch return helpers.serverError();
+    w.writeAll("\",\"error\":\"") catch return helpers.serverError();
+    helpers.appendEscaped(&buf, manual.reason) catch return helpers.serverError();
+    w.writeAll("\",\"hint\":\"") catch return helpers.serverError();
+    helpers.appendEscaped(&buf, manual.hint) catch return helpers.serverError();
+    w.writeAll("\"}") catch return helpers.serverError();
 
     return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
 }

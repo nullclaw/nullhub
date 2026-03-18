@@ -215,7 +215,7 @@ export const api = {
     }),
 
   submitReport: (data: { repo: string; type: string; message: string; markdown?: string }) =>
-    request<{ status: string; url?: string; title?: string; markdown?: string; labels?: string[]; repo?: string; hint?: string }>('/report', {
+    request<{ status: string; url?: string; title?: string; markdown?: string; labels?: string[]; repo?: string; hint?: string; error?: string; manual_url?: string }>('/report', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
