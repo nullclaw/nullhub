@@ -5,7 +5,7 @@ const report = @import("../report.zig");
 
 pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.ApiResponse {
     const parsed = parseRequest(allocator, body) orelse
-        return helpers.badRequest("{\"error\":\"invalid request: repo, type, and message are required\"}");
+        return helpers.badRequest("{\"status\":\"error\",\"error\":\"invalid request: repo, type, and message are required\"}");
 
     const info = report.collectSystemInfo(allocator) catch report.SystemInfo{
         .version = @import("../version.zig").string,
@@ -44,7 +44,7 @@ pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.Api
 
 pub fn handleSubmit(allocator: std.mem.Allocator, body: []const u8) helpers.ApiResponse {
     const parsed = parseRequest(allocator, body) orelse
-        return helpers.badRequest("{\"error\":\"invalid request: repo, type, and message are required\"}");
+        return helpers.badRequest("{\"status\":\"error\",\"error\":\"invalid request: repo, type, and message are required\"}");
 
     const info = report.collectSystemInfo(allocator) catch report.SystemInfo{
         .version = @import("../version.zig").string,
@@ -209,4 +209,25 @@ test "handlePreview bad request" {
     const allocator = std.testing.allocator;
     const resp = handlePreview(allocator, "{}");
     try std.testing.expectEqualStrings("400 Bad Request", resp.status);
+}
+
+test "parseRequest invalid type returns null" {
+    const allocator = std.testing.allocator;
+    const json = "{\"repo\":\"nullhub\",\"type\":\"invalid\",\"message\":\"test\"}";
+    try std.testing.expect(parseRequest(allocator, json) == null);
+}
+
+test "handleSubmit bad request" {
+    const allocator = std.testing.allocator;
+    const resp = handleSubmit(allocator, "{}");
+    try std.testing.expectEqualStrings("400 Bad Request", resp.status);
+}
+
+test "handlePreview returns correct repo" {
+    const allocator = std.testing.allocator;
+    const json = "{\"repo\":\"nullboiler\",\"type\":\"feature\",\"message\":\"Add X\"}";
+    const resp = handlePreview(allocator, json);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    // Verify it contains the correct GitHub repo (NullBoiler with capital letters)
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "nullclaw/NullBoiler") != null);
 }

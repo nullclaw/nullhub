@@ -24,10 +24,13 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     // Resolve options (interactive or from flags)
     const repo = opts.repo orelse try promptRepo(w) orelse return error.Cancelled;
     const report_type = opts.report_type orelse try promptType(w) orelse return error.Cancelled;
+    var message_owned = false;
     const message = opts.message orelse blk: {
         const m = try promptMessage(allocator, w) orelse return error.Cancelled;
+        message_owned = true;
         break :blk m;
     };
+    defer if (message_owned) allocator.free(message);
 
     // Collect system info
     var info = report.collectSystemInfo(allocator) catch report.SystemInfo{
@@ -65,10 +68,13 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     }
 
     if (!opts.yes) {
-        // In non-TTY mode with all flags, auto-confirm
         if (!is_tty) {
-            // All flags provided, proceed without prompt
-        } else {
+            try w.writeAll("Use --yes to confirm submission in non-interactive mode.\n");
+            try w.flush();
+            return error.Cancelled;
+        }
+
+        {
             try w.writeAll("Submit? [Y/n/e] ");
             try w.flush();
 
@@ -100,6 +106,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
 
     switch (result) {
         .success => |url| {
+            defer allocator.free(url);
             try w.print("Created: {s}\n", .{url});
             try w.flush();
         },

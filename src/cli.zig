@@ -646,7 +646,18 @@ test "ReportRepo.fromStr invalid returns null" {
 
 test "ReportRepo.toGithubRepo" {
     try std.testing.expectEqualStrings("nullclaw/nullhub", ReportRepo.nullhub.toGithubRepo());
+    try std.testing.expectEqualStrings("nullclaw/nullclaw", ReportRepo.nullclaw.toGithubRepo());
     try std.testing.expectEqualStrings("nullclaw/NullBoiler", ReportRepo.nullboiler.toGithubRepo());
+    try std.testing.expectEqualStrings("nullclaw/nulltickets", ReportRepo.nulltickets.toGithubRepo());
+    try std.testing.expectEqualStrings("nullclaw/nullwatch", ReportRepo.nullwatch.toGithubRepo());
+}
+
+test "ReportRepo.displayName all variants" {
+    try std.testing.expectEqualStrings("nullhub", ReportRepo.nullhub.displayName());
+    try std.testing.expectEqualStrings("nullclaw", ReportRepo.nullclaw.displayName());
+    try std.testing.expectEqualStrings("nullboiler", ReportRepo.nullboiler.displayName());
+    try std.testing.expectEqualStrings("nulltickets", ReportRepo.nulltickets.displayName());
+    try std.testing.expectEqualStrings("nullwatch", ReportRepo.nullwatch.displayName());
 }
 
 test "ReportType.fromStr valid" {
@@ -674,7 +685,16 @@ test "ReportType.toLabels" {
 
 test "ReportType.issuePrefix" {
     try std.testing.expectEqualStrings("[Bug]", ReportType.bug_crash.issuePrefix());
+    try std.testing.expectEqualStrings("[Bug]", ReportType.bug_behavior.issuePrefix());
+    try std.testing.expectEqualStrings("[Bug]", ReportType.regression.issuePrefix());
     try std.testing.expectEqualStrings("[Feature]", ReportType.feature.issuePrefix());
+}
+
+test "ReportType.displayName all variants" {
+    try std.testing.expectEqualStrings("Crash (process exits or hangs)", ReportType.bug_crash.displayName());
+    try std.testing.expectEqualStrings("Behavior bug (incorrect output/state)", ReportType.bug_behavior.displayName());
+    try std.testing.expectEqualStrings("Regression (worked before, now fails)", ReportType.regression.displayName());
+    try std.testing.expectEqualStrings("Feature request", ReportType.feature.displayName());
 }
 
 test "ReportOptions defaults" {

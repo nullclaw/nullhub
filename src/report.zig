@@ -96,10 +96,16 @@ fn collectInstalledComponents(allocator: std.mem.Allocator) ![]const ComponentIn
         var inst_it = comp_entry.value_ptr.iterator();
         if (inst_it.next()) |inst_entry| {
             const entry = inst_entry.value_ptr.*;
-            list.append(.{
-                .name = allocator.dupe(u8, comp_entry.key_ptr.*) catch continue,
-                .comp_version = allocator.dupe(u8, entry.version) catch continue,
-            }) catch continue;
+            const name = allocator.dupe(u8, comp_entry.key_ptr.*) catch continue;
+            const comp_ver = allocator.dupe(u8, entry.version) catch {
+                allocator.free(name);
+                continue;
+            };
+            list.append(.{ .name = name, .comp_version = comp_ver }) catch {
+                allocator.free(name);
+                allocator.free(comp_ver);
+                continue;
+            };
         }
     }
 
@@ -396,9 +402,9 @@ fn tryCurlCreate(
         return null;
     };
     defer allocator.free(result.stdout);
+    defer parsed.deinit();
 
     const issue_url = allocator.dupe(u8, parsed.value.html_url) catch return null;
-    parsed.deinit();
     return issue_url;
 }
 
@@ -410,6 +416,9 @@ fn writeJsonEscaped(writer: anytype, s: []const u8) !void {
             '\n' => try writer.writeAll("\\n"),
             '\r' => try writer.writeAll("\\r"),
             '\t' => try writer.writeAll("\\t"),
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
+                try writer.print("\\u{x:0>4}", .{c});
+            },
             else => try writer.writeByte(c),
         }
     }
@@ -513,6 +522,14 @@ test "writeJsonEscaped" {
     const allocator = std.testing.allocator;
     var buf = std.array_list.Managed(u8).init(allocator);
     defer buf.deinit();
-    try writeJsonEscaped(buf.writer(), "hello \"world\"\nnewline");
-    try std.testing.expectEqualStrings("hello \\\"world\\\"\\nnewline", buf.items);
+    try writeJsonEscaped(buf.writer(), "hello \"world\"\nnewline\\back\r\ttab");
+    try std.testing.expectEqualStrings("hello \\\"world\\\"\\nnewline\\\\back\\r\\ttab", buf.items);
+}
+
+test "writeJsonEscaped control characters" {
+    const allocator = std.testing.allocator;
+    var buf = std.array_list.Managed(u8).init(allocator);
+    defer buf.deinit();
+    try writeJsonEscaped(buf.writer(), &.{ 0x00, 0x0B, 0x1F });
+    try std.testing.expectEqualStrings("\\u0000\\u000b\\u001f", buf.items);
 }
