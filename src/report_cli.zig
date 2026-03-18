@@ -30,12 +30,13 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     };
 
     // Collect system info
-    const info = report.collectSystemInfo(allocator) catch report.SystemInfo{
+    var info = report.collectSystemInfo(allocator) catch report.SystemInfo{
         .version = @import("version.zig").string,
         .platform_key = @import("core/platform.zig").detect().toString(),
         .os_version = "unknown",
         .components = &.{},
     };
+    defer info.deinit(allocator);
 
     // Generate title and body
     const title = try report.buildTitle(allocator, report_type, message);

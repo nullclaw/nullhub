@@ -12,6 +12,21 @@ pub const SystemInfo = struct {
     platform_key: []const u8,
     os_version: []const u8,
     components: []const ComponentInfo,
+    /// Whether os_version and components were heap-allocated and need freeing.
+    owned: bool = false,
+
+    pub fn deinit(self: *SystemInfo, allocator: std.mem.Allocator) void {
+        if (!self.owned) return;
+        for (self.components) |comp| {
+            allocator.free(comp.name);
+            allocator.free(comp.comp_version);
+        }
+        if (self.components.len > 0) allocator.free(self.components);
+        // os_version is either "unknown" (static) or heap-allocated from uname
+        if (!std.mem.eql(u8, self.os_version, "unknown")) {
+            allocator.free(self.os_version);
+        }
+    }
 };
 
 pub const ComponentInfo = struct {
@@ -28,6 +43,7 @@ pub fn collectSystemInfo(allocator: std.mem.Allocator) !SystemInfo {
         .platform_key = platform.detect().toString(),
         .os_version = os_version,
         .components = components,
+        .owned = true,
     };
 }
 
@@ -51,13 +67,14 @@ fn getOsVersion(allocator: std.mem.Allocator) ![]const u8 {
         },
     }
 
-    // Trim trailing newline
-    var out = result.stdout;
+    // Trim trailing newline and dupe so the free size matches the alloc size
+    var out: []const u8 = result.stdout;
     while (out.len > 0 and (out[out.len - 1] == '\n' or out[out.len - 1] == '\r')) {
         out = out[0 .. out.len - 1];
     }
-    // Return stdout ownership to caller (trimmed via slice)
-    return out;
+    const trimmed = try allocator.dupe(u8, out);
+    allocator.free(result.stdout);
+    return trimmed;
 }
 
 fn collectInstalledComponents(allocator: std.mem.Allocator) ![]const ComponentInfo {
