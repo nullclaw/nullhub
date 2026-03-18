@@ -18,7 +18,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
         if (opts.repo == null or opts.report_type == null or opts.message == null) {
             try w.writeAll("Error: --repo, --type, and --message are required in non-interactive mode.\n");
             try w.flush();
-            return error.Cancelled;
+            return error.InvalidArguments;
         }
     }
 
@@ -73,7 +73,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
         if (!is_tty) {
             try w.writeAll("Use --yes to confirm submission in non-interactive mode.\n");
             try w.flush();
-            return error.Cancelled;
+            return error.InvalidArguments;
         }
 
         {

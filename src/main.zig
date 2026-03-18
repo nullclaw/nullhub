@@ -130,7 +130,11 @@ pub fn main() !void {
             const any_err: anyerror = err;
             switch (any_err) {
                 error.Cancelled => {},
-                else => std.debug.print("Report failed: {s}\n", .{@errorName(any_err)}),
+                error.InvalidArguments => std.process.exit(1),
+                else => {
+                    std.debug.print("Report failed: {s}\n", .{@errorName(any_err)});
+                    std.process.exit(1);
+                },
             }
         },
         .help => cli.printUsage(),

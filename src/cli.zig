@@ -570,11 +570,11 @@ test "ReportRepo.toGithubRepo" {
 }
 
 test "ReportRepo.displayName all variants" {
-    try std.testing.expectEqualStrings("nullhub", ReportRepo.nullhub.displayName());
-    try std.testing.expectEqualStrings("nullclaw", ReportRepo.nullclaw.displayName());
-    try std.testing.expectEqualStrings("nullboiler", ReportRepo.nullboiler.displayName());
-    try std.testing.expectEqualStrings("nulltickets", ReportRepo.nulltickets.displayName());
-    try std.testing.expectEqualStrings("nullwatch", ReportRepo.nullwatch.displayName());
+    try std.testing.expectEqualStrings("NullHub", ReportRepo.nullhub.displayName());
+    try std.testing.expectEqualStrings("NullClaw", ReportRepo.nullclaw.displayName());
+    try std.testing.expectEqualStrings("NullBoiler", ReportRepo.nullboiler.displayName());
+    try std.testing.expectEqualStrings("NullTickets", ReportRepo.nulltickets.displayName());
+    try std.testing.expectEqualStrings("NullWatch", ReportRepo.nullwatch.displayName());
 }
 
 test "ReportType.fromStr valid" {
@@ -608,9 +608,9 @@ test "ReportType.issuePrefix" {
 }
 
 test "ReportType.displayName all variants" {
-    try std.testing.expectEqualStrings("Crash (process exits or hangs)", ReportType.bug_crash.displayName());
-    try std.testing.expectEqualStrings("Behavior bug (incorrect output/state)", ReportType.bug_behavior.displayName());
-    try std.testing.expectEqualStrings("Regression (worked before, now fails)", ReportType.regression.displayName());
+    try std.testing.expectEqualStrings("Bug: crash (process exits or hangs)", ReportType.bug_crash.displayName());
+    try std.testing.expectEqualStrings("Bug: behavior (incorrect output/state)", ReportType.bug_behavior.displayName());
+    try std.testing.expectEqualStrings("Bug: regression (worked before, now fails)", ReportType.regression.displayName());
     try std.testing.expectEqualStrings("Feature request", ReportType.feature.displayName());
 }
 
