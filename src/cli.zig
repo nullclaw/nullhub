@@ -80,6 +80,101 @@ pub const AddSourceOptions = struct {
     repo: []const u8,
 };
 
+pub const ReportRepo = enum {
+    nullhub,
+    nullclaw,
+    nullboiler,
+    nulltickets,
+    nullwatch,
+
+    pub fn fromStr(s: []const u8) ?ReportRepo {
+        const map = .{
+            .{ "nullhub", ReportRepo.nullhub },
+            .{ "nullclaw", ReportRepo.nullclaw },
+            .{ "nullboiler", ReportRepo.nullboiler },
+            .{ "nulltickets", ReportRepo.nulltickets },
+            .{ "nullwatch", ReportRepo.nullwatch },
+        };
+        inline for (map) |pair| {
+            if (std.mem.eql(u8, s, pair[0])) return pair[1];
+        }
+        return null;
+    }
+
+    pub fn toGithubRepo(self: ReportRepo) []const u8 {
+        return switch (self) {
+            .nullhub => "nullclaw/nullhub",
+            .nullclaw => "nullclaw/nullclaw",
+            .nullboiler => "nullclaw/NullBoiler",
+            .nulltickets => "nullclaw/nulltickets",
+            .nullwatch => "nullclaw/nullwatch",
+        };
+    }
+
+    pub fn displayName(self: ReportRepo) []const u8 {
+        return switch (self) {
+            .nullhub => "nullhub",
+            .nullclaw => "nullclaw",
+            .nullboiler => "nullboiler",
+            .nulltickets => "nulltickets",
+            .nullwatch => "nullwatch",
+        };
+    }
+};
+
+pub const ReportType = enum {
+    bug_crash,
+    bug_behavior,
+    regression,
+    feature,
+
+    pub fn fromStr(s: []const u8) ?ReportType {
+        const map = .{
+            .{ "bug:crash", ReportType.bug_crash },
+            .{ "bug:behavior", ReportType.bug_behavior },
+            .{ "regression", ReportType.regression },
+            .{ "feature", ReportType.feature },
+        };
+        inline for (map) |pair| {
+            if (std.mem.eql(u8, s, pair[0])) return pair[1];
+        }
+        return null;
+    }
+
+    pub fn toLabels(self: ReportType) []const []const u8 {
+        return switch (self) {
+            .bug_crash => &.{ "bug", "bug:crash" },
+            .bug_behavior => &.{ "bug", "bug:behavior" },
+            .regression => &.{ "bug", "regression" },
+            .feature => &.{ "enhancement" },
+        };
+    }
+
+    pub fn displayName(self: ReportType) []const u8 {
+        return switch (self) {
+            .bug_crash => "Crash (process exits or hangs)",
+            .bug_behavior => "Behavior bug (incorrect output/state)",
+            .regression => "Regression (worked before, now fails)",
+            .feature => "Feature request",
+        };
+    }
+
+    pub fn issuePrefix(self: ReportType) []const u8 {
+        return switch (self) {
+            .bug_crash, .bug_behavior, .regression => "[Bug]",
+            .feature => "[Feature]",
+        };
+    }
+};
+
+pub const ReportOptions = struct {
+    repo: ?ReportRepo = null,
+    report_type: ?ReportType = null,
+    message: ?[]const u8 = null,
+    yes: bool = false,
+    dry_run: bool = false,
+};
+
 // ─── Command Union ───────────────────────────────────────────────────────────
 
 pub const Command = union(enum) {
@@ -103,6 +198,7 @@ pub const Command = union(enum) {
     service: ServiceCommand,
     uninstall: UninstallOptions,
     add_source: AddSourceOptions,
+    report: ReportOptions,
     help,
 };
 
@@ -181,6 +277,9 @@ pub fn parse(args: *std.process.ArgIterator) Command {
     }
     if (std.mem.eql(u8, cmd, "add-source")) {
         return parseAddSource(args);
+    }
+    if (std.mem.eql(u8, cmd, "report")) {
+        return parseReport(args);
     }
     if (std.mem.eql(u8, cmd, "help") or std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
         return .help;
@@ -363,6 +462,30 @@ fn parseAddSource(args: *std.process.ArgIterator) Command {
     return .{ .add_source = .{ .repo = repo } };
 }
 
+fn parseReport(args: *std.process.ArgIterator) Command {
+    var opts = ReportOptions{};
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--repo")) {
+            if (args.next()) |val| {
+                opts.repo = ReportRepo.fromStr(val);
+            }
+        } else if (std.mem.eql(u8, arg, "--type")) {
+            if (args.next()) |val| {
+                opts.report_type = ReportType.fromStr(val);
+            }
+        } else if (std.mem.eql(u8, arg, "--message")) {
+            if (args.next()) |val| {
+                opts.message = val;
+            }
+        } else if (std.mem.eql(u8, arg, "--yes")) {
+            opts.yes = true;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            opts.dry_run = true;
+        }
+    }
+    return .{ .report = opts };
+}
+
 // ─── Usage ───────────────────────────────────────────────────────────────────
 
 pub fn printUsage() void {
@@ -391,6 +514,7 @@ pub fn printUsage() void {
         \\  uninstall <component/name> Remove an instance
         \\  service <install|uninstall|status>  Manage OS service
         \\  add-source <repo-url>     Add custom component source
+        \\  report                    Report a bug or feature request
         \\  version, -v, --version    Show version
         \\
         \\API examples:
@@ -505,4 +629,59 @@ test "ApiOptions defaults" {
     try std.testing.expect(opts.token == null);
     try std.testing.expectEqualStrings("application/json", opts.content_type);
     try std.testing.expect(!opts.pretty);
+}
+
+test "ReportRepo.fromStr valid" {
+    try std.testing.expect(ReportRepo.fromStr("nullhub") == .nullhub);
+    try std.testing.expect(ReportRepo.fromStr("nullclaw") == .nullclaw);
+    try std.testing.expect(ReportRepo.fromStr("nullboiler") == .nullboiler);
+    try std.testing.expect(ReportRepo.fromStr("nulltickets") == .nulltickets);
+    try std.testing.expect(ReportRepo.fromStr("nullwatch") == .nullwatch);
+}
+
+test "ReportRepo.fromStr invalid returns null" {
+    try std.testing.expect(ReportRepo.fromStr("unknown") == null);
+    try std.testing.expect(ReportRepo.fromStr("") == null);
+}
+
+test "ReportRepo.toGithubRepo" {
+    try std.testing.expectEqualStrings("nullclaw/nullhub", ReportRepo.nullhub.toGithubRepo());
+    try std.testing.expectEqualStrings("nullclaw/NullBoiler", ReportRepo.nullboiler.toGithubRepo());
+}
+
+test "ReportType.fromStr valid" {
+    try std.testing.expect(ReportType.fromStr("bug:crash") == .bug_crash);
+    try std.testing.expect(ReportType.fromStr("bug:behavior") == .bug_behavior);
+    try std.testing.expect(ReportType.fromStr("regression") == .regression);
+    try std.testing.expect(ReportType.fromStr("feature") == .feature);
+}
+
+test "ReportType.fromStr invalid returns null" {
+    try std.testing.expect(ReportType.fromStr("unknown") == null);
+    try std.testing.expect(ReportType.fromStr("") == null);
+}
+
+test "ReportType.toLabels" {
+    const crash_labels = ReportType.bug_crash.toLabels();
+    try std.testing.expectEqual(@as(usize, 2), crash_labels.len);
+    try std.testing.expectEqualStrings("bug", crash_labels[0]);
+    try std.testing.expectEqualStrings("bug:crash", crash_labels[1]);
+
+    const feature_labels = ReportType.feature.toLabels();
+    try std.testing.expectEqual(@as(usize, 1), feature_labels.len);
+    try std.testing.expectEqualStrings("enhancement", feature_labels[0]);
+}
+
+test "ReportType.issuePrefix" {
+    try std.testing.expectEqualStrings("[Bug]", ReportType.bug_crash.issuePrefix());
+    try std.testing.expectEqualStrings("[Feature]", ReportType.feature.issuePrefix());
+}
+
+test "ReportOptions defaults" {
+    const opts = ReportOptions{};
+    try std.testing.expect(opts.repo == null);
+    try std.testing.expect(opts.report_type == null);
+    try std.testing.expect(opts.message == null);
+    try std.testing.expect(!opts.yes);
+    try std.testing.expect(!opts.dry_run);
 }
