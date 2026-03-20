@@ -17,6 +17,7 @@ RUN apk add --no-cache zig musl-dev
 WORKDIR /app
 COPY build.zig build.zig.zon ./
 COPY src/ src/
+COPY --from=ui-builder /ui/build ui/build
 
 ARG TARGETARCH
 RUN --mount=type=cache,target=/root/.cache/zig \
@@ -35,7 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/zig \
       arm64) zig_target="aarch64-linux-musl" ;; \
       *) echo "Unsupported TARGETARCH: ${arch}" >&2; exit 1 ;; \
     esac; \
-    zig build -Dtarget="${zig_target}" -Doptimize=ReleaseSmall -Dembed-ui=false
+    zig build -Dtarget="${zig_target}" -Doptimize=ReleaseSmall -Dbuild-ui=false
 
 # -- Stage 3: Runtime Base ----------------------------------------------------
 FROM alpine:3.23 AS release-base
@@ -44,10 +45,9 @@ LABEL org.opencontainers.image.source=https://github.com/nullclaw/nullhub
 
 RUN apk add --no-cache ca-certificates curl tzdata
 
-RUN mkdir -p /opt/nullhub/ui /nullhub-data && chown -R 65534:65534 /nullhub-data
+RUN mkdir -p /opt/nullhub /nullhub-data && chown -R 65534:65534 /nullhub-data
 
 COPY --from=builder /app/zig-out/bin/nullhub /usr/local/bin/nullhub
-COPY --from=ui-builder /ui/build /opt/nullhub/ui/build
 
 ENV HOME=/nullhub-data
 WORKDIR /opt/nullhub
