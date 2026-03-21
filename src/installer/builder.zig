@@ -1,5 +1,6 @@
 const std = @import("std");
 const manifest = @import("../core/manifest.zig");
+const paths_mod = @import("../core/paths.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ pub fn buildFromSource(
     dest_path: []const u8,
 ) !void {
     // Create a temporary directory for the clone.
-    const tmp_dir = try std.fmt.allocPrint(allocator, "/tmp/nullhub-build-{d}", .{std.time.milliTimestamp()});
+    const tmp_dir = try paths_mod.uniqueTempPathAlloc(allocator, "nullhub-build", "");
     defer allocator.free(tmp_dir);
     defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
 

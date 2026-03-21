@@ -11,6 +11,7 @@ const access = root.access;
 const mdns_mod = root.mdns;
 const routes_cli = @import("routes_cli.zig");
 const status_cli = root.status_cli;
+const report_cli = @import("report_cli.zig");
 const version = root.version;
 
 pub fn main() !void {
@@ -125,6 +126,17 @@ pub fn main() !void {
             std.debug.print(" (not yet implemented)\n", .{});
         },
         .add_source => |opts| std.debug.print("add-source {s} (not yet implemented)\n", .{opts.repo}),
+        .report => |opts| report_cli.run(allocator, opts) catch |err| {
+            const any_err: anyerror = err;
+            switch (any_err) {
+                error.Cancelled => {},
+                error.InvalidArguments => std.process.exit(1),
+                else => {
+                    std.debug.print("Report failed: {s}\n", .{@errorName(any_err)});
+                    std.process.exit(1);
+                },
+            }
+        },
         .help => cli.printUsage(),
     }
 }

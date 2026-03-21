@@ -343,8 +343,7 @@ fn probeChannel(
     config_json: []const u8,
 ) ProbeResult {
     // Create temp dir for minimal config
-    const timestamp = @abs(std.time.milliTimestamp());
-    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-channel-validate-{d}", .{timestamp}) catch
+    const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-channel-validate", "") catch
         return .{ .live_ok = false, .reason = "tmp_dir_failed" };
     defer {
         std.fs.deleteTreeAbsolute(tmp_dir) catch {};

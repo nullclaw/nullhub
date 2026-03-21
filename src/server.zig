@@ -18,6 +18,7 @@ const wizard_api = @import("api/wizard.zig");
 const providers_api = @import("api/providers.zig");
 const channels_api = @import("api/channels.zig");
 const usage_api = @import("api/usage.zig");
+const report_api = @import("api/report.zig");
 const orchestration_api = @import("api/orchestration.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
@@ -515,6 +516,10 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/ui-modules/available")) {
                 return self.handleAvailableUiModules(allocator);
             }
+            if (std.mem.eql(u8, target, "/api/report/meta")) {
+                const resp = report_api.handleMeta(allocator);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
         }
 
         // UI module install/uninstall
@@ -548,6 +553,14 @@ pub const Server = struct {
                         .body = "{\"error\":\"internal server error\"}",
                     };
                 }
+            }
+            if (std.mem.eql(u8, target, "/api/report")) {
+                const resp = report_api.handleSubmit(allocator, body);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+            }
+            if (std.mem.eql(u8, target, "/api/report/preview")) {
+                const resp = report_api.handlePreview(allocator, body);
+                return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
         }
 
