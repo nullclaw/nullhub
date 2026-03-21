@@ -144,6 +144,59 @@ fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
     };
 }
 
+fn getNormalizedEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ?[]u8 {
+    const value = std.process.getEnvVarOwned(allocator, key) catch return null;
+    errdefer allocator.free(value);
+
+    const trimmed = std.mem.trim(u8, value, " \r\n\t");
+    if (trimmed.len == 0) {
+        allocator.free(value);
+        return null;
+    }
+    if (trimmed.ptr == value.ptr and trimmed.len == value.len) {
+        return value;
+    }
+
+    const normalized = allocator.dupe(u8, trimmed) catch return null;
+    allocator.free(value);
+    return normalized;
+}
+
+pub fn getTempDirOwned(allocator: std.mem.Allocator) ![]u8 {
+    if (builtin.os.tag == .windows) {
+        const keys = [_][]const u8{ "TEMP", "TMP" };
+        for (keys) |key| {
+            if (getNormalizedEnvVarOwned(allocator, key)) |value| return value;
+        }
+
+        const home = try getHomeDirOwned(allocator);
+        defer allocator.free(home);
+        return std.fs.path.join(allocator, &.{ home, "AppData", "Local", "Temp" });
+    }
+
+    if (getNormalizedEnvVarOwned(allocator, "TMPDIR")) |value| return value;
+    return allocator.dupe(u8, "/tmp");
+}
+
+pub fn uniqueTempPathAlloc(
+    allocator: std.mem.Allocator,
+    prefix: []const u8,
+    suffix: []const u8,
+) ![]u8 {
+    const temp_dir = try getTempDirOwned(allocator);
+    defer allocator.free(temp_dir);
+
+    const leaf = try std.fmt.allocPrint(allocator, "{s}-{d}-{x}{s}", .{
+        prefix,
+        @abs(std.time.milliTimestamp()),
+        std.crypto.random.int(u64),
+        suffix,
+    });
+    defer allocator.free(leaf);
+
+    return std.fs.path.join(allocator, &.{ temp_dir, leaf });
+}
+
 /// Helper: create `{base}/{sub}` as an absolute directory tree.
 fn makeAbsSubpath(base: []const u8, sub: []const u8) !void {
     // Open the root directory (create it first if needed).
@@ -258,4 +311,22 @@ test "init without custom root reads HOME" {
     defer p.deinit(allocator);
 
     try std.testing.expectEqualStrings(expected_root, p.root);
+}
+
+test "getTempDirOwned returns absolute directory" {
+    const allocator = std.testing.allocator;
+    const path = try getTempDirOwned(allocator);
+    defer allocator.free(path);
+
+    try std.testing.expect(std.fs.path.isAbsolute(path));
+}
+
+test "uniqueTempPathAlloc uses requested prefix and suffix" {
+    const allocator = std.testing.allocator;
+    const path = try uniqueTempPathAlloc(allocator, "nullhub-paths-test", ".json");
+    defer allocator.free(path);
+
+    try std.testing.expect(std.fs.path.isAbsolute(path));
+    try std.testing.expect(std.mem.endsWith(u8, path, ".json"));
+    try std.testing.expect(std.mem.indexOf(u8, path, "nullhub-paths-test-") != null);
 }

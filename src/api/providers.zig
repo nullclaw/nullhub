@@ -261,8 +261,7 @@ fn probeProvider(
     base_url: []const u8,
 ) wizard_api.ProviderProbeResult {
     // Create temp dir for minimal config
-    const timestamp = @abs(std.time.milliTimestamp());
-    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-provider-validate-{d}", .{timestamp}) catch
+    const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-provider-validate", "") catch
         return .{ .live_ok = false, .reason = "tmp_dir_failed" };
     defer {
         std.fs.deleteTreeAbsolute(tmp_dir) catch {};

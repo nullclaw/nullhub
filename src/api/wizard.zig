@@ -622,8 +622,7 @@ pub fn handleValidateProviders(
     defer allocator.free(bin_path);
 
     // Create temp directory for probes
-    const timestamp = @abs(std.time.milliTimestamp());
-    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-wizard-validate-{d}", .{timestamp}) catch return null;
+    const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-wizard-validate", "") catch return null;
     defer {
         std.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
@@ -822,8 +821,7 @@ pub fn handleValidateChannels(
         return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
     defer allocator.free(bin_path);
 
-    const timestamp = @abs(std.time.milliTimestamp());
-    const tmp_dir = std.fmt.allocPrint(allocator, "/tmp/nullhub-wizard-validate-ch-{d}", .{timestamp}) catch return null;
+    const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-wizard-validate-ch", "") catch return null;
     defer {
         std.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
