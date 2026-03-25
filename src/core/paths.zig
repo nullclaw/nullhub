@@ -61,9 +61,12 @@ pub const Paths = struct {
         return std.fs.path.join(allocator, &.{ self.root, "manifests", filename });
     }
 
-    /// `{root}/bin/{component}-{version}`
+    /// `{root}/bin/{component}-{version}` (or `.exe` on Windows)
     pub fn binary(self: Paths, allocator: std.mem.Allocator, component: []const u8, version: []const u8) ![]const u8 {
-        const filename = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, version });
+        const filename = if (builtin.os.tag == .windows)
+            try std.fmt.allocPrint(allocator, "{s}-{s}.exe", .{ component, version })
+        else
+            try std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, version });
         defer allocator.free(filename);
         return std.fs.path.join(allocator, &.{ self.root, "bin", filename });
     }

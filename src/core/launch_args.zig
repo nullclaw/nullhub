@@ -13,6 +13,12 @@ pub fn buildLaunchArgs(
         try list.append(allocator, token);
     }
 
+    // NullClaw convenience: bare `channel` isn't a runnable long-lived mode.
+    // Expand it to `channel start` so Hub can actually supervise it.
+    if (list.items.len == 1 and std.mem.eql(u8, list.items[0], "channel")) {
+        try list.append(allocator, "start");
+    }
+
     if (verbose) {
         try list.append(allocator, "--verbose");
     }
@@ -39,4 +45,14 @@ test "buildLaunchArgs preserves tokenized launch mode when verbose disabled" {
     try std.testing.expectEqualStrings("agent", args[0]);
     try std.testing.expectEqualStrings("--foo", args[1]);
     try std.testing.expectEqualStrings("bar", args[2]);
+}
+
+test "buildLaunchArgs expands bare channel to channel start" {
+    const allocator = std.testing.allocator;
+    const args = try buildLaunchArgs(allocator, "channel", false);
+    defer allocator.free(args);
+
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    try std.testing.expectEqualStrings("channel", args[0]);
+    try std.testing.expectEqualStrings("start", args[1]);
 }
