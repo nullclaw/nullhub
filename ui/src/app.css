@@ -1,5 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+/* Fonts loaded non-blocking via <link> in app.html to prevent render-blocking.
+   CSS @import blocks rendering until the external stylesheet loads, which causes
+   a black screen on Windows when Google Fonts is slow or stalls. */
 
 :root,
 body.theme-matrix {
