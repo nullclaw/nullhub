@@ -1555,8 +1555,11 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
     const launch_args = launch_args_mod.buildLaunchArgs(allocator, launch_cmd, launch_verbose) catch return helpers.serverError();
     defer allocator.free(launch_args);
     const primary_cmd = if (launch_args.len > 0) launch_args[0] else launch_cmd;
-    // Agent mode has no HTTP health endpoint — skip health checks (port=0).
-    const effective_port: u16 = if (std.mem.eql(u8, primary_cmd, "agent")) 0 else port;
+    // Only HTTP server modes (e.g. "serve") expose a health endpoint.
+    // Non-HTTP modes — agent, gateway, channel, or any future long-lived non-server mode —
+    // should be supervised by process-alive checks only (port=0).
+    const is_http_server_mode = std.mem.eql(u8, primary_cmd, "serve");
+    const effective_port: u16 = if (is_http_server_mode) port else 0;
 
     // Resolve instance working directory so the binary can find its config.
     const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
