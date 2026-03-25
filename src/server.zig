@@ -1,4 +1,5 @@
 const std = @import("std");
+const net_compat = @import("net_compat.zig");
 const auth = @import("auth.zig");
 const instances_api = @import("api/instances.zig");
 const platform = @import("core/platform.zig");
@@ -336,7 +337,7 @@ pub const Server = struct {
 
     fn handleConnection(self: *Server, conn: std.net.Server.Connection, alloc: std.mem.Allocator) !void {
         var req_buf: [max_request_size]u8 = undefined;
-        const n = conn.stream.read(&req_buf) catch return;
+        const n = net_compat.streamRead(conn.stream, &req_buf) catch return;
         if (n == 0) return;
         const raw = req_buf[0..n];
 
@@ -1040,7 +1041,7 @@ fn readBody(raw: []const u8, n: usize, stream: std.net.Stream, alloc: std.mem.Al
             @memcpy(full_buf[0..n], raw);
             var total_read = n;
             while (total_read < total_size) {
-                const extra = stream.read(full_buf[total_read..total_size]) catch break;
+                const extra = net_compat.streamRead(stream, full_buf[total_read..total_size]) catch break;
                 if (extra == 0) break;
                 total_read += extra;
             }
@@ -1061,9 +1062,9 @@ fn sendResponse(stream: std.net.Stream, response: Response, raw_request: []const
     try appendCorsHeaders(writer, raw_request, bind_host, port);
     try writer.writeAll("Connection: close\r\n\r\n");
 
-    _ = try stream.write(header_stream.getWritten());
+    try net_compat.streamWriteAll(stream, header_stream.getWritten());
     if (response.body.len > 0) {
-        _ = try stream.write(response.body);
+        try net_compat.streamWriteAll(stream, response.body);
     }
 }
 
@@ -1078,7 +1079,7 @@ fn sendRedirect(stream: std.net.Stream, location: []const u8, raw_request: []con
     try appendCorsHeaders(writer, raw_request, bind_host, port);
     try writer.writeAll("Connection: close\r\n\r\n");
 
-    _ = try stream.write(header_stream.getWritten());
+    try net_compat.streamWriteAll(stream, header_stream.getWritten());
 }
 
 pub fn extractBody(raw: []const u8) []const u8 {
