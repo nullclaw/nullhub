@@ -1,4 +1,5 @@
 const std = @import("std");
+const net_compat = @import("../net_compat.zig");
 
 pub const HealthCheckResult = struct {
     ok: bool,
@@ -29,13 +30,13 @@ pub fn check(allocator: std.mem.Allocator, host: []const u8, port: u16, endpoint
     };
     defer allocator.free(request);
 
-    _ = stream.writeAll(request) catch {
+    net_compat.streamWriteAll(stream, request) catch {
         return .{ .ok = false, .error_message = "failed to send request" };
     };
 
     // Read response (just need the status line)
     var buf: [1024]u8 = undefined;
-    const n = stream.read(&buf) catch {
+    const n = net_compat.streamRead(stream, &buf) catch {
         return .{ .ok = false, .error_message = "failed to read response" };
     };
 

@@ -197,6 +197,7 @@ pub fn handleApplyUpdateRuntime(
     defer allocator.free(inst_dir);
     const launch_args = launch_args_mod.buildLaunchArgs(allocator, entry.launch_mode, entry.verbose) catch return serverError();
     defer allocator.free(launch_args);
+    const effective_port = launch_args_mod.effectiveHealthPort(entry.launch_mode, port);
 
     if (was_running) {
         manager.startInstance(
@@ -204,7 +205,7 @@ pub fn handleApplyUpdateRuntime(
             name,
             new_bin_path,
             launch_args,
-            port,
+            effective_port,
             known.default_health_endpoint,
             inst_dir,
             "",
@@ -226,7 +227,7 @@ pub fn handleApplyUpdateRuntime(
                     name,
                     prev_bin_path,
                     launch_args,
-                    port,
+                    effective_port,
                     known.default_health_endpoint,
                     inst_dir,
                     "",
