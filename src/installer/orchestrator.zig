@@ -275,6 +275,7 @@ pub fn install(
         opts.instance_name,
         version,
     ) orelse port;
+    const effective_port = launch_args_mod.effectiveHealthPort(launch_command, runtime_port);
 
     // 6. Register in state.json
     s.addInstance(opts.component, opts.instance_name, .{
@@ -293,7 +294,7 @@ pub fn install(
         opts.instance_name,
         bin_path,
         launch_args,
-        runtime_port,
+        effective_port,
         health_endpoint,
         inst_dir,
         "",
