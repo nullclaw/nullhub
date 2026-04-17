@@ -2,6 +2,8 @@ const std = @import("std");
 const access = @import("access.zig");
 const report_schema = @import("report_schema.zig");
 
+const ArgIterator = std.process.Args.Iterator;
+
 // ─── Option Types ────────────────────────────────────────────────────────────
 
 pub const ServeOptions = struct {
@@ -132,7 +134,7 @@ pub fn parseInstanceRef(arg: []const u8) ?InstanceRef {
 
 /// Parse CLI arguments into a Command. Expects `args` to have already
 /// consumed the program name (argv[0]).
-pub fn parse(args: *std.process.ArgIterator) Command {
+pub fn parse(args: *ArgIterator) Command {
     const cmd = args.next() orelse return .{ .serve = .{} };
 
     if (std.mem.eql(u8, cmd, "serve")) {
@@ -207,7 +209,7 @@ pub fn parse(args: *std.process.ArgIterator) Command {
 
 // ─── Sub-parsers ─────────────────────────────────────────────────────────────
 
-fn parseServe(args: *std.process.ArgIterator) Command {
+fn parseServe(args: *ArgIterator) Command {
     var opts = ServeOptions{};
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--port")) {
@@ -225,7 +227,7 @@ fn parseServe(args: *std.process.ArgIterator) Command {
     return .{ .serve = opts };
 }
 
-fn parseStatus(args: *std.process.ArgIterator) Command {
+fn parseStatus(args: *ArgIterator) Command {
     var opts = StatusOptions{};
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--host")) {
@@ -244,7 +246,7 @@ fn parseStatus(args: *std.process.ArgIterator) Command {
 
 const InstanceTag = enum { start, stop, restart, update };
 
-fn parseInstanceCommand(args: *std.process.ArgIterator, tag: InstanceTag) Command {
+fn parseInstanceCommand(args: *ArgIterator, tag: InstanceTag) Command {
     const arg = args.next() orelse return .help;
     const ref = parseInstanceRef(arg) orelse return .help;
     return switch (tag) {
@@ -255,7 +257,7 @@ fn parseInstanceCommand(args: *std.process.ArgIterator, tag: InstanceTag) Comman
     };
 }
 
-fn parseInstall(args: *std.process.ArgIterator) Command {
+fn parseInstall(args: *ArgIterator) Command {
     const component = args.next() orelse return .help;
     if (component.len == 0 or component[0] == '-') return .help;
 
@@ -276,7 +278,7 @@ fn parseInstall(args: *std.process.ArgIterator) Command {
     return .{ .install = opts };
 }
 
-fn parseLogs(args: *std.process.ArgIterator) Command {
+fn parseLogs(args: *ArgIterator) Command {
     const arg = args.next() orelse return .help;
     const ref = parseInstanceRef(arg) orelse return .help;
 
@@ -293,7 +295,7 @@ fn parseLogs(args: *std.process.ArgIterator) Command {
     return .{ .logs = opts };
 }
 
-fn parseConfig(args: *std.process.ArgIterator) Command {
+fn parseConfig(args: *ArgIterator) Command {
     const arg = args.next() orelse return .help;
     const ref = parseInstanceRef(arg) orelse return .help;
 
@@ -306,19 +308,19 @@ fn parseConfig(args: *std.process.ArgIterator) Command {
     return .{ .config = opts };
 }
 
-fn parseWizard(args: *std.process.ArgIterator) Command {
+fn parseWizard(args: *ArgIterator) Command {
     const component = args.next() orelse return .help;
     if (component.len == 0 or component[0] == '-') return .help;
     return .{ .wizard = .{ .component = component } };
 }
 
-fn parseService(args: *std.process.ArgIterator) Command {
+fn parseService(args: *ArgIterator) Command {
     const sub = args.next() orelse return .help;
     const sc = ServiceCommand.fromStr(sub) orelse return .help;
     return .{ .service = sc };
 }
 
-fn parseRoutes(args: *std.process.ArgIterator) Command {
+fn parseRoutes(args: *ArgIterator) Command {
     var opts = RoutesOptions{};
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--json")) {
@@ -330,7 +332,7 @@ fn parseRoutes(args: *std.process.ArgIterator) Command {
     return .{ .routes = opts };
 }
 
-fn parseApi(args: *std.process.ArgIterator) Command {
+fn parseApi(args: *ArgIterator) Command {
     const method = args.next() orelse return .help;
     const target = args.next() orelse return .help;
 
@@ -360,7 +362,7 @@ fn parseApi(args: *std.process.ArgIterator) Command {
     return .{ .api = opts };
 }
 
-fn parseUninstall(args: *std.process.ArgIterator) Command {
+fn parseUninstall(args: *ArgIterator) Command {
     const arg = args.next() orelse return .help;
     const ref = parseInstanceRef(arg) orelse return .help;
 
@@ -373,13 +375,13 @@ fn parseUninstall(args: *std.process.ArgIterator) Command {
     return .{ .uninstall = opts };
 }
 
-fn parseAddSource(args: *std.process.ArgIterator) Command {
+fn parseAddSource(args: *ArgIterator) Command {
     const repo = args.next() orelse return .help;
     if (repo.len == 0 or repo[0] == '-') return .help;
     return .{ .add_source = .{ .repo = repo } };
 }
 
-fn parseReport(args: *std.process.ArgIterator) Command {
+fn parseReport(args: *ArgIterator) Command {
     var opts = ReportOptions{};
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--repo")) {

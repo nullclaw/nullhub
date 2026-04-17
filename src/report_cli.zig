@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const std_compat = @import("compat");
 const cli = @import("cli.zig");
 const paths_mod = @import("core/paths.zig");
 const report = @import("report.zig");
@@ -11,11 +12,11 @@ var line_buf: [1024]u8 = undefined;
 
 pub fn run(allocator: std.mem.Allocator, opts: cli.ReportOptions) !void {
     var stdout_buf: [8192]u8 = undefined;
-    var bw = std.fs.File.stdout().writer(&stdout_buf);
+    var bw = std_compat.fs.File.stdout().writer(&stdout_buf);
     const w = &bw.interface;
 
     // TTY detection: if stdin is not a TTY, require all flags
-    const is_tty = std.fs.File.stdin().isTty();
+    const is_tty = std_compat.fs.File.stdin().isTty();
     if (!is_tty) {
         if (opts.repo == null or opts.report_type == null or opts.message == null) {
             try w.writeAll("Error: --repo, --type, and --message are required in non-interactive mode.\n");
@@ -198,7 +199,7 @@ fn promptMessage(allocator: std.mem.Allocator, w: anytype) !?[]const u8 {
 /// Read a line from stdin into the module-level line_buf.
 /// Returns a slice into line_buf (valid until next readLine call).
 fn readLine() ?[]const u8 {
-    const stdin = std.fs.File.stdin();
+    const stdin = std_compat.fs.File.stdin();
     const n = stdin.read(&line_buf) catch return null;
     if (n == 0) return null;
     var line: []const u8 = line_buf[0..n];
@@ -211,7 +212,7 @@ fn readLine() ?[]const u8 {
 
 fn openEditor(allocator: std.mem.Allocator, content: []const u8) ?[]const u8 {
     const default_editor = defaultEditorCommand();
-    const editor = std.process.getEnvVarOwned(allocator, "EDITOR") catch {
+    const editor = std_compat.process.getEnvVarOwned(allocator, "EDITOR") catch {
         return openEditorWithCommand(allocator, default_editor, content);
     };
     defer allocator.free(editor);
@@ -224,13 +225,13 @@ fn openEditorWithCommand(allocator: std.mem.Allocator, editor: []const u8, conte
     const tmp_path = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-report", ".md") catch return null;
     defer allocator.free(tmp_path);
 
-    const file = std.fs.createFileAbsolute(tmp_path, .{}) catch return null;
+    const file = std_compat.fs.createFileAbsolute(tmp_path, .{}) catch return null;
     file.writeAll(content) catch {
         file.close();
         return null;
     };
     file.close();
-    defer std.fs.deleteFileAbsolute(tmp_path) catch {};
+    defer std_compat.fs.deleteFileAbsolute(tmp_path) catch {};
 
     const shell = shellCommandAlloc(allocator) orelse return null;
     defer allocator.free(shell);
@@ -244,18 +245,18 @@ fn openEditorWithCommand(allocator: std.mem.Allocator, editor: []const u8, conte
         [_][]const u8{ shell, "-lc", command };
 
     // Run editor through the user's shell so `$EDITOR` can include flags.
-    var child = std.process.Child.init(&argv, allocator);
+    var child = std_compat.process.Child.init(&argv, allocator);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
     const term = child.spawnAndWait() catch return null;
     switch (term) {
-        .Exited => |code| if (code != 0) return null,
+        .exited => |code| if (code != 0) return null,
         else => return null,
     }
 
     // Read back
-    const edited_file = std.fs.openFileAbsolute(tmp_path, .{}) catch return null;
+    const edited_file = std_compat.fs.openFileAbsolute(tmp_path, .{}) catch return null;
     defer edited_file.close();
     return edited_file.readToEndAlloc(allocator, 64 * 1024) catch null;
 }
@@ -268,7 +269,7 @@ fn shellCommandAlloc(allocator: std.mem.Allocator) ?[]const u8 {
     const env_key = if (builtin.os.tag == .windows) "COMSPEC" else "SHELL";
     const fallback = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
 
-    const shell = std.process.getEnvVarOwned(allocator, env_key) catch
+    const shell = std_compat.process.getEnvVarOwned(allocator, env_key) catch
         allocator.dupe(u8, fallback) catch return null;
     errdefer allocator.free(shell);
 

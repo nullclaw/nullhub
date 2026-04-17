@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const cli = @import("cli.zig");
 
 pub const ExecuteError = error{
@@ -27,9 +28,9 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ApiOptions) !void {
     defer allocator.free(formatted);
 
     if (formatted.len > 0) {
-        try writeAll(std.fs.File.stdout(), formatted);
+        try writeAll(std_compat.fs.File.stdout(), formatted);
         if (formatted[formatted.len - 1] != '\n') {
-            try writeAll(std.fs.File.stdout(), "\n");
+            try writeAll(std_compat.fs.File.stdout(), "\n");
         }
     }
 
@@ -37,7 +38,7 @@ pub fn run(allocator: std.mem.Allocator, opts: cli.ApiOptions) !void {
     if (code < 200 or code >= 300) {
         var buf: [64]u8 = undefined;
         const line = try std.fmt.bufPrint(&buf, "HTTP {d}\n", .{code});
-        try writeAll(std.fs.File.stderr(), line);
+        try writeAll(std_compat.fs.File.stderr(), line);
         return error.RequestFailed;
     }
 }
@@ -68,10 +69,10 @@ pub fn execute(allocator: std.mem.Allocator, opts: cli.ApiOptions) !Result {
         header_count += 1;
     }
 
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
-    var response_body: std.io.Writer.Allocating = .init(allocator);
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
     const result = try client.fetch(.{
@@ -88,7 +89,7 @@ pub fn execute(allocator: std.mem.Allocator, opts: cli.ApiOptions) !Result {
     };
 }
 
-fn writeAll(file: std.fs.File, bytes: []const u8) !void {
+fn writeAll(file: std_compat.fs.File, bytes: []const u8) !void {
     var buf: [4096]u8 = undefined;
     var writer = file.writer(&buf);
     try writer.interface.writeAll(bytes);
@@ -125,10 +126,10 @@ const LoadedBody = struct {
 fn loadBodyAlloc(allocator: std.mem.Allocator, opts: cli.ApiOptions) !LoadedBody {
     if (opts.body_file) |path| {
         if (std.mem.eql(u8, path, "-")) {
-            const bytes = try std.fs.File.stdin().readToEndAlloc(allocator, 8 * 1024 * 1024);
+            const bytes = try std_compat.fs.File.stdin().readToEndAlloc(allocator, 8 * 1024 * 1024);
             return .{ .bytes = bytes, .owned = true };
         }
-        const file = try std.fs.cwd().openFile(path, .{});
+        const file = try std_compat.fs.cwd().openFile(path, .{});
         defer file.close();
         const bytes = try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
         return .{ .bytes = bytes, .owned = true };

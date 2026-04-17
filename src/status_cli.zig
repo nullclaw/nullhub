@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const cli = @import("cli.zig");
 const paths_mod = @import("core/paths.zig");
 const state_mod = @import("core/state.zig");
@@ -30,7 +31,7 @@ const LiveStatus = struct {
 
 pub fn run(allocator: std.mem.Allocator, opts: cli.StatusOptions) !void {
     var stdout_buf: [4096]u8 = undefined;
-    var bw = std.fs.File.stdout().writer(&stdout_buf);
+    var bw = std_compat.fs.File.stdout().writer(&stdout_buf);
     const w = &bw.interface;
 
     try w.print("nullhub Status\n", .{});
@@ -60,10 +61,10 @@ fn fetchLiveStatus(allocator: std.mem.Allocator, host: []const u8, port: u16) ?s
     const url = std.fmt.allocPrint(allocator, "http://{s}:{d}/api/status", .{ host, port }) catch return null;
     defer allocator.free(url);
 
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
-    var response_body: std.io.Writer.Allocating = .init(allocator);
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
     const result = client.fetch(.{

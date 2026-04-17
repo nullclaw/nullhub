@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
@@ -195,21 +196,21 @@ pub fn handleApplyUpdateRuntime(
 
     const inst_dir = paths.instanceDir(allocator, component, name) catch return serverError();
     defer allocator.free(inst_dir);
-    const launch_args = launch_args_mod.buildLaunchArgs(allocator, entry.launch_mode, entry.verbose) catch return serverError();
-    defer allocator.free(launch_args);
-    const effective_port = launch_args_mod.effectiveHealthPort(entry.launch_mode, port);
+    var launch = launch_args_mod.resolve(allocator, entry.launch_mode, entry.verbose) catch return serverError();
+    defer launch.deinit();
+    const effective_port = launch.effectiveHealthPort(port);
 
     if (was_running) {
         manager.startInstance(
             component,
             name,
             new_bin_path,
-            launch_args,
+            launch.argv,
             effective_port,
             known.default_health_endpoint,
             inst_dir,
             "",
-            entry.launch_mode,
+            launch.primary_command,
         ) catch {
             // Best-effort rollback: try to start previous binary.
             const prev_bin_path = paths.binary(allocator, component, previous_version) catch {
@@ -221,17 +222,17 @@ pub fn handleApplyUpdateRuntime(
             };
             defer allocator.free(prev_bin_path);
 
-            if (std.fs.accessAbsolute(prev_bin_path, .{})) |_| {
+            if (std_compat.fs.accessAbsolute(prev_bin_path, .{})) |_| {
                 manager.startInstance(
                     component,
                     name,
                     prev_bin_path,
-                    launch_args,
+                    launch.argv,
                     effective_port,
                     known.default_health_endpoint,
                     inst_dir,
                     "",
-                    entry.launch_mode,
+                    launch.primary_command,
                 ) catch {};
                 return .{
                     .status = "500 Internal Server Error",

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
 const manager_mod = @import("../supervisor/manager.zig");
@@ -10,12 +11,89 @@ const version = @import("../version.zig");
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
 
+const ComponentRollup = struct {
+    total: usize = 0,
+    running: usize = 0,
+    starting: usize = 0,
+    restarting: usize = 0,
+    failed: usize = 0,
+    stopped: usize = 0,
+    auto_start: usize = 0,
+};
+
 fn pidToU64(pid: std.process.Child.Id) u64 {
     return switch (@typeInfo(@TypeOf(pid))) {
         .int => @intCast(pid),
         .pointer => @intFromPtr(pid),
         else => 0,
     };
+}
+
+fn currentProcessId() u64 {
+    return switch (builtin.os.tag) {
+        .linux => @intCast(std.os.linux.getpid()),
+        .macos => @intCast(std.c.getpid()),
+        .windows => std.os.windows.GetCurrentProcessId(),
+        else => 0,
+    };
+}
+
+fn rollupStatus(rollup: ComponentRollup) []const u8 {
+    if (rollup.failed > 0) return "error";
+    if (rollup.starting > 0 or rollup.restarting > 0) return "starting";
+    if (rollup.running > 0) return "ok";
+    return "idle";
+}
+
+fn observeStatus(rollup: *ComponentRollup, status: manager_mod.Status) void {
+    switch (status) {
+        .running => rollup.running += 1,
+        .starting => rollup.starting += 1,
+        .restarting => rollup.restarting += 1,
+        .failed => rollup.failed += 1,
+        .stopped, .stopping => rollup.stopped += 1,
+    }
+}
+
+fn overallStatus(components: *const std.StringHashMap(ComponentRollup)) []const u8 {
+    var saw_running = false;
+    var saw_idle = false;
+    var saw_starting = false;
+    var it = components.iterator();
+    while (it.next()) |entry| {
+        const status = rollupStatus(entry.value_ptr.*);
+        if (std.mem.eql(u8, status, "error")) return "error";
+        if (std.mem.eql(u8, status, "starting")) {
+            saw_starting = true;
+            continue;
+        }
+        if (std.mem.eql(u8, status, "ok")) {
+            saw_running = true;
+            continue;
+        }
+        saw_idle = true;
+    }
+    if (saw_starting) return "starting";
+    if (saw_running) return "ok";
+    if (saw_idle) return "idle";
+    return "ok";
+}
+
+fn appendComponentRollupJson(buf: *std.array_list.Managed(u8), rollup: ComponentRollup) !void {
+    const status = rollupStatus(rollup);
+    try buf.print(
+        "{{\"total\":{d},\"running\":{d},\"starting\":{d},\"restarting\":{d},\"failed\":{d},\"stopped\":{d},\"auto_start\":{d},\"status\":\"{s}\"}}",
+        .{
+            rollup.total,
+            rollup.running,
+            rollup.starting,
+            rollup.restarting,
+            rollup.failed,
+            rollup.stopped,
+            rollup.auto_start,
+            status,
+        },
+    );
 }
 
 fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8, pid: ?std.process.Child.Id, instance_uptime: ?u64, restart_count: u32, port: u16) !void {
@@ -79,13 +157,42 @@ pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
 fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) !void {
     var urls = try access.buildAccessUrlsWithOptions(buf.allocator, host, port, access_options);
     defer urls.deinit(buf.allocator);
+    var component_rollups = std.StringHashMap(ComponentRollup).init(buf.allocator);
+    defer {
+        var cleanup = component_rollups.iterator();
+        while (cleanup.next()) |entry| {
+            buf.allocator.free(entry.key_ptr.*);
+        }
+        component_rollups.deinit();
+    }
+
+    var comp_it = s.instances.iterator();
+    while (comp_it.next()) |comp_entry| {
+        var rollup = ComponentRollup{};
+        var inst_it = comp_entry.value_ptr.iterator();
+        while (inst_it.next()) |inst_entry| {
+            const mgr_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
+            const runtime_status = if (mgr_status) |st| st.status else manager_mod.Status.stopped;
+            rollup.total += 1;
+            if (inst_entry.value_ptr.auto_start) rollup.auto_start += 1;
+            observeStatus(&rollup, runtime_status);
+        }
+
+        const owned_component = try buf.allocator.dupe(u8, comp_entry.key_ptr.*);
+        errdefer buf.allocator.free(owned_component);
+        try component_rollups.put(owned_component, rollup);
+    }
 
     // Hub info
     try buf.appendSlice("{\"hub\":{\"version\":\"");
     try buf.appendSlice(version.string);
     try buf.appendSlice("\",\"platform\":\"");
     try buf.appendSlice(comptime platform.detect().toString());
-    try buf.appendSlice("\",\"uptime_seconds\":");
+    try buf.appendSlice("\",\"pid\":");
+    var pid_buf: [20]u8 = undefined;
+    const pid_str = try std.fmt.bufPrint(&pid_buf, "{d}", .{currentProcessId()});
+    try buf.appendSlice(pid_str);
+    try buf.appendSlice(",\"uptime_seconds\":");
 
     var num_buf: [20]u8 = undefined;
     const num_str = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime_seconds});
@@ -116,11 +223,24 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
     }
     try buf.append('}');
 
+    try buf.appendSlice("},\"components\":{");
+
+    var comp_rollup_it = component_rollups.iterator();
+    var first_comp = true;
+    while (comp_rollup_it.next()) |comp_entry| {
+        if (!first_comp) try buf.append(',');
+        first_comp = false;
+
+        try buf.append('"');
+        try appendEscaped(buf, comp_entry.key_ptr.*);
+        try buf.appendSlice("\":");
+        try appendComponentRollupJson(buf, comp_entry.value_ptr.*);
+    }
+
     try buf.appendSlice("},\"instances\":{");
 
-    // Instances grouped by component
-    var comp_it = s.instances.iterator();
-    var first_comp = true;
+    comp_it = s.instances.iterator();
+    first_comp = true;
     while (comp_it.next()) |comp_entry| {
         if (!first_comp) try buf.append(',');
         first_comp = false;
@@ -153,7 +273,9 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
         try buf.append('}');
     }
 
-    try buf.appendSlice("}}");
+    try buf.appendSlice("},\"overall_status\":\"");
+    try buf.appendSlice(overallStatus(&component_rollups));
+    try buf.appendSlice("\"}");
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -179,6 +301,7 @@ test "handleStatus returns valid JSON with hub version" {
             hub: struct {
                 version: []const u8,
                 platform: []const u8,
+                pid: u64,
                 uptime_seconds: u64,
                 access: struct {
                     browser_open_url: []const u8,
@@ -186,6 +309,16 @@ test "handleStatus returns valid JSON with hub version" {
                     public_alias_provider: []const u8,
                 },
             },
+            components: std.json.ArrayHashMap(struct {
+                total: usize,
+                running: usize,
+                starting: usize,
+                restarting: usize,
+                failed: usize,
+                stopped: usize,
+                auto_start: usize,
+                status: []const u8,
+            }),
             instances: std.json.ArrayHashMap(std.json.ArrayHashMap(struct {
                 version: []const u8,
                 auto_start: bool,
@@ -193,19 +326,23 @@ test "handleStatus returns valid JSON with hub version" {
                 verbose: bool = false,
                 status: []const u8,
             })),
+            overall_status: []const u8,
         },
         allocator,
         resp.body,
-        .{ .allocate = .alloc_always },
+        .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
 
     try std.testing.expectEqualStrings(version.string, parsed.value.hub.version);
     try std.testing.expect(parsed.value.hub.platform.len > 0);
+    try std.testing.expect(parsed.value.hub.pid > 0);
     try std.testing.expectEqual(@as(u64, 3600), parsed.value.hub.uptime_seconds);
     try std.testing.expect(!parsed.value.hub.access.public_alias_active);
     try std.testing.expectEqualStrings("none", parsed.value.hub.access.public_alias_provider);
     try std.testing.expectEqualStrings("http://nullhub.localhost:19800", parsed.value.hub.access.browser_open_url);
+    try std.testing.expectEqualStrings("ok", parsed.value.overall_status);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.components.map.count());
 }
 
 test "handleStatus includes instances" {
@@ -229,11 +366,22 @@ test "handleStatus includes instances" {
             hub: struct {
                 version: []const u8,
                 platform: []const u8,
+                pid: u64,
                 uptime_seconds: u64,
                 access: struct {
                     browser_open_url: []const u8,
                 },
             },
+            components: std.json.ArrayHashMap(struct {
+                total: usize,
+                running: usize,
+                starting: usize,
+                restarting: usize,
+                failed: usize,
+                stopped: usize,
+                auto_start: usize,
+                status: []const u8,
+            }),
             instances: std.json.ArrayHashMap(std.json.ArrayHashMap(struct {
                 version: []const u8,
                 auto_start: bool,
@@ -241,10 +389,11 @@ test "handleStatus includes instances" {
                 verbose: bool = false,
                 status: []const u8,
             })),
+            overall_status: []const u8,
         },
         allocator,
         resp.body,
-        .{ .allocate = .alloc_always },
+        .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
 
@@ -253,6 +402,38 @@ test "handleStatus includes instances" {
     try std.testing.expectEqualStrings("2026.3.1", agent.version);
     try std.testing.expect(agent.auto_start == true);
     try std.testing.expectEqualStrings("stopped", agent.status);
+    const comp = parsed.value.components.map.get("nullclaw").?;
+    try std.testing.expectEqual(@as(usize, 1), comp.total);
+    try std.testing.expectEqual(@as(usize, 1), comp.stopped);
+    try std.testing.expectEqual(@as(usize, 1), comp.auto_start);
+    try std.testing.expectEqualStrings("idle", comp.status);
+    try std.testing.expectEqualStrings("idle", parsed.value.overall_status);
+}
+
+test "handleStatus overall_status becomes error when a component has failed instances" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    defer s.deinit();
+    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
+    defer p.deinit(allocator);
+    var mgr = manager_mod.Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    try s.addInstance("nullclaw", "broken", .{ .version = "1.0.0" });
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "nullclaw", "broken" });
+    try mgr.instances.put(key, .{
+        .component = "nullclaw",
+        .name = "broken",
+        .status = .failed,
+    });
+
+    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    defer allocator.free(resp.body);
+
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"components\":{\"nullclaw\":{\"total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"failed\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"error\"") != null);
 }
 
 test "handleStatus includes launch_mode" {

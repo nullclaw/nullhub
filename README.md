@@ -20,6 +20,7 @@ NullTickets).
 - **One-click updates** -- download, migrate config, rollback on failure
 - **Multi-instance** -- run multiple instances of the same component side by side
 - **Web UI + CLI** -- browser dashboard for humans, CLI for automation
+- **Managed instance admin API** -- instance-scoped status, config, models, cron, channels, and skills routes for managed NullClaw installs
 - **Orchestration UI** -- workflow editor, poll-based run monitoring, checkpoint forking, encoded workflow/run/store links, and key-value store browser (proxied to NullTickets through NullHub)
 
 ## Quick Start
@@ -81,6 +82,8 @@ nullhub update <c>/<n>           # Update single instance
 nullhub update-all               # Update everything
 
 nullhub config <c>/<n> [--edit]  # View/edit config
+nullhub api GET /api/instances/nullclaw/<n>/status --pretty
+nullhub api GET /api/instances/nullclaw/<n>/cron --pretty
 nullhub service install          # Register/start OS service (systemd/launchd)
 nullhub service uninstall        # Remove OS service
 nullhub service status           # Show OS service status
@@ -132,7 +135,7 @@ End-to-end:
 
 ## Tech Stack
 
-- Zig 0.15.2
+- Zig 0.16.0
 - Svelte 5 + SvelteKit (static adapter)
 - JSON over HTTP/1.1
 - SSE for instance log streaming

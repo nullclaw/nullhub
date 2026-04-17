@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -127,10 +128,56 @@ const JsonState = struct {
 };
 
 /// Inner map type: instance-name → InstanceEntry.
-const InstanceMap = std.StringArrayHashMap(InstanceEntry);
+fn ManagedStringArrayHashMap(comptime V: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        inner: std.array_hash_map.String(V) = .{},
+
+        const Self = @This();
+        pub const KV = std.array_hash_map.String(V).KV;
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit(self.allocator);
+        }
+
+        pub fn iterator(self: *const Self) @TypeOf(self.inner.iterator()) {
+            return self.inner.iterator();
+        }
+
+        pub fn put(self: *Self, key: []const u8, value: V) !void {
+            try self.inner.put(self.allocator, key, value);
+        }
+
+        pub fn get(self: Self, key: []const u8) ?V {
+            return self.inner.get(key);
+        }
+
+        pub fn getPtr(self: *Self, key: []const u8) ?*V {
+            return self.inner.getPtr(key);
+        }
+
+        pub fn count(self: Self) usize {
+            return self.inner.count();
+        }
+
+        pub fn keys(self: *Self) [][]const u8 {
+            return self.inner.keys();
+        }
+
+        pub fn fetchSwapRemove(self: *Self, key: []const u8) ?KV {
+            return self.inner.fetchSwapRemove(key);
+        }
+    };
+}
+
+const InstanceMap = ManagedStringArrayHashMap(InstanceEntry);
 
 /// Outer map type: component-name → InstanceMap.
-const ComponentMap = std.StringArrayHashMap(InstanceMap);
+const ComponentMap = ManagedStringArrayHashMap(InstanceMap);
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -202,7 +249,7 @@ pub const State = struct {
     /// Read state from disk. If the file doesn't exist, return an empty state.
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !State {
         const bytes = blk: {
-            const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+            const file = std_compat.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
                 error.FileNotFound => return State.init(allocator, path),
                 else => return err,
             };
@@ -358,12 +405,12 @@ pub const State = struct {
         defer self.allocator.free(tmp_path);
 
         {
-            const file = try std.fs.createFileAbsolute(tmp_path, .{});
+            const file = try std_compat.fs.createFileAbsolute(tmp_path, .{});
             defer file.close();
             try file.writeAll(json_bytes);
         }
 
-        try std.fs.renameAbsolute(tmp_path, self.path);
+        try std_compat.fs.renameAbsolute(tmp_path, self.path);
     }
 
     /// Register a new instance under `component/name`. Dupes all strings.
@@ -766,13 +813,13 @@ pub const State = struct {
 
 fn testPath(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     const tmp = "/tmp/nullhub-state-test";
-    std.fs.deleteTreeAbsolute(tmp) catch {};
-    try std.fs.makeDirAbsolute(tmp);
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp);
     return std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp, name });
 }
 
 fn cleanupTestDir() void {
-    std.fs.deleteTreeAbsolute("/tmp/nullhub-state-test") catch {};
+    std_compat.fs.deleteTreeAbsolute("/tmp/nullhub-state-test") catch {};
 }
 
 test "add instances, save, load, verify round-trip" {
@@ -898,7 +945,7 @@ test "atomic save writes via temp file" {
     defer allocator.free(tmp_path);
 
     const tmp_exists = blk: {
-        const f = std.fs.openFileAbsolute(tmp_path, .{}) catch |err| switch (err) {
+        const f = std_compat.fs.openFileAbsolute(tmp_path, .{}) catch |err| switch (err) {
             error.FileNotFound => break :blk false,
             else => return err,
         };
@@ -908,7 +955,7 @@ test "atomic save writes via temp file" {
     try std.testing.expect(!tmp_exists);
 
     // The real file should exist and be valid JSON.
-    const file = try std.fs.openFileAbsolute(path, .{});
+    const file = try std_compat.fs.openFileAbsolute(path, .{});
     defer file.close();
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(bytes);

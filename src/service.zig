@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 
 pub const ServiceCommand = enum {
@@ -73,7 +74,7 @@ pub fn printStatus(allocator: std.mem.Allocator) !void {
     defer status.deinit(allocator);
 
     var stdout_buf: [1024]u8 = undefined;
-    var bw = std.fs.File.stdout().writer(&stdout_buf);
+    var bw = std_compat.fs.File.stdout().writer(&stdout_buf);
     const w = &bw.interface;
 
     try w.print("Service type: {s}\n", .{status.service_type});
@@ -88,7 +89,7 @@ fn installMacos(allocator: std.mem.Allocator) !void {
     defer allocator.free(plist);
 
     if (std.mem.lastIndexOfScalar(u8, plist, '/')) |idx| {
-        try std.fs.cwd().makePath(plist[0..idx]);
+        try std_compat.fs.cwd().makePath(plist[0..idx]);
     }
 
     const service_exe_path = try resolveServiceExecutablePath(allocator);
@@ -99,7 +100,7 @@ fn installMacos(allocator: std.mem.Allocator) !void {
 
     const logs_dir = try std.fs.path.join(allocator, &.{ home, ".nullhub", "logs" });
     defer allocator.free(logs_dir);
-    try std.fs.cwd().makePath(logs_dir);
+    try std_compat.fs.cwd().makePath(logs_dir);
 
     const stdout_log = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.stdout.log" });
     defer allocator.free(stdout_log);
@@ -138,7 +139,7 @@ fn installMacos(allocator: std.mem.Allocator) !void {
     , .{ SERVICE_LABEL, escaped_exe, escaped_stdout, escaped_stderr });
     defer allocator.free(content);
 
-    const file = try std.fs.createFileAbsolute(plist, .{});
+    const file = try std_compat.fs.createFileAbsolute(plist, .{});
     defer file.close();
     try file.writeAll(content);
 
@@ -151,7 +152,7 @@ fn uninstallMacos(allocator: std.mem.Allocator) !void {
     defer allocator.free(plist);
 
     runChecked(allocator, &.{ "launchctl", "unload", "-w", plist }) catch {};
-    std.fs.deleteFileAbsolute(plist) catch |err| switch (err) {
+    std_compat.fs.deleteFileAbsolute(plist) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -180,7 +181,7 @@ fn installLinux(allocator: std.mem.Allocator) !void {
     defer allocator.free(unit);
 
     if (std.mem.lastIndexOfScalar(u8, unit, '/')) |idx| {
-        try std.fs.cwd().makePath(unit[0..idx]);
+        try std_compat.fs.cwd().makePath(unit[0..idx]);
     }
 
     const service_exe_path = try resolveServiceExecutablePath(allocator);
@@ -202,7 +203,7 @@ fn installLinux(allocator: std.mem.Allocator) !void {
     , .{service_exe_path});
     defer allocator.free(content);
 
-    const file = try std.fs.createFileAbsolute(unit, .{});
+    const file = try std_compat.fs.createFileAbsolute(unit, .{});
     defer file.close();
     try file.writeAll(content);
 
@@ -219,7 +220,7 @@ fn uninstallLinux(allocator: std.mem.Allocator) !void {
         runChecked(allocator, &.{ "systemctl", "--user", "daemon-reload" }) catch {};
     } else |_| {}
 
-    std.fs.deleteFileAbsolute(unit) catch |err| switch (err) {
+    std_compat.fs.deleteFileAbsolute(unit) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -259,7 +260,7 @@ fn serviceType() []const u8 {
 
 fn resolveServiceExecutablePath(allocator: std.mem.Allocator) ![]u8 {
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = try std.fs.selfExePath(&exe_buf);
+    const exe_path = try std_compat.fs.selfExePath(&exe_buf);
     if (try preferredHomebrewShimPath(allocator, exe_path)) |candidate| {
         if (fileExistsAbsolute(candidate)) return candidate;
         allocator.free(candidate);
@@ -291,7 +292,7 @@ fn linuxServiceFile(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn getHomeDir(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "HOME") catch error.NoHomeDir;
+    return std_compat.process.getEnvVarOwned(allocator, "HOME") catch error.NoHomeDir;
 }
 
 fn xmlEscapeOwned(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
@@ -311,7 +312,7 @@ fn xmlEscapeOwned(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn fileExistsAbsolute(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+    std_compat.fs.accessAbsolute(path, .{}) catch return false;
     return true;
 }
 
@@ -352,7 +353,7 @@ fn runCapture(allocator: std.mem.Allocator, argv: []const []const u8) ![]u8 {
 }
 
 fn runCaptureStatus(allocator: std.mem.Allocator, argv: []const []const u8) !CaptureStatus {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
     }) catch |err| switch (err) {
@@ -368,7 +369,7 @@ fn runCaptureStatus(allocator: std.mem.Allocator, argv: []const []const u8) !Cap
 
     return .{
         .success = switch (result.term) {
-            .Exited => |code| code == 0,
+            .exited => |code| code == 0,
             else => false,
         },
         .stdout = result.stdout,

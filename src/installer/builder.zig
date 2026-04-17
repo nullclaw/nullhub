@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const manifest = @import("../core/manifest.zig");
 const paths_mod = @import("../core/paths.zig");
 
@@ -19,14 +20,14 @@ pub const BuildError = error{
 /// Returns the trimmed version string or null if Zig is not found.
 /// Caller owns the returned memory.
 pub fn detectZig(allocator: std.mem.Allocator) ?[]const u8 {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "zig", "version" },
     }) catch return null;
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 allocator.free(result.stdout);
                 return null;
@@ -56,7 +57,7 @@ pub fn detectZig(allocator: std.mem.Allocator) ?[]const u8 {
 }
 
 /// Check whether the installed Zig version is compatible with `required_version`.
-/// Uses simple prefix matching: e.g. required "0.15" matches installed "0.15.2".
+/// Uses simple prefix matching: e.g. required "0.16" matches installed "0.16.0".
 pub fn checkZigVersion(allocator: std.mem.Allocator, required_version: []const u8) !bool {
     const installed = detectZig(allocator) orelse return false;
     defer allocator.free(installed);
@@ -67,7 +68,7 @@ pub fn checkZigVersion(allocator: std.mem.Allocator, required_version: []const u
 
 /// Clone a git repository with `--depth 1` into `dest_dir`.
 pub fn cloneRepo(allocator: std.mem.Allocator, repo_url: []const u8, dest_dir: []const u8) !void {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "git", "clone", "--depth", "1", repo_url, dest_dir },
     }) catch return error.GitNotFound;
@@ -75,7 +76,7 @@ pub fn cloneRepo(allocator: std.mem.Allocator, repo_url: []const u8, dest_dir: [
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.CloneFailed;
         },
         else => return error.CloneFailed,
@@ -100,13 +101,13 @@ pub fn buildFromSource(
     // Create a temporary directory for the clone.
     const tmp_dir = try paths_mod.uniqueTempPathAlloc(allocator, "nullhub-build", "");
     defer allocator.free(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     // Clone the repo.
     try cloneRepo(allocator, repo_url, tmp_dir);
 
     // Split the build command by spaces and run it in the cloned dir.
-    var argv_list = std.ArrayList([]const u8).init(allocator);
+    var argv_list = std.array_list.Managed([]const u8).init(allocator);
     defer argv_list.deinit();
 
     var iter = std.mem.splitScalar(u8, build_spec.command, ' ');
@@ -119,7 +120,7 @@ pub fn buildFromSource(
     const tmp_dir_z = try allocator.dupeZ(u8, tmp_dir);
     defer allocator.free(tmp_dir_z);
 
-    const build_result = std.process.Child.run(.{
+    const build_result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = argv_list.items,
         .cwd = tmp_dir_z,
@@ -128,7 +129,7 @@ pub fn buildFromSource(
     defer allocator.free(build_result.stderr);
 
     switch (build_result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.BuildFailed;
         },
         else => return error.BuildFailed,
@@ -140,15 +141,15 @@ pub fn buildFromSource(
 
     // Ensure parent directory of dest_path exists.
     if (std.fs.path.dirnamePosix(dest_path)) |parent| {
-        std.fs.makeDirAbsolute(parent) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(parent) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
     }
 
-    std.fs.copyFileAbsolute(output_path, dest_path, .{}) catch return error.OutputNotFound;
+    std_compat.fs.copyFileAbsolute(output_path, dest_path, .{}) catch return error.OutputNotFound;
 
-    if (comptime std.fs.has_executable_bit) {
+    if (comptime std_compat.fs.has_executable_bit) {
         // Set executable permission (rwxr-xr-x) on platforms that support it.
         const dest_path_z = try allocator.dupeZ(u8, dest_path);
         defer allocator.free(dest_path_z);
@@ -167,9 +168,9 @@ test "detectZig returns a version string" {
     allocator.free(version.?);
 }
 
-test "checkZigVersion returns true for 0.15" {
+test "checkZigVersion returns true for 0.16" {
     const allocator = std.testing.allocator;
-    const compatible = try checkZigVersion(allocator, "0.15");
+    const compatible = try checkZigVersion(allocator, "0.16");
     try std.testing.expect(compatible);
 }
 
@@ -182,6 +183,6 @@ test "checkZigVersion returns false for 999.0" {
 test "cloneRepo with invalid URL returns error" {
     const allocator = std.testing.allocator;
     const result = cloneRepo(allocator, "https://invalid.example.com/nonexistent/repo.git", "/tmp/nullhub-test-clone-invalid");
-    defer std.fs.deleteTreeAbsolute("/tmp/nullhub-test-clone-invalid") catch {};
+    defer std_compat.fs.deleteTreeAbsolute("/tmp/nullhub-test-clone-invalid") catch {};
     try std.testing.expectError(error.CloneFailed, result);
 }

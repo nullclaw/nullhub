@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const Allocator = std.mem.Allocator;
 
 const Response = struct {
@@ -108,10 +109,10 @@ pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body
         break :blk header_buf[0..1];
     } else &.{};
 
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
-    var response_body: std.io.Writer.Allocating = .init(allocator);
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
     const result = client.fetch(.{

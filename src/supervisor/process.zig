@@ -1,6 +1,23 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const windows = std.os.windows;
+
+const kernel32 = struct {
+    extern "kernel32" fn GetProcessId(
+        process: windows.HANDLE,
+    ) callconv(std.builtin.CallingConvention.winapi) windows.DWORD;
+
+    extern "kernel32" fn OpenProcess(
+        desired_access: windows.ACCESS_MASK,
+        inherit_handle: windows.BOOL,
+        process_id: windows.DWORD,
+    ) callconv(std.builtin.CallingConvention.winapi) ?windows.HANDLE;
+
+    extern "kernel32" fn CloseHandle(
+        object: windows.HANDLE,
+    ) callconv(std.builtin.CallingConvention.winapi) windows.BOOL;
+};
 
 /// Options for spawning a child process.
 pub const EnvEntry = struct { []const u8, []const u8 };
@@ -11,21 +28,21 @@ pub const SpawnOptions = struct {
     cwd: ?[]const u8 = null,
     stdout_path: ?[]const u8 = null, // redirect stdout+stderr to this file
     stderr_path: ?[]const u8 = null, // if stdout_path is null, used as fallback log path
-    env: ?*const std.process.EnvMap = null,
+    env: ?*const std_compat.process.EnvMap = null,
     /// Extra env vars merged into child environment before spawn.
     extra_env: []const EnvEntry = &.{},
 };
 
 /// Result of a successful process spawn.
 pub const SpawnResult = struct {
-    pid: std.process.Child.Id,
-    child: std.process.Child,
+    pid: std_compat.process.Child.Id,
+    child: std_compat.process.Child,
 };
 
 const LogPumpContext = struct {
     allocator: std.mem.Allocator,
-    stdout_pipe: std.fs.File,
-    stderr_pipe: std.fs.File,
+    stdout_pipe: std_compat.fs.File,
+    stderr_pipe: std_compat.fs.File,
     log_path: []u8,
 };
 
@@ -45,13 +62,13 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
         try argv_list.append(arg);
     }
 
-    var child = std.process.Child.init(argv_list.items, allocator);
+    var child = std_compat.process.Child.init(argv_list.items, allocator);
 
     if (options.cwd) |cwd| {
         child.cwd = cwd;
     }
 
-    var merged_env: std.process.EnvMap = undefined;
+    var merged_env: std_compat.process.EnvMap = undefined;
     var has_merged_env = false;
     defer if (has_merged_env) merged_env.deinit();
 
@@ -59,7 +76,7 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
         merged_env = if (options.env) |env|
             try cloneEnvMap(allocator, env)
         else
-            try std.process.getEnvMap(allocator);
+            try std_compat.process.getEnvMap(allocator);
         has_merged_env = true;
         for (options.extra_env) |entry| {
             try merged_env.put(entry[0], entry[1]);
@@ -94,8 +111,8 @@ pub fn spawn(allocator: std.mem.Allocator, options: SpawnOptions) !SpawnResult {
     };
 }
 
-fn cloneEnvMap(allocator: std.mem.Allocator, source: *const std.process.EnvMap) !std.process.EnvMap {
-    var dst = std.process.EnvMap.init(allocator);
+fn cloneEnvMap(allocator: std.mem.Allocator, source: *const std_compat.process.EnvMap) !std_compat.process.EnvMap {
+    var dst = std_compat.process.EnvMap.init(allocator);
     errdefer dst.deinit();
     var it = source.iterator();
     while (it.next()) |entry| {
@@ -106,8 +123,8 @@ fn cloneEnvMap(allocator: std.mem.Allocator, source: *const std.process.EnvMap) 
 
 fn startLogPump(
     allocator: std.mem.Allocator,
-    stdout_pipe: std.fs.File,
-    stderr_pipe: std.fs.File,
+    stdout_pipe: std_compat.fs.File,
+    stderr_pipe: std_compat.fs.File,
     log_path: []const u8,
 ) !void {
     const ctx = try allocator.create(LogPumpContext);
@@ -140,30 +157,35 @@ fn pumpChildOutputToLog(ctx: *LogPumpContext) void {
         ctx.allocator.destroy(ctx);
     }
 
-    var log_file = std.fs.createFileAbsolute(ctx.log_path, .{ .truncate = false }) catch return;
+    var log_file = std_compat.fs.createFileAbsolute(ctx.log_path, .{ .truncate = false }) catch return;
     defer log_file.close();
     log_file.seekFromEnd(0) catch return;
 
-    const Streams = enum { stdout, stderr };
-    var poller = std.Io.poll(ctx.allocator, Streams, .{
-        .stdout = ctx.stdout_pipe,
-        .stderr = ctx.stderr_pipe,
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(ctx.allocator, std_compat.io(), multi_reader_buffer.toStreams(), &.{
+        ctx.stdout_pipe.toInner(),
+        ctx.stderr_pipe.toInner(),
     });
-    defer poller.deinit();
+    defer multi_reader.deinit();
 
-    const stdout_reader = poller.reader(.stdout);
-    const stderr_reader = poller.reader(.stderr);
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
 
-    while (poller.poll() catch false) {
+    while (multi_reader.fill(64, .none)) |_| {
         if (!flushBufferedToLog(&log_file, stdout_reader)) return;
         if (!flushBufferedToLog(&log_file, stderr_reader)) return;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => return,
     }
 
+    multi_reader.checkAnyError() catch return;
     _ = flushBufferedToLog(&log_file, stdout_reader);
     _ = flushBufferedToLog(&log_file, stderr_reader);
 }
 
-fn flushBufferedToLog(log_file: *std.fs.File, reader: *std.Io.Reader) bool {
+fn flushBufferedToLog(log_file: *std_compat.fs.File, reader: *std.Io.Reader) bool {
     const buffered = reader.buffered();
     if (buffered.len == 0) return true;
     log_file.writeAll(buffered) catch return false;
@@ -176,42 +198,62 @@ fn flushBufferedToLog(log_file: *std.fs.File, reader: *std.Io.Reader) bool {
 }
 
 /// Check whether a process with the given PID is still alive.
-///
-/// On POSIX systems, first tries a non-blocking waitpid to reap zombies,
-/// then sends signal 0. A zombie process has exited but not been waited on —
-/// `kill(pid, 0)` succeeds for zombies, giving a false positive. By calling
-/// `waitpid(WNOHANG)` first, we reap any zombie and correctly report it dead.
-pub fn isAlive(pid: std.process.Child.Id) bool {
+pub fn isAlive(pid: std_compat.process.Child.Id) bool {
     if (comptime builtin.os.tag == .windows) {
-        windows.WaitForSingleObjectEx(pid, 0, false) catch |err| switch (err) {
-            error.WaitTimeOut => return true,
-            else => return false,
+        const minimal_timeout: windows.LARGE_INTEGER = -1;
+        return switch (windows.ntdll.NtWaitForSingleObject(pid, .FALSE, &minimal_timeout)) {
+            windows.NTSTATUS.WAIT_0 => false,
+            .TIMEOUT, .USER_APC, .ALERTED => true,
+            else => false,
         };
-        return false;
     }
-    // Try to reap zombie — WNOHANG returns immediately.
-    // If waitpid returns the pid, the process has exited (zombie reaped).
-    const wait_result = std.posix.waitpid(pid, std.c.W.NOHANG);
-    if (wait_result.pid == pid) return false; // reaped zombie or exited child
+    return switch (std.posix.errno(std.posix.system.kill(pid, @as(std.posix.SIG, @enumFromInt(0))))) {
+        .SUCCESS => true,
+        else => false,
+    };
+}
 
-    if (std.posix.kill(pid, 0)) {
-        return true;
-    } else |_| {
-        return false;
+pub fn persistedPidValue(pid: std_compat.process.Child.Id) ?u64 {
+    if (comptime builtin.os.tag == .windows) {
+        const process_id = kernel32.GetProcessId(pid);
+        if (process_id == 0) return null;
+        return process_id;
+    }
+    return @as(u64, @intCast(pid));
+}
+
+pub fn reopenPersistedPid(pid_value: u64) ?std_compat.process.Child.Id {
+    if (comptime builtin.os.tag == .windows) {
+        const process_id: windows.DWORD = std.math.cast(windows.DWORD, pid_value) orelse return null;
+        const desired_access: windows.ACCESS_MASK = .{
+            .STANDARD = .{ .SYNCHRONIZE = true },
+            .SPECIFIC = .{ .PROCESS = .{
+                .TERMINATE = true,
+                .QUERY_LIMITED_INFORMATION = true,
+            } },
+        };
+        return kernel32.OpenProcess(desired_access, windows.BOOL.fromBool(false), process_id);
+    }
+    return std.math.cast(std_compat.process.Child.Id, pid_value);
+}
+
+pub fn releasePidHandle(pid: std_compat.process.Child.Id) void {
+    if (comptime builtin.os.tag == .windows) {
+        _ = kernel32.CloseHandle(pid);
     }
 }
 
 /// Send SIGTERM to a process, requesting graceful termination.
-pub fn terminate(pid: std.process.Child.Id) !void {
+pub fn terminate(pid: std_compat.process.Child.Id) !void {
     if (comptime builtin.os.tag == .windows) {
-        windows.TerminateProcess(pid, 15) catch |err| switch (err) {
-            error.AccessDenied => {
+        switch (windows.ntdll.NtTerminateProcess(pid, @enumFromInt(@as(windows.UINT, 15)))) {
+            .SUCCESS, .PROCESS_IS_TERMINATING => return,
+            .ACCESS_DENIED => {
                 if (!isAlive(pid)) return;
-                return err;
+                return error.AccessDenied;
             },
-            else => return err,
-        };
-        return;
+            else => |status| return windows.unexpectedStatus(status),
+        }
     }
     std.posix.kill(pid, std.posix.SIG.TERM) catch |err| switch (err) {
         error.ProcessNotFound => return, // already dead
@@ -220,16 +262,16 @@ pub fn terminate(pid: std.process.Child.Id) !void {
 }
 
 /// Send SIGKILL to a process, forcing immediate termination.
-pub fn forceKill(pid: std.process.Child.Id) !void {
+pub fn forceKill(pid: std_compat.process.Child.Id) !void {
     if (comptime builtin.os.tag == .windows) {
-        windows.TerminateProcess(pid, 9) catch |err| switch (err) {
-            error.AccessDenied => {
+        switch (windows.ntdll.NtTerminateProcess(pid, @enumFromInt(@as(windows.UINT, 9)))) {
+            .SUCCESS, .PROCESS_IS_TERMINATING => return,
+            .ACCESS_DENIED => {
                 if (!isAlive(pid)) return;
-                return err;
+                return error.AccessDenied;
             },
-            else => return err,
-        };
-        return;
+            else => |status| return windows.unexpectedStatus(status),
+        }
     }
     std.posix.kill(pid, std.posix.SIG.KILL) catch |err| switch (err) {
         error.ProcessNotFound => return, // already dead
@@ -241,7 +283,7 @@ pub fn forceKill(pid: std.process.Child.Id) !void {
 ///
 /// Returns null if the information is unavailable or not yet implemented
 /// for the current platform.
-pub fn getMemoryRss(pid: std.process.Child.Id) ?u64 {
+pub fn getMemoryRss(pid: std_compat.process.Child.Id) ?u64 {
     _ = pid;
     // TODO: platform-specific RSS reading
     // Linux: read /proc/{pid}/status and parse VmRSS line
@@ -344,8 +386,8 @@ test "spawn with stdout_path captures stdout and stderr" {
 
     const allocator = std.testing.allocator;
     const log_path = "/tmp/nullhub-test-process-log.txt";
-    std.fs.deleteFileAbsolute(log_path) catch {};
-    defer std.fs.deleteFileAbsolute(log_path) catch {};
+    std_compat.fs.deleteFileAbsolute(log_path) catch {};
+    defer std_compat.fs.deleteFileAbsolute(log_path) catch {};
 
     const result = try spawn(allocator, .{
         .binary = "/bin/sh",
@@ -357,8 +399,8 @@ test "spawn with stdout_path captures stdout and stderr" {
 
     var attempts: usize = 0;
     while (attempts < 50) : (attempts += 1) {
-        const file = std.fs.openFileAbsolute(log_path, .{}) catch {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+        const file = std_compat.fs.openFileAbsolute(log_path, .{}) catch {
+            std_compat.thread.sleep(10 * std.time.ns_per_ms);
             continue;
         };
         defer file.close();
@@ -369,7 +411,7 @@ test "spawn with stdout_path captures stdout and stderr" {
         const has_out = std.mem.indexOf(u8, contents, "out\n") != null;
         const has_err = std.mem.indexOf(u8, contents, "err\n") != null;
         if (has_out and has_err) return;
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        std_compat.thread.sleep(10 * std.time.ns_per_ms);
     }
 
     return error.TestUnexpectedResult;

@@ -46,10 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -73,8 +73,13 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.value }}
         run: npm --prefix ui version "$BUILD_VERSION" --no-git-tag-version --allow-same-version
 
+      - name: Build embedded UI assets
+        run: |
+          npm --prefix ui ci --no-audit --no-fund
+          npm --prefix ui run build
+
       - name: Build ReleaseSmall
-        run: zig build -Doptimize=ReleaseSmall -Dversion=${{ steps.version.outputs.value }} ${{ matrix.zig_target && format('-Dtarget={0}', matrix.zig_target) || '' }}
+        run: zig build -Doptimize=ReleaseSmall -Dbuild-ui=false -Dversion=${{ steps.version.outputs.value }} ${{ matrix.zig_target && format('-Dtarget={0}', matrix.zig_target) || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

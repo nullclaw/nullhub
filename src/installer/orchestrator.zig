@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
@@ -8,6 +9,7 @@ const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
 const local_binary = @import("../core/local_binary.zig");
+const fs_compat = @import("../fs_compat.zig");
 const launch_args_mod = @import("../core/launch_args.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const manager_mod = @import("../supervisor/manager.zig");
@@ -89,7 +91,7 @@ pub fn install(
     const comp_dir = std.fs.path.join(allocator, &.{ p.root, "instances", opts.component }) catch
         return error.DirCreationFailed;
     defer allocator.free(comp_dir);
-    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return error.DirCreationFailed,
     };
@@ -98,7 +100,7 @@ pub fn install(
     const inst_dir = p.instanceDir(allocator, opts.component, opts.instance_name) catch
         return error.DirCreationFailed;
     defer allocator.free(inst_dir);
-    if (std.fs.openDirAbsolute(inst_dir, .{})) |existing_dir| {
+    if (std_compat.fs.openDirAbsolute(inst_dir, .{})) |existing_dir| {
         var dir = existing_dir;
         dir.close();
         setLastErrorDetail("instance name already exists");
@@ -107,7 +109,7 @@ pub fn install(
         error.FileNotFound => {},
         else => return error.DirCreationFailed,
     }
-    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return error.DirCreationFailed,
     };
@@ -116,7 +118,7 @@ pub fn install(
     const data_dir = p.instanceData(allocator, opts.component, opts.instance_name) catch
         return error.DirCreationFailed;
     defer allocator.free(data_dir);
-    std.fs.makeDirAbsolute(data_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(data_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return error.DirCreationFailed,
     };
@@ -125,7 +127,7 @@ pub fn install(
     const logs_dir = p.instanceLogs(allocator, opts.component, opts.instance_name) catch
         return error.DirCreationFailed;
     defer allocator.free(logs_dir);
-    std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return error.DirCreationFailed,
     };
@@ -275,7 +277,9 @@ pub fn install(
         opts.instance_name,
         version,
     ) orelse port;
-    const effective_port = launch_args_mod.effectiveHealthPort(launch_command, runtime_port);
+    var launch = launch_args_mod.resolve(allocator, launch_command, false) catch return error.StartFailed;
+    defer launch.deinit();
+    const effective_port = launch.effectiveHealthPort(runtime_port);
 
     // 6. Register in state.json
     s.addInstance(opts.component, opts.instance_name, .{
@@ -287,18 +291,16 @@ pub fn install(
     s.save() catch return error.StateError;
 
     // 7. Start process via Manager
-    const launch_args = launch_args_mod.buildLaunchArgs(allocator, launch_command, false) catch return error.StartFailed;
-    defer allocator.free(launch_args);
     mgr.startInstance(
         opts.component,
         opts.instance_name,
         bin_path,
-        launch_args,
+        launch.argv,
         effective_port,
         health_endpoint,
         inst_dir,
         "",
-        launch_command,
+        launch.primary_command,
     ) catch return error.StartFailed;
 
     return .{
@@ -441,7 +443,7 @@ fn readManifestPortInfo(
 }
 
 fn readPortFromConfigPath(allocator: std.mem.Allocator, config_path: []const u8, dot_key: []const u8) ?u16 {
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
     defer file.close();
 
     const contents = file.readToEndAlloc(allocator, MAX_CONFIG_BYTES) catch return null;
@@ -483,19 +485,19 @@ fn injectPortFields(
 
     var root = &parsed.value.object;
     if (overwrite or root.get("port") == null) {
-        try root.put("port", .{ .integer = @as(i64, port) });
+        try root.put(allocator, "port", .{ .integer = @as(i64, port) });
     }
     if (overwrite or root.get("gateway_port") == null) {
-        try root.put("gateway_port", .{ .integer = @as(i64, port) });
+        try root.put(allocator, "gateway_port", .{ .integer = @as(i64, port) });
     }
     if (root.getPtr("gateway")) |gateway_value| {
         if (gateway_value.* == .object and (overwrite or gateway_value.object.get("port") == null)) {
-            try gateway_value.object.put("port", .{ .integer = @as(i64, port) });
+            try gateway_value.object.put(allocator, "port", .{ .integer = @as(i64, port) });
         }
     } else {
-        var gateway_obj = std.json.ObjectMap.init(allocator);
-        try gateway_obj.put("port", .{ .integer = @as(i64, port) });
-        try root.put("gateway", .{ .object = gateway_obj });
+        var gateway_obj: std.json.ObjectMap = .empty;
+        try gateway_obj.put(allocator, "port", .{ .integer = @as(i64, port) });
+        try root.put(allocator, "gateway", .{ .object = gateway_obj });
     }
 
     return std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
@@ -511,10 +513,9 @@ fn findFreePort(start: u16) u16 {
 }
 
 fn isPortFree(port: u16) bool {
-    const addr = std.net.Address.resolveIp("127.0.0.1", port) catch return false;
-    const sock = std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP) catch return false;
-    defer std.posix.close(sock);
-    std.posix.bind(sock, &addr.any, addr.getOsSockLen()) catch return false;
+    const addr = std_compat.net.Address.resolveIp("127.0.0.1", port) catch return false;
+    var listener = addr.listen(.{}) catch return false;
+    defer listener.deinit();
     return true;
 }
 
@@ -551,14 +552,14 @@ fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component:
     const bin_path = p.binary(allocator, component, version) catch return null;
     errdefer allocator.free(bin_path);
 
-    if (std.fs.openFileAbsolute(bin_path, .{})) |f| {
+    if (std_compat.fs.openFileAbsolute(bin_path, .{})) |f| {
         f.close();
         return .{ .version = version, .bin_path = bin_path };
     } else |_| {}
 
-    std.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
-    if (comptime std.fs.has_executable_bit) {
-        if (std.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
+    std_compat.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
+    if (comptime std_compat.fs.has_executable_bit) {
+        if (std_compat.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
             defer f.close();
             f.chmod(0o755) catch {};
         } else |_| {}
@@ -582,7 +583,7 @@ pub fn installUiModule(
             const dev_local_dest = try p.uiModule(allocator, ui_mod.name, dev_local_version);
             defer allocator.free(dev_local_dest);
 
-            std.fs.deleteTreeAbsolute(dev_local_dest) catch |err| switch (err) {
+            std_compat.fs.deleteTreeAbsolute(dev_local_dest) catch |err| switch (err) {
                 error.FileNotFound => {},
                 else => {},
             };
@@ -616,18 +617,51 @@ fn buildLocalUiModule(allocator: std.mem.Allocator, module_name: []const u8, des
 fn findLocalUiModuleDir(allocator: std.mem.Allocator, module_name: []const u8) ?[]const u8 {
     if (builtin.is_test) return null;
 
-    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
+    const cwd = std_compat.fs.cwd().realpathAlloc(allocator, ".") catch return null;
     defer allocator.free(cwd);
 
     const parent = std.fs.path.dirname(cwd) orelse return null;
     const module_dir = std.fs.path.join(allocator, &.{ parent, module_name }) catch return null;
 
-    var dir = std.fs.openDirAbsolute(module_dir, .{}) catch {
+    var dir = std_compat.fs.openDirAbsolute(module_dir, .{}) catch {
         allocator.free(module_dir);
         return null;
     };
     dir.close();
     return module_dir;
+}
+
+fn npmCommand() []const u8 {
+    return if (builtin.os.tag == .windows) "npm.cmd" else "npm";
+}
+
+fn copyDirectoryContents(allocator: std.mem.Allocator, source_dir_path: []const u8, dest_dir_path: []const u8) !void {
+    try fs_compat.makePath(dest_dir_path);
+
+    var source_dir = try std_compat.fs.openDirAbsolute(source_dir_path, .{ .iterate = true });
+    defer source_dir.close();
+
+    var walker = try source_dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        const dest_path = try std.fs.path.join(allocator, &.{ dest_dir_path, entry.path });
+        defer allocator.free(dest_path);
+
+        switch (entry.kind) {
+            .directory => try fs_compat.makePath(dest_path),
+            .file => {
+                if (std.fs.path.dirname(dest_path)) |dest_parent| {
+                    try fs_compat.makePath(dest_parent);
+                }
+
+                const source_path = try std.fs.path.join(allocator, &.{ source_dir_path, entry.path });
+                defer allocator.free(source_path);
+                try std_compat.fs.copyFileAbsolute(source_path, dest_path, .{});
+            },
+            else => return error.UnsupportedFileKind,
+        }
+    }
 }
 
 fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u8, dest_dir: []const u8) bool {
@@ -637,52 +671,31 @@ fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u
     defer allocator.free(module_dir_z);
 
     // Run npm run build:module
-    const build_result = std.process.Child.run(.{
+    const build_result = std_compat.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "npm", "run", "build:module" },
+        .argv = &.{ npmCommand(), "run", "build:module" },
         .cwd = module_dir_z,
     }) catch return false;
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
 
     switch (build_result.term) {
-        .Exited => |code| if (code != 0) {
+        .exited => |code| if (code != 0) {
             std.debug.print("UI module build failed (exit {d}):\n{s}\n", .{ code, build_result.stderr });
             return false;
         },
         else => return false,
     }
 
-    // Create dest_dir
-    std.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.FileNotFound => {
-            if (std.fs.path.dirname(dest_dir)) |p| {
-                std.fs.makeDirAbsolute(p) catch return false;
-                std.fs.makeDirAbsolute(dest_dir) catch return false;
-            } else return false;
-        },
-        else => return false,
-    };
-
     // Copy dist/ contents to dest_dir
     const dist_path = std.fs.path.join(allocator, &.{ module_dir, "dist" }) catch return false;
     defer allocator.free(dist_path);
 
-    const copy_cmd = std.fmt.allocPrint(allocator, "cp -r {s}/. {s}/", .{ dist_path, dest_dir }) catch return false;
-    defer allocator.free(copy_cmd);
-
-    const cp_result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ "sh", "-c", copy_cmd },
-    }) catch return false;
-    defer allocator.free(cp_result.stdout);
-    defer allocator.free(cp_result.stderr);
-
-    return switch (cp_result.term) {
-        .Exited => |code| code == 0,
-        else => false,
+    copyDirectoryContents(allocator, dist_path, dest_dir) catch |err| {
+        std.debug.print("UI module copy failed ({s})\n", .{@errorName(err)});
+        return false;
     };
+    return true;
 }
 
 pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void {
@@ -700,7 +713,7 @@ pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void
 
 /// Write content to a file at an absolute path, creating the file if needed.
 fn writeFile(path: []const u8, content: []const u8) !void {
-    const file = try std.fs.createFileAbsolute(path, .{});
+    const file = try std_compat.fs.createFileAbsolute(path, .{});
     defer file.close();
     try file.writeAll(content);
 }
@@ -791,8 +804,8 @@ test "resolveConfiguredPort reads nested answers port" {
 test "resolveConfiguredPort skips configured instance ports" {
     const allocator = std.testing.allocator;
     const root = "/tmp/test-orchestrator-port-used";
-    std.fs.deleteTreeAbsolute(root) catch {};
-    defer std.fs.deleteTreeAbsolute(root) catch {};
+    std_compat.fs.deleteTreeAbsolute(root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
 
     var paths = try paths_mod.Paths.init(allocator, root);
     defer paths.deinit(allocator);
@@ -808,13 +821,13 @@ test "resolveConfiguredPort skips configured instance ports" {
 
     const comp_dir = try std.fs.path.join(allocator, &.{ root, "instances", "nullclaw" });
     defer allocator.free(comp_dir);
-    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
     const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-1");
     defer allocator.free(inst_dir);
-    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -867,16 +880,16 @@ test "injectPortFields overwrites existing port fields when requested" {
 test "writeFile creates file with correct content" {
     const allocator = std.testing.allocator;
     const tmp_dir = "/tmp/test-orchestrator-write";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     const file_path = try std.fmt.allocPrint(allocator, "{s}/test.json", .{tmp_dir});
     defer allocator.free(file_path);
 
     try writeFile(file_path, "{\"hello\":\"world\"}");
 
-    const file = try std.fs.openFileAbsolute(file_path, .{});
+    const file = try std_compat.fs.openFileAbsolute(file_path, .{});
     defer file.close();
     var buf: [256]u8 = undefined;
     const n = try file.readAll(&buf);
@@ -886,8 +899,8 @@ test "writeFile creates file with correct content" {
 test "directory creation succeeds in temp directory" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/test-orchestrator-dirs";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
@@ -898,35 +911,78 @@ test "directory creation succeeds in temp directory" {
     // Create component dir
     const comp_dir = try std.fs.path.join(allocator, &.{ p.root, "instances", "testcomp" });
     defer allocator.free(comp_dir);
-    try std.fs.makeDirAbsolute(comp_dir);
+    try std_compat.fs.makeDirAbsolute(comp_dir);
 
     // Create instance dir
     const inst_dir = try p.instanceDir(allocator, "testcomp", "myinst");
     defer allocator.free(inst_dir);
-    try std.fs.makeDirAbsolute(inst_dir);
+    try std_compat.fs.makeDirAbsolute(inst_dir);
 
     // Create data and logs subdirs
     const data_dir = try p.instanceData(allocator, "testcomp", "myinst");
     defer allocator.free(data_dir);
-    try std.fs.makeDirAbsolute(data_dir);
+    try std_compat.fs.makeDirAbsolute(data_dir);
 
     const logs_dir = try p.instanceLogs(allocator, "testcomp", "myinst");
     defer allocator.free(logs_dir);
-    try std.fs.makeDirAbsolute(logs_dir);
+    try std_compat.fs.makeDirAbsolute(logs_dir);
 
     // Verify they all exist
     {
-        var d = try std.fs.openDirAbsolute(inst_dir, .{});
+        var d = try std_compat.fs.openDirAbsolute(inst_dir, .{});
         d.close();
     }
     {
-        var d = try std.fs.openDirAbsolute(data_dir, .{});
+        var d = try std_compat.fs.openDirAbsolute(data_dir, .{});
         d.close();
     }
     {
-        var d = try std.fs.openDirAbsolute(logs_dir, .{});
+        var d = try std_compat.fs.openDirAbsolute(logs_dir, .{});
         d.close();
     }
+}
+
+test "copyDirectoryContents recursively copies nested files" {
+    if (builtin.os.tag == .wasi) return;
+
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const root = try std_compat.fs.Dir.wrap(tmp_dir.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+
+    const source_dir = try std.fs.path.join(allocator, &.{ root, "source" });
+    defer allocator.free(source_dir);
+    const nested_dir = try std.fs.path.join(allocator, &.{ source_dir, "nested", "deep" });
+    defer allocator.free(nested_dir);
+    const dest_dir = try std.fs.path.join(allocator, &.{ root, "dest" });
+    defer allocator.free(dest_dir);
+
+    try fs_compat.makePath(nested_dir);
+
+    const top_level_file = try std.fs.path.join(allocator, &.{ source_dir, "index.js" });
+    defer allocator.free(top_level_file);
+    const nested_file = try std.fs.path.join(allocator, &.{ nested_dir, "chunk.js" });
+    defer allocator.free(nested_file);
+
+    try writeFile(top_level_file, "console.log('root');");
+    try writeFile(nested_file, "console.log('nested');");
+
+    try copyDirectoryContents(allocator, source_dir, dest_dir);
+
+    const copied_top_level = try std.fs.path.join(allocator, &.{ dest_dir, "index.js" });
+    defer allocator.free(copied_top_level);
+    const copied_nested = try std.fs.path.join(allocator, &.{ dest_dir, "nested", "deep", "chunk.js" });
+    defer allocator.free(copied_nested);
+
+    const top_bytes = try fs_compat.readFileAlloc(std_compat.fs.cwd(), allocator, copied_top_level, 1024);
+    defer allocator.free(top_bytes);
+    const nested_bytes = try fs_compat.readFileAlloc(std_compat.fs.cwd(), allocator, copied_nested, 1024);
+    defer allocator.free(nested_bytes);
+
+    try std.testing.expectEqualStrings("console.log('root');", top_bytes);
+    try std.testing.expectEqualStrings("console.log('nested');", nested_bytes);
 }
 
 test "injectHomeField adds home to JSON object" {

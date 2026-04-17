@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const access = @import("access.zig");
 const paths_mod = @import("core/paths.zig");
@@ -25,7 +26,7 @@ pub const Publisher = struct {
     provider: Provider = .none,
     alias_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     log_path: ?[]u8 = null,
-    children: [2]?std.process.Child = .{ null, null },
+    children: [2]?std_compat.process.Child = .{ null, null },
     verify_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     verify_thread: ?std.Thread = null,
 
@@ -141,13 +142,13 @@ pub const Publisher = struct {
             } else {
                 self.alias_active.store(false, .release);
             }
-            std.Thread.sleep(500 * std.time.ns_per_ms);
+            std_compat.thread.sleep(500 * std.time.ns_per_ms);
         }
     }
 
     fn aliasReachable(self: *Publisher, port: u16) bool {
         _ = self;
-        const stream = std.net.tcpConnectToHost(std.heap.page_allocator, access.public_alias_host, port) catch return false;
+        const stream = std_compat.net.tcpConnectToHost(std.heap.page_allocator, access.public_alias_host, port) catch return false;
         defer stream.close();
         return true;
     }
@@ -159,7 +160,7 @@ fn commandAvailable(allocator: std.mem.Allocator, binary: []const u8, args: []co
     argv.append(binary) catch return false;
     for (args) |arg| argv.append(arg) catch return false;
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = argv.items,
         .max_output_bytes = 8 * 1024,

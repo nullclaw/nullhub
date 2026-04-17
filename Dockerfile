@@ -12,7 +12,22 @@ RUN npm run build
 # -- Stage 2: Zig Build -------------------------------------------------------
 FROM --platform=$BUILDPLATFORM alpine:3.23 AS builder
 
-RUN apk add --no-cache zig musl-dev
+ARG ZIG_VERSION=0.16.0
+ARG BUILDARCH
+
+RUN apk add --no-cache curl musl-dev xz
+RUN set -eu; \
+    arch="${BUILDARCH:-$(uname -m)}"; \
+    case "${arch}" in \
+      amd64|x86_64) zig_pkg="zig-x86_64-linux-${ZIG_VERSION}.tar.xz" ;; \
+      arm64|aarch64) zig_pkg="zig-aarch64-linux-${ZIG_VERSION}.tar.xz" ;; \
+      *) echo "Unsupported build arch: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    curl -fL "https://ziglang.org/download/${ZIG_VERSION}/${zig_pkg}" -o /tmp/zig.tar.xz; \
+    mkdir -p /opt/zig; \
+    tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+    ln -s /opt/zig/zig /usr/local/bin/zig; \
+    rm -f /tmp/zig.tar.xz
 
 WORKDIR /app
 COPY build.zig build.zig.zon ./

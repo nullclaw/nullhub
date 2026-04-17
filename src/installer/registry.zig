@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const prereqs = @import("prereqs.zig");
 const manifest = @import("../core/manifest.zig");
 
@@ -179,7 +180,7 @@ pub fn fetchLatestRelease(allocator: std.mem.Allocator, repo: []const u8) !std.j
     const url = try buildReleasesUrl(allocator, repo);
     defer allocator.free(url);
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
     }) catch return error.FetchFailed;
@@ -187,7 +188,7 @@ pub fn fetchLatestRelease(allocator: std.mem.Allocator, repo: []const u8) !std.j
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.FetchFailed;
         },
         else => return error.FetchFailed,
@@ -206,7 +207,7 @@ pub fn fetchReleaseByTag(allocator: std.mem.Allocator, repo: []const u8, tag: []
     const url = try buildReleaseByTagUrl(allocator, repo, tag);
     defer allocator.free(url);
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
     }) catch return error.FetchFailed;
@@ -214,7 +215,7 @@ pub fn fetchReleaseByTag(allocator: std.mem.Allocator, repo: []const u8, tag: []
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.FetchFailed;
         },
         else => return error.FetchFailed,

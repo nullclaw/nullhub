@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 
 pub const CatalogEntry = struct {
     name: []const u8,
@@ -68,7 +69,7 @@ pub fn installBundledSkill(
     const existing = readOptionalFileAlloc(allocator, skill_md_path, bundled.instructions.len + 4096) catch null;
     defer if (existing) |bytes| allocator.free(bytes);
 
-    const file = try std.fs.createFileAbsolute(skill_md_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(skill_md_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(bundled.instructions);
 
@@ -104,10 +105,7 @@ pub fn syncBundledSkillRuntime(
 }
 
 fn ensurePathAbsolute(path: []const u8) !void {
-    std.fs.cwd().makePath(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std_compat.fs.cwd().makePath(path);
 }
 
 fn findBundledSkill(name: []const u8) ?BundledSkill {
@@ -124,7 +122,7 @@ fn syncAllowedCommands(
 ) !bool {
     if (required_allowed_commands.len == 0) return false;
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -138,10 +136,11 @@ fn syncAllowedCommands(
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
+    const json_allocator = parsed.arena.allocator();
 
     if (parsed.value != .object) return error.InvalidConfig;
     const root = &parsed.value.object;
-    const autonomy = try ensureObjectField(allocator, root, "autonomy");
+    const autonomy = try ensureObjectField(json_allocator, root, "autonomy");
 
     if (autonomy.get("level")) |level_value| {
         if (level_value == .string and
@@ -159,7 +158,7 @@ fn syncAllowedCommands(
         }
     }
 
-    const allowed_value = try ensureArrayField(allocator, autonomy, "allowed_commands");
+    const allowed_value = try ensureArrayField(json_allocator, autonomy, "allowed_commands");
     var changed = false;
     for (required_allowed_commands) |command| {
         if (arrayContainsString(allowed_value.*, command)) continue;
@@ -174,7 +173,7 @@ fn syncAllowedCommands(
     });
     defer allocator.free(rendered);
 
-    const out = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    const out = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer out.close();
     try out.writeAll(rendered);
     try out.writeAll("\n");
@@ -186,13 +185,13 @@ fn ensureObjectField(
     obj: *std.json.ObjectMap,
     key: []const u8,
 ) !*std.json.ObjectMap {
-    const gop = try obj.getOrPut(key);
+    const gop = try obj.getOrPut(allocator, key);
     if (!gop.found_existing) {
-        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        gop.value_ptr.* = .{ .object = .empty };
         return &gop.value_ptr.object;
     }
     if (gop.value_ptr.* != .object) {
-        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        gop.value_ptr.* = .{ .object = .empty };
     }
     return &gop.value_ptr.object;
 }
@@ -202,7 +201,7 @@ fn ensureArrayField(
     obj: *std.json.ObjectMap,
     key: []const u8,
 ) !*std.json.Array {
-    const gop = try obj.getOrPut(key);
+    const gop = try obj.getOrPut(allocator, key);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{ .array = std.json.Array.init(allocator) };
         return &gop.value_ptr.array;
@@ -225,7 +224,7 @@ fn readOptionalFileAlloc(
     path: []const u8,
     max_bytes: usize,
 ) !?[]u8 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -286,7 +285,7 @@ test "syncBundledSkillRuntime preserves supervised level and adds nullhub comman
     const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
     defer allocator.free(config_path);
 
-    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll("{\"autonomy\":{\"level\":\"supervised\",\"allowed_commands\":[\"git\"]}}\n");
 
@@ -312,7 +311,7 @@ test "syncBundledSkillRuntime preserves full level without narrowing access" {
     const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
     defer allocator.free(config_path);
 
-    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll("{\"autonomy\":{\"level\":\"full\",\"allowed_commands\":[]}}\n");
 
@@ -339,7 +338,7 @@ test "installAlwaysBundledSkills installs skill and syncs runtime access" {
 
     const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
     defer allocator.free(config_path);
-    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll("{\"autonomy\":{\"level\":\"supervised\"}}\n");
 
@@ -354,4 +353,40 @@ test "installAlwaysBundledSkills installs skill and syncs runtime access" {
     const rendered = try std.fs.readFileAbsolute(allocator, config_path, 64 * 1024);
     defer allocator.free(rendered);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\"nullhub *\"") != null);
+}
+
+test "syncBundledSkillRuntime creates autonomy block when missing" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cwd_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const config_path = try std.fs.path.join(allocator, &.{ cwd_path, "config.json" });
+    defer allocator.free(config_path);
+
+    var json = std.array_list.Managed(u8).init(allocator);
+    defer json.deinit();
+    try json.append('{');
+    for (0..32) |i| {
+        if (i != 0) try json.append(',');
+        const entry = try std.fmt.allocPrint(allocator, "\"field_{d}\":{d}", .{ i, i });
+        defer allocator.free(entry);
+        try json.appendSlice(entry);
+    }
+    try json.appendSlice("}\n");
+
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(json.items);
+
+    try std.testing.expect(try syncBundledSkillRuntime(allocator, config_path, "nullhub-admin"));
+
+    var parsed = try parseAutonomyConfig(allocator, config_path);
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.value.autonomy.allowed_commands != null);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.autonomy.allowed_commands.?.len);
+    try std.testing.expectEqualStrings("nullhub *", parsed.value.autonomy.allowed_commands.?[0]);
 }

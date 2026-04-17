@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const state_mod = @import("../core/state.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
@@ -264,10 +265,10 @@ fn probeProvider(
     const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-provider-validate", "") catch
         return .{ .live_ok = false, .reason = "tmp_dir_failed" };
     defer {
-        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
     }
-    std.fs.makeDirAbsolute(tmp_dir) catch return .{ .live_ok = false, .reason = "tmp_dir_failed" };
+    std_compat.fs.makeDirAbsolute(tmp_dir) catch return .{ .live_ok = false, .reason = "tmp_dir_failed" };
 
     wizard_api.writeMinimalProviderConfigPub(allocator, tmp_dir, provider, api_key, base_url) catch
         return .{ .live_ok = false, .reason = "config_write_failed" };
@@ -334,7 +335,7 @@ fn appendProviderJson(buf: *std.array_list.Managed(u8), sp: state_mod.SavedProvi
 }
 
 pub fn nowIso8601(allocator: std.mem.Allocator) ![]const u8 {
-    const timestamp = std.time.timestamp();
+    const timestamp = std_compat.time.timestamp();
     const epoch_secs: std.time.epoch.EpochSeconds = .{ .secs = @intCast(@max(0, timestamp)) };
     const day = epoch_secs.getDaySeconds();
     const year_day = epoch_secs.getEpochDay().calculateYearDay();
@@ -446,9 +447,9 @@ test "findProviderProbeComponent returns null without nullclaw instances" {
 test "handleDelete removes provider" {
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-provider-test-delete";
-    std.fs.deleteTreeAbsolute(tmp) catch {};
-    std.fs.makeDirAbsolute(tmp) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
 
     const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
     defer allocator.free(path);

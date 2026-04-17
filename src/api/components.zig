@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const registry = @import("../installer/registry.zig");
 const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
@@ -19,13 +20,13 @@ pub fn deriveDisplayName(allocator: std.mem.Allocator, name: []const u8) ![]cons
 
 /// Check if a component has a standalone installation at ~/.{component}/config.json
 fn hasStandaloneInstall(allocator: std.mem.Allocator, component: []const u8) bool {
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch return false;
+    const home = std_compat.process.getEnvVarOwned(allocator, "HOME") catch return false;
     defer allocator.free(home);
     const dot_name = std.fmt.allocPrint(allocator, ".{s}", .{component}) catch return false;
     defer allocator.free(dot_name);
     const config_path = std.fs.path.join(allocator, &.{ home, dot_name, "config.json" }) catch return false;
     defer allocator.free(config_path);
-    std.fs.accessAbsolute(config_path, .{}) catch return false;
+    std_compat.fs.accessAbsolute(config_path, .{}) catch return false;
     return true;
 }
 
@@ -46,12 +47,10 @@ pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8
 fn buildListJson(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
-    const writer = buf.writer();
-
-    try writer.writeAll("{\"components\":[");
+    try buf.appendSlice("{\"components\":[");
 
     for (registry.known_components, 0..) |comp, i| {
-        if (i > 0) try writer.writeByte(',');
+        if (i > 0) try buf.append(',');
 
         // Count managed instances from state
         const instance_count = countInstancesFromState(s, comp.name);
@@ -61,7 +60,7 @@ fn buildListJson(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 
         const standalone = has_dot_dir and instance_count == 0;
         const installed = has_dot_dir or instance_count > 0;
 
-        try writer.print(
+        try buf.print(
             "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"{s}\",\"repo\":\"{s}\",\"alpha\":{s},\"installed\":{s},\"standalone\":{s},\"instance_count\":{d}}}",
             .{
                 comp.name,
@@ -76,7 +75,7 @@ fn buildListJson(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 
         );
     }
 
-    try writer.writeAll("]}");
+    try buf.appendSlice("]}");
     return buf.toOwnedSlice();
 }
 
@@ -96,7 +95,7 @@ pub fn handleManifest(allocator: std.mem.Allocator, component_name: []const u8) 
     defer allocator.free(manifests_dir_path);
 
     // Look for any manifest file matching "{component_name}@*.json"
-    var dir = std.fs.openDirAbsolute(manifests_dir_path, .{ .iterate = true }) catch return null;
+    var dir = std_compat.fs.openDirAbsolute(manifests_dir_path, .{ .iterate = true }) catch return null;
     defer dir.close();
 
     const prefix = try std.fmt.allocPrint(allocator, "{s}@", .{component_name});
@@ -112,7 +111,7 @@ pub fn handleManifest(allocator: std.mem.Allocator, component_name: []const u8) 
             const full_path = try std.fs.path.join(allocator, &.{ manifests_dir_path, entry.name });
             defer allocator.free(full_path);
 
-            const file = std.fs.openFileAbsolute(full_path, .{}) catch return null;
+            const file = std_compat.fs.openFileAbsolute(full_path, .{}) catch return null;
             defer file.close();
 
             const contents = file.readToEndAlloc(allocator, 1024 * 1024) catch return null;

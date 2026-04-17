@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const registry = @import("registry.zig");
 const prereqs = @import("prereqs.zig");
 
@@ -16,7 +17,7 @@ pub fn fetchReleases(allocator: std.mem.Allocator, repo: []const u8) !std.json.P
     const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/releases?per_page=50", .{repo});
     defer allocator.free(url);
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
         .max_output_bytes = 2 * 1024 * 1024,
@@ -25,7 +26,7 @@ pub fn fetchReleases(allocator: std.mem.Allocator, repo: []const u8) !std.json.P
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.FetchFailed;
         },
         else => return error.FetchFailed,

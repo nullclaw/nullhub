@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const prereqs = @import("prereqs.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -14,7 +15,7 @@ pub const DownloadError = error{
 pub fn computeSha256(allocator: std.mem.Allocator, file_path: []const u8) ![64]u8 {
     _ = allocator;
 
-    var file = try std.fs.openFileAbsolute(file_path, .{});
+    var file = try std_compat.fs.openFileAbsolute(file_path, .{});
     defer file.close();
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -43,13 +44,13 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []cons
 
     // Ensure parent directory exists.
     if (std.fs.path.dirnamePosix(dest_path)) |parent| {
-        std.fs.makeDirAbsolute(parent) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(parent) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
     }
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "curl", "-sfL", "-o", tmp_path, url },
     }) catch return error.DownloadFailed;
@@ -57,23 +58,18 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []cons
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.DownloadFailed;
         },
         else => return error.DownloadFailed,
     }
 
     // Atomic rename from .tmp to final destination.
-    const tmp_path_z = try allocator.dupeZ(u8, tmp_path);
-    defer allocator.free(tmp_path_z);
-    const dest_path_z = try allocator.dupeZ(u8, dest_path);
-    defer allocator.free(dest_path_z);
+    try std_compat.fs.renameAbsolute(tmp_path, dest_path);
 
-    try std.posix.rename(tmp_path_z, dest_path_z);
-
-    if (comptime std.fs.has_executable_bit) {
+    if (comptime std_compat.fs.has_executable_bit) {
         // Set executable permission (rwxr-xr-x) on platforms that support it.
-        if (std.fs.openFileAbsolute(dest_path, .{ .mode = .read_only })) |f| {
+        if (std_compat.fs.openFileAbsolute(dest_path, .{ .mode = .read_only })) |f| {
             defer f.close();
             f.chmod(0o755) catch {};
         } else |_| {}
@@ -95,7 +91,7 @@ pub fn downloadWithSha256(
     const actual_hex = try computeSha256(allocator, dest_path);
     if (!std.mem.eql(u8, &actual_hex, expected_sha256)) {
         // Clean up the mismatched file.
-        std.fs.deleteFileAbsolute(dest_path) catch {};
+        std_compat.fs.deleteFileAbsolute(dest_path) catch {};
         return error.ChecksumMismatch;
     }
 }
@@ -107,15 +103,15 @@ test "computeSha256 returns correct hash for known content" {
 
     // Write a temp file with known content.
     const tmp_dir = "/tmp/test-nullhub-downloader-sha256";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     const file_path_buf = try std.fmt.allocPrint(allocator, "{s}/testfile", .{tmp_dir});
     defer allocator.free(file_path_buf);
 
     {
-        var file = try std.fs.createFileAbsolute(file_path_buf, .{});
+        var file = try std_compat.fs.createFileAbsolute(file_path_buf, .{});
         defer file.close();
         try file.writeAll("hello world");
     }
@@ -131,9 +127,9 @@ test "download performs atomic rename and sets executable bit" {
     const allocator = std.testing.allocator;
 
     const tmp_dir = "/tmp/test-nullhub-downloader-rename";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     const src_path = try std.fmt.allocPrint(allocator, "{s}/source.txt", .{tmp_dir});
     defer allocator.free(src_path);
@@ -142,7 +138,7 @@ test "download performs atomic rename and sets executable bit" {
 
     // Write a source file to serve via file:// URI.
     {
-        var file = try std.fs.createFileAbsolute(src_path, .{});
+        var file = try std_compat.fs.createFileAbsolute(src_path, .{});
         defer file.close();
         try file.writeAll("binary content");
     }
@@ -154,7 +150,7 @@ test "download performs atomic rename and sets executable bit" {
 
     // Verify the file exists at dest_path with correct content.
     {
-        var file = try std.fs.openFileAbsolute(dest_path, .{});
+        var file = try std_compat.fs.openFileAbsolute(dest_path, .{});
         defer file.close();
         var buf: [256]u8 = undefined;
         const n = try file.readAll(&buf);
@@ -165,13 +161,13 @@ test "download performs atomic rename and sets executable bit" {
     {
         const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{dest_path});
         defer allocator.free(tmp_path);
-        const result = std.fs.openFileAbsolute(tmp_path, .{});
+        const result = std_compat.fs.openFileAbsolute(tmp_path, .{});
         try std.testing.expectError(error.FileNotFound, result);
     }
 
     // Verify executable permission is set.
     {
-        const stat = try std.fs.openFileAbsolute(dest_path, .{});
+        const stat = try std_compat.fs.openFileAbsolute(dest_path, .{});
         defer stat.close();
         const md = try stat.metadata();
         const perms = md.permissions().inner;
@@ -184,9 +180,9 @@ test "downloadWithSha256 detects checksum mismatch" {
     const allocator = std.testing.allocator;
 
     const tmp_dir = "/tmp/test-nullhub-downloader-mismatch";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     const src_path = try std.fmt.allocPrint(allocator, "{s}/source.txt", .{tmp_dir});
     defer allocator.free(src_path);
@@ -194,7 +190,7 @@ test "downloadWithSha256 detects checksum mismatch" {
     defer allocator.free(dest_path);
 
     {
-        var file = try std.fs.createFileAbsolute(src_path, .{});
+        var file = try std_compat.fs.createFileAbsolute(src_path, .{});
         defer file.close();
         try file.writeAll("some content");
     }
@@ -208,7 +204,7 @@ test "downloadWithSha256 detects checksum mismatch" {
     try std.testing.expectError(error.ChecksumMismatch, result);
 
     // Verify the file was cleaned up.
-    const open_result = std.fs.openFileAbsolute(dest_path, .{});
+    const open_result = std_compat.fs.openFileAbsolute(dest_path, .{});
     try std.testing.expectError(error.FileNotFound, open_result);
 }
 
@@ -216,9 +212,9 @@ test "downloadWithSha256 succeeds with correct hash" {
     const allocator = std.testing.allocator;
 
     const tmp_dir = "/tmp/test-nullhub-downloader-sha-ok";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     const src_path = try std.fmt.allocPrint(allocator, "{s}/source.txt", .{tmp_dir});
     defer allocator.free(src_path);
@@ -226,7 +222,7 @@ test "downloadWithSha256 succeeds with correct hash" {
     defer allocator.free(dest_path);
 
     {
-        var file = try std.fs.createFileAbsolute(src_path, .{});
+        var file = try std_compat.fs.createFileAbsolute(src_path, .{});
         defer file.close();
         try file.writeAll("hello world");
     }
@@ -239,7 +235,7 @@ test "downloadWithSha256 succeeds with correct hash" {
 
     // Verify file exists with correct content.
     {
-        var file = try std.fs.openFileAbsolute(dest_path, .{});
+        var file = try std_compat.fs.openFileAbsolute(dest_path, .{});
         defer file.close();
         var buf: [256]u8 = undefined;
         const n = try file.readAll(&buf);

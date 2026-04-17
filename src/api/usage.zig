@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const state_mod = @import("../core/state.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
@@ -36,7 +37,7 @@ const TimeseriesBucket = struct {
 /// GET /api/usage?window=24h|7d|30d|all
 /// Aggregates token usage across all instances.
 pub fn handleGlobalUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, target: []const u8) ApiResponse {
-    const now_ts = std.time.timestamp();
+    const now_ts = std_compat.time.timestamp();
     const window = instances_api.parseUsageWindow(target);
     const min_ts = instances_api.usageWindowMinTs(window, now_ts);
     const use_hourly = instances_api.isShortUsageWindow(window);
@@ -100,7 +101,7 @@ pub fn handleGlobalUsage(allocator: std.mem.Allocator, s: *state_mod.State, path
             var ledger_size: u64 = 0;
             var ledger_mtime_ns: i64 = 0;
             var ledger_exists = false;
-            const ledger_file = std.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
+            const ledger_file = std_compat.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => null,
                 else => return helpers.serverError(),
             };
@@ -288,10 +289,10 @@ fn serializeResponse(
 
     buf.appendSlice("{\"window\":\"") catch return helpers.serverError();
     appendEscaped(&buf, window) catch return helpers.serverError();
-    buf.writer().print("\",\"generated_at\":{d}", .{now_ts}) catch return helpers.serverError();
+    buf.print("\",\"generated_at\":{d}", .{now_ts}) catch return helpers.serverError();
 
     // totals
-    buf.writer().print(",\"totals\":{{\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
+    buf.print(",\"totals\":{{\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
         grand_prompt, grand_completion, grand_total, grand_requests,
     }) catch return helpers.serverError();
 
@@ -308,7 +309,7 @@ fn serializeResponse(
             appendEscaped(&buf, v.provider) catch return helpers.serverError();
             buf.appendSlice("\",\"model\":\"") catch return helpers.serverError();
             appendEscaped(&buf, v.model) catch return helpers.serverError();
-            buf.writer().print("\",\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d},\"last_used\":{d}}}", .{
+            buf.print("\",\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d},\"last_used\":{d}}}", .{
                 v.prompt_tokens, v.completion_tokens, v.total_tokens, v.requests, v.last_used,
             }) catch return helpers.serverError();
         }
@@ -328,7 +329,7 @@ fn serializeResponse(
             appendEscaped(&buf, v.component) catch return helpers.serverError();
             buf.appendSlice("\",\"name\":\"") catch return helpers.serverError();
             appendEscaped(&buf, v.name) catch return helpers.serverError();
-            buf.writer().print("\",\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
+            buf.print("\",\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
                 v.prompt_tokens, v.completion_tokens, v.total_tokens, v.requests,
             }) catch return helpers.serverError();
         }
@@ -349,7 +350,7 @@ fn serializeResponse(
         for (ts_keys.items, 0..) |ts_key, idx| {
             if (idx > 0) buf.append(',') catch return helpers.serverError();
             const b = ts_map.get(ts_key) orelse continue;
-            buf.writer().print("{{\"bucket_start\":{d},\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
+            buf.print("{{\"bucket_start\":{d},\"prompt_tokens\":{d},\"completion_tokens\":{d},\"total_tokens\":{d},\"requests\":{d}}}", .{
                 ts_key, b.prompt_tokens, b.completion_tokens, b.total_tokens, b.requests,
             }) catch return helpers.serverError();
         }

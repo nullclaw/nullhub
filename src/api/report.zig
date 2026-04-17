@@ -6,36 +6,34 @@ const report_schema = @import("../report_schema.zig");
 
 pub fn handleMeta(allocator: std.mem.Allocator) helpers.ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    w.writeAll("{\"repos\":[") catch return helpers.serverError();
+    buf.appendSlice("{\"repos\":[") catch return helpers.serverError();
     for (report_schema.repos(), 0..) |repo_spec, i| {
-        if (i > 0) w.writeAll(",") catch return helpers.serverError();
-        w.writeAll("{\"value\":\"") catch return helpers.serverError();
+        if (i > 0) buf.appendSlice(",") catch return helpers.serverError();
+        buf.appendSlice("{\"value\":\"") catch return helpers.serverError();
         helpers.appendEscaped(&buf, repo_spec.value) catch return helpers.serverError();
-        w.writeAll("\",\"label\":\"") catch return helpers.serverError();
+        buf.appendSlice("\",\"label\":\"") catch return helpers.serverError();
         helpers.appendEscaped(&buf, repo_spec.display_name) catch return helpers.serverError();
-        w.writeAll("\",\"repo\":\"") catch return helpers.serverError();
+        buf.appendSlice("\",\"repo\":\"") catch return helpers.serverError();
         helpers.appendEscaped(&buf, repo_spec.github_repo) catch return helpers.serverError();
-        w.writeAll("\"}") catch return helpers.serverError();
+        buf.appendSlice("\"}") catch return helpers.serverError();
     }
-    w.writeAll("],\"types\":[") catch return helpers.serverError();
+    buf.appendSlice("],\"types\":[") catch return helpers.serverError();
     for (report_schema.types(), 0..) |type_spec, i| {
-        if (i > 0) w.writeAll(",") catch return helpers.serverError();
-        w.writeAll("{\"value\":\"") catch return helpers.serverError();
+        if (i > 0) buf.appendSlice(",") catch return helpers.serverError();
+        buf.appendSlice("{\"value\":\"") catch return helpers.serverError();
         helpers.appendEscaped(&buf, type_spec.value) catch return helpers.serverError();
-        w.writeAll("\",\"label\":\"") catch return helpers.serverError();
+        buf.appendSlice("\",\"label\":\"") catch return helpers.serverError();
         helpers.appendEscaped(&buf, type_spec.display_name) catch return helpers.serverError();
-        w.writeAll("\",\"labels\":[") catch return helpers.serverError();
+        buf.appendSlice("\",\"labels\":[") catch return helpers.serverError();
         for (type_spec.labels, 0..) |label, j| {
-            if (j > 0) w.writeAll(",") catch return helpers.serverError();
-            w.writeAll("\"") catch return helpers.serverError();
+            if (j > 0) buf.appendSlice(",") catch return helpers.serverError();
+            buf.appendSlice("\"") catch return helpers.serverError();
             helpers.appendEscaped(&buf, label) catch return helpers.serverError();
-            w.writeAll("\"") catch return helpers.serverError();
+            buf.appendSlice("\"") catch return helpers.serverError();
         }
-        w.writeAll("]}") catch return helpers.serverError();
+        buf.appendSlice("]}") catch return helpers.serverError();
     }
-    w.writeAll("]}") catch return helpers.serverError();
+    buf.appendSlice("]}") catch return helpers.serverError();
 
     return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
 }
@@ -62,23 +60,21 @@ pub fn handlePreview(allocator: std.mem.Allocator, body: []const u8) helpers.Api
 
     // Build JSON response
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    w.writeAll("{\"title\":\"") catch return helpers.serverError();
+    buf.appendSlice("{\"title\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, title) catch return helpers.serverError();
-    w.writeAll("\",\"markdown\":\"") catch return helpers.serverError();
+    buf.appendSlice("\",\"markdown\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, markdown) catch return helpers.serverError();
-    w.writeAll("\",\"labels\":[") catch return helpers.serverError();
+    buf.appendSlice("\",\"labels\":[") catch return helpers.serverError();
     const labels = parsed.report_type.toLabels();
     for (labels, 0..) |label, i| {
-        if (i > 0) w.writeAll(",") catch return helpers.serverError();
-        w.writeAll("\"") catch return helpers.serverError();
-        w.writeAll(label) catch return helpers.serverError();
-        w.writeAll("\"") catch return helpers.serverError();
+        if (i > 0) buf.appendSlice(",") catch return helpers.serverError();
+        buf.appendSlice("\"") catch return helpers.serverError();
+        buf.appendSlice(label) catch return helpers.serverError();
+        buf.appendSlice("\"") catch return helpers.serverError();
     }
-    w.writeAll("],\"repo\":\"") catch return helpers.serverError();
-    w.writeAll(parsed.repo.toGithubRepo()) catch return helpers.serverError();
-    w.writeAll("\"}") catch return helpers.serverError();
+    buf.appendSlice("],\"repo\":\"") catch return helpers.serverError();
+    buf.appendSlice(parsed.repo.toGithubRepo()) catch return helpers.serverError();
+    buf.appendSlice("\"}") catch return helpers.serverError();
 
     return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
 }
@@ -113,10 +109,9 @@ pub fn handleSubmit(allocator: std.mem.Allocator, body: []const u8) helpers.ApiR
         .success => |url| {
             defer allocator.free(url);
             var buf = std.array_list.Managed(u8).init(allocator);
-            const w = buf.writer();
-            w.writeAll("{\"status\":\"created\",\"url\":\"") catch return helpers.serverError();
+            buf.appendSlice("{\"status\":\"created\",\"url\":\"") catch return helpers.serverError();
             helpers.appendEscaped(&buf, url) catch return helpers.serverError();
-            w.writeAll("\"}") catch return helpers.serverError();
+            buf.appendSlice("\"}") catch return helpers.serverError();
             return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
         },
         .manual => |manual| {
@@ -188,36 +183,34 @@ fn buildManualResponse(
     manual: report.ManualSubmission,
 ) helpers.ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
     const status = switch (manual.kind) {
         .no_auth => "no_auth",
         .submit_failed => "failed",
     };
 
-    w.writeAll("{\"status\":\"") catch return helpers.serverError();
-    w.writeAll(status) catch return helpers.serverError();
-    w.writeAll("\",\"title\":\"") catch return helpers.serverError();
+    buf.appendSlice("{\"status\":\"") catch return helpers.serverError();
+    buf.appendSlice(status) catch return helpers.serverError();
+    buf.appendSlice("\",\"title\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, title) catch return helpers.serverError();
-    w.writeAll("\",\"markdown\":\"") catch return helpers.serverError();
+    buf.appendSlice("\",\"markdown\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, markdown) catch return helpers.serverError();
-    w.writeAll("\",\"labels\":[") catch return helpers.serverError();
+    buf.appendSlice("\",\"labels\":[") catch return helpers.serverError();
     const labels = report_type.toLabels();
     for (labels, 0..) |label, i| {
-        if (i > 0) w.writeAll(",") catch return helpers.serverError();
-        w.writeAll("\"") catch return helpers.serverError();
-        w.writeAll(label) catch return helpers.serverError();
-        w.writeAll("\"") catch return helpers.serverError();
+        if (i > 0) buf.appendSlice(",") catch return helpers.serverError();
+        buf.appendSlice("\"") catch return helpers.serverError();
+        buf.appendSlice(label) catch return helpers.serverError();
+        buf.appendSlice("\"") catch return helpers.serverError();
     }
-    w.writeAll("],\"repo\":\"") catch return helpers.serverError();
-    w.writeAll(repo.toGithubRepo()) catch return helpers.serverError();
-    w.writeAll("\",\"manual_url\":\"") catch return helpers.serverError();
+    buf.appendSlice("],\"repo\":\"") catch return helpers.serverError();
+    buf.appendSlice(repo.toGithubRepo()) catch return helpers.serverError();
+    buf.appendSlice("\",\"manual_url\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, manual.manual_url) catch return helpers.serverError();
-    w.writeAll("\",\"error\":\"") catch return helpers.serverError();
+    buf.appendSlice("\",\"error\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, manual.reason) catch return helpers.serverError();
-    w.writeAll("\",\"hint\":\"") catch return helpers.serverError();
+    buf.appendSlice("\",\"hint\":\"") catch return helpers.serverError();
     helpers.appendEscaped(&buf, manual.hint) catch return helpers.serverError();
-    w.writeAll("\"}") catch return helpers.serverError();
+    buf.appendSlice("\"}") catch return helpers.serverError();
 
     return helpers.jsonOk(buf.toOwnedSlice() catch return helpers.serverError());
 }

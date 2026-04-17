@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const cli = @import("cli.zig");
 const report_schema = @import("report_schema.zig");
@@ -50,14 +51,14 @@ pub fn collectSystemInfo(allocator: std.mem.Allocator) !SystemInfo {
 }
 
 fn getOsVersion(allocator: std.mem.Allocator) ![]const u8 {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "uname", "-sr" },
     }) catch return error.CommandFailed;
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 allocator.free(result.stdout);
                 return error.CommandFailed;
@@ -258,7 +259,7 @@ fn loadTemplateFromLocal(
     const local_path = report_schema.localTemplatePathAlloc(allocator, repo, report_type) catch return null;
     defer allocator.free(local_path);
 
-    return std.fs.cwd().readFileAlloc(allocator, local_path, 256 * 1024) catch null;
+    return std_compat.fs.cwd().readFileAlloc(allocator, local_path, 256 * 1024) catch null;
 }
 
 fn loadTemplateFromRemote(
@@ -273,7 +274,7 @@ fn loadTemplateFromRemote(
 }
 
 fn fetchText(allocator: std.mem.Allocator, url: []const u8) ![]const u8 {
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
     var response_body = std.Io.Writer.Allocating.init(allocator);
@@ -301,7 +302,7 @@ fn parseIssueTemplateText(arena: *std.heap.ArenaAllocator, text: []const u8) !Lo
     var lines = std.array_list.Managed([]const u8).init(a);
     var line_iter = std.mem.splitScalar(u8, text, '\n');
     while (line_iter.next()) |line_raw| {
-        try lines.append(std.mem.trimRight(u8, line_raw, "\r"));
+        try lines.append(std_compat.mem.trimRight(u8, line_raw, "\r"));
     }
 
     const body_indent: usize = 2;
@@ -482,7 +483,7 @@ fn buildFallbackTemplate(arena: *std.heap.ArenaAllocator, report_type: cli.Repor
 }
 
 fn duplicateTrimmed(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    return allocator.dupe(u8, std.mem.trimRight(u8, raw, "\r\n"));
+    return allocator.dupe(u8, std_compat.mem.trimRight(u8, raw, "\r\n"));
 }
 
 fn leadingSpaces(line: []const u8) usize {
@@ -662,8 +663,10 @@ fn buildBodyFromTemplate(
     var template = try loadIssueTemplate(allocator, repo, report_type);
     defer template.deinit();
 
-    var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
+    const w = &aw.writer;
 
     var field_index: usize = 0;
     while (field_index < template.fields.len and template.fields[field_index].kind == .markdown) : (field_index += 1) {
@@ -682,7 +685,8 @@ fn buildBodyFromTemplate(
     }
     try appendSystemInfo(w, info);
 
-    return buf.toOwnedSlice();
+    buf = aw.toArrayList();
+    return buf.toOwnedSlice(allocator);
 }
 
 // ─── Markdown Generation ────────────────────────────────────────────────────
@@ -760,13 +764,11 @@ pub fn buildManualIssueUrl(
     body: []const u8,
 ) ![]const u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-
-    try w.print("https://github.com/{s}/issues/new?title=", .{repo.toGithubRepo()});
+    try buf.print("https://github.com/{s}/issues/new?title=", .{repo.toGithubRepo()});
     try appendQueryValue(&buf, title);
-    try w.writeAll("&labels=");
+    try buf.appendSlice("&labels=");
     try appendLabelsQueryValue(&buf, report_type.toLabels());
-    try w.writeAll("&body=");
+    try buf.appendSlice("&body=");
     try appendQueryValue(&buf, body);
 
     return buf.toOwnedSlice();
@@ -816,7 +818,7 @@ pub fn submitIssue(
 }
 
 fn getEnv(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch null;
+    return std_compat.process.getEnvVarOwned(allocator, key) catch null;
 }
 
 fn tryGhCreate(
@@ -826,7 +828,7 @@ fn tryGhCreate(
     title: []const u8,
     body: []const u8,
 ) !SubmissionAttempt {
-    const auth_check = std.process.Child.run(.{
+    const auth_check = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "gh", "auth", "status" },
     }) catch return .skipped;
@@ -834,7 +836,7 @@ fn tryGhCreate(
     defer allocator.free(auth_check.stderr);
 
     switch (auth_check.term) {
-        .Exited => |code| if (code != 0) return .skipped,
+        .exited => |code| if (code != 0) return .skipped,
         else => return .skipped,
     }
 
@@ -845,7 +847,7 @@ fn tryGhCreate(
         try label_str.appendSlice(label);
     }
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
             "gh",      "issue",             "create",
@@ -859,7 +861,7 @@ fn tryGhCreate(
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 defer allocator.free(result.stdout);
                 return .{ .failed = try buildProcessFailureMessage(
@@ -887,14 +889,14 @@ fn tryGhCreate(
 }
 
 fn tryGhAuthToken(allocator: std.mem.Allocator) ?[]const u8 {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "gh", "auth", "token" },
     }) catch return null;
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 allocator.free(result.stdout);
                 return null;
@@ -944,9 +946,10 @@ fn tryCurlCreate(
     );
     defer allocator.free(auth_header);
 
-    var json_buf = std.array_list.Managed(u8).init(allocator);
-    defer json_buf.deinit();
-    const jw = json_buf.writer();
+    var json_buf: std.ArrayList(u8) = .empty;
+    defer json_buf.deinit(allocator);
+    var jw_alloc: std.Io.Writer.Allocating = .fromArrayList(allocator, &json_buf);
+    const jw = &jw_alloc.writer;
     try jw.writeAll("{\"title\":\"");
     try writeJsonEscaped(jw, title);
     try jw.writeAll("\",\"body\":\"");
@@ -959,8 +962,9 @@ fn tryCurlCreate(
         try jw.writeAll("\"");
     }
     try jw.writeAll("]}");
+    json_buf = jw_alloc.toArrayList();
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
             "curl", "-sS",
@@ -977,7 +981,7 @@ fn tryCurlCreate(
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) {
                 defer allocator.free(result.stdout);
                 return .{ .failed = try buildProcessFailureMessage(
@@ -1086,22 +1090,20 @@ fn firstNonEmptyTrimmed(a: []const u8, b: []const u8) ?[]const u8 {
 }
 
 fn appendLabelsQueryValue(buf: *std.array_list.Managed(u8), labels: []const []const u8) !void {
-    const w = buf.writer();
     for (labels, 0..) |label, i| {
-        if (i > 0) try w.writeAll("%2C");
+        if (i > 0) try buf.appendSlice("%2C");
         try appendQueryValue(buf, label);
     }
 }
 
 fn appendQueryValue(buf: *std.array_list.Managed(u8), raw: []const u8) !void {
-    const w = buf.writer();
     var start: usize = 0;
     for (raw, 0..) |c, i| {
         if (isQueryValueChar(c)) continue;
-        try w.print("{s}%{X:0>2}", .{ raw[start..i], c });
+        try buf.print("{s}%{X:0>2}", .{ raw[start..i], c });
         start = i + 1;
     }
-    try w.writeAll(raw[start..]);
+    try buf.appendSlice(raw[start..]);
 }
 
 fn isQueryValueChar(c: u8) bool {
@@ -1309,16 +1311,20 @@ test "buildProcessFailureMessage prefers stderr" {
 
 test "writeJsonEscaped" {
     const allocator = std.testing.allocator;
-    var buf = std.array_list.Managed(u8).init(allocator);
-    defer buf.deinit();
-    try writeJsonEscaped(buf.writer(), "hello \"world\"\nnewline\\back\r\ttab");
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    var writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
+    try writeJsonEscaped(&writer.writer, "hello \"world\"\nnewline\\back\r\ttab");
+    buf = writer.toArrayList();
     try std.testing.expectEqualStrings("hello \\\"world\\\"\\nnewline\\\\back\\r\\ttab", buf.items);
 }
 
 test "writeJsonEscaped control characters" {
     const allocator = std.testing.allocator;
-    var buf = std.array_list.Managed(u8).init(allocator);
-    defer buf.deinit();
-    try writeJsonEscaped(buf.writer(), &.{ 0x00, 0x0B, 0x1F });
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    var writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
+    try writeJsonEscaped(&writer.writer, &.{ 0x00, 0x0B, 0x1F });
+    buf = writer.toArrayList();
     try std.testing.expectEqualStrings("\\u0000\\u000b\\u001f", buf.items);
 }

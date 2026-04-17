@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("src/compat.zig");
 const builtin = @import("builtin");
 const GeneratedUiAssetsPath = ".generated_ui_assets.zig";
 
@@ -43,14 +44,22 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", app_version);
     const build_options_module = build_options.createModule();
     const ui_assets_module = createUiAssetsModule(b, embed_ui);
+    const compat_module = b.createModule(.{
+        .root_source_file = b.path("src/compat.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
 
     const exe_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     exe_module.addImport("build_options", build_options_module);
     exe_module.addImport("ui_assets", ui_assets_module);
+    exe_module.addImport("compat", compat_module);
 
     const exe = b.addExecutable(.{
         .name = "nullhub",
@@ -70,9 +79,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     test_module.addImport("build_options", build_options_module);
     test_module.addImport("ui_assets", ui_assets_module);
+    test_module.addImport("compat", compat_module);
 
     const exe_unit_tests = b.addTest(.{
         .root_module = test_module,
@@ -93,6 +104,7 @@ fn createUiAssetsModule(b: *std.Build, embed_ui: bool) *std.Build.Module {
 }
 
 fn ensureUiBuildReady(b: *std.Build) void {
+    if (pathExists("ui/build")) return;
     if (!pathExists("ui/node_modules")) {
         runCommandOrPanic(b.allocator, &.{ npmCommand(), "--prefix", "ui", "ci", "--no-audit", "--no-fund" });
     }
@@ -106,15 +118,17 @@ fn ensureUiBuildExists() void {
 }
 
 fn runCommandOrPanic(allocator: std.mem.Allocator, argv: []const []const u8) void {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    _ = allocator;
+    const run_allocator = std.heap.page_allocator;
+    const result = std_compat.process.Child.run(.{
+        .allocator = run_allocator,
         .argv = argv,
     }) catch |err| std.debug.panic("failed to run {s}: {s}", .{ argv[0], @errorName(err) });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    defer run_allocator.free(result.stdout);
+    defer run_allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) return;
             if (result.stdout.len > 0) std.debug.print("{s}", .{result.stdout});
             if (result.stderr.len > 0) std.debug.print("{s}", .{result.stderr});
@@ -129,12 +143,12 @@ fn npmCommand() []const u8 {
 }
 
 fn pathExists(path: []const u8) bool {
-    std.fs.cwd().access(path, .{}) catch return false;
+    std_compat.fs.cwd().access(path, .{}) catch return false;
     return true;
 }
 
 fn generateUiAssetsSource(allocator: std.mem.Allocator) ![]u8 {
-    var dir = try std.fs.cwd().openDir("ui/build", .{ .iterate = true });
+    var dir = try std_compat.fs.cwd().openDir("ui/build", .{ .iterate = true });
     defer dir.close();
 
     var walker = try dir.walk(allocator);
@@ -213,7 +227,7 @@ fn generateUiAssetsSource(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn writeGeneratedUiAssetsSource(source: []const u8) !void {
-    const file = try std.fs.cwd().createFile(GeneratedUiAssetsPath, .{ .truncate = true });
+    const file = try std_compat.fs.cwd().createFile(GeneratedUiAssetsPath, .{ .truncate = true });
     defer file.close();
     try file.writeAll(source);
 }

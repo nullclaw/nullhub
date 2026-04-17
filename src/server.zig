@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const net_compat = @import("net_compat.zig");
 const auth = @import("auth.zig");
 const instances_api = @import("api/instances.zig");
@@ -15,12 +16,15 @@ const mdns_mod = @import("mdns.zig");
 const state_mod = @import("core/state.zig");
 const paths_mod = @import("core/paths.zig");
 const manager_mod = @import("supervisor/manager.zig");
+const process_mod = @import("supervisor/process.zig");
+const runtime_state_mod = @import("supervisor/runtime_state.zig");
 const wizard_api = @import("api/wizard.zig");
 const providers_api = @import("api/providers.zig");
 const channels_api = @import("api/channels.zig");
 const usage_api = @import("api/usage.zig");
 const report_api = @import("api/report.zig");
 const orchestration_api = @import("api/orchestration.zig");
+const launch_args_mod = @import("core/launch_args.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
@@ -39,10 +43,10 @@ pub const Server = struct {
     state: *state_mod.State,
     paths: paths_mod.Paths,
     manager: *manager_mod.Manager,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     start_time: i64,
 
-    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) !Server {
+    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) !Server {
         var paths = try paths_mod.Paths.init(allocator, null);
         errdefer paths.deinit(allocator);
 
@@ -63,12 +67,12 @@ pub const Server = struct {
             .paths = paths,
             .manager = manager,
             .mutex = mutex,
-            .start_time = std.time.timestamp(),
+            .start_time = std_compat.time.timestamp(),
         };
     }
 
     /// Initialize a server with an explicit state and paths (used by tests).
-    fn initWithState(allocator: std.mem.Allocator, state: *state_mod.State, paths: paths_mod.Paths, manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) Server {
+    fn initWithState(allocator: std.mem.Allocator, state: *state_mod.State, paths: paths_mod.Paths, manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) Server {
         return .{
             .allocator = allocator,
             .host = "127.0.0.1",
@@ -78,7 +82,7 @@ pub const Server = struct {
             .paths = paths,
             .manager = manager,
             .mutex = mutex,
-            .start_time = std.time.timestamp(),
+            .start_time = std_compat.time.timestamp(),
         };
     }
 
@@ -103,19 +107,93 @@ pub const Server = struct {
         return self.access_options;
     }
 
-    /// Start all instances that have auto_start enabled.
-    pub fn autoStartAll(self: *Server) void {
+    /// Restore managed runtime state for surviving processes, then start any
+    /// remaining instances that are marked auto_start.
+    pub fn reconcileInstancesOnBoot(self: *Server) void {
         var comp_it = self.state.instances.iterator();
         while (comp_it.next()) |comp_entry| {
             var inst_it = comp_entry.value_ptr.iterator();
             while (inst_it.next()) |inst_entry| {
-                if (inst_entry.value_ptr.auto_start) {
-                    const comp_name = comp_entry.key_ptr.*;
-                    const inst_name = inst_entry.key_ptr.*;
-                    _ = instances_api.handleStart(self.allocator, self.state, self.manager, self.paths, comp_name, inst_name, "");
+                const comp_name = comp_entry.key_ptr.*;
+                const inst_name = inst_entry.key_ptr.*;
+                if (self.tryRestoreManagedInstance(comp_name, inst_name, inst_entry.value_ptr.*)) continue;
+                if (!inst_entry.value_ptr.auto_start) continue;
+                _ = instances_api.handleStart(self.allocator, self.state, self.manager, self.paths, comp_name, inst_name, "");
+            }
+        }
+    }
+
+    fn tryRestoreManagedInstance(
+        self: *Server,
+        component: []const u8,
+        name: []const u8,
+        entry: state_mod.InstanceEntry,
+    ) bool {
+        var runtime = runtime_state_mod.load(self.allocator, self.paths, component, name) catch |err| {
+            if (err == error.InvalidRuntimeState) {
+                runtime_state_mod.delete(self.allocator, self.paths, component, name);
+            }
+            return false;
+        } orelse return false;
+        defer runtime.deinit(self.allocator);
+
+        const desired_binary = self.paths.binary(self.allocator, component, entry.version) catch {
+            self.terminatePersistedRuntime(&runtime, component, name);
+            return false;
+        };
+        defer self.allocator.free(desired_binary);
+
+        var desired_launch = launch_args_mod.resolve(self.allocator, entry.launch_mode, entry.verbose) catch {
+            self.terminatePersistedRuntime(&runtime, component, name);
+            return false;
+        };
+        defer desired_launch.deinit();
+
+        if (!persistedMatchesDesired(runtime, desired_binary, desired_launch.primary_command, desired_launch.argv)) {
+            self.terminatePersistedRuntime(&runtime, component, name);
+            return false;
+        }
+
+        const restored = self.manager.adoptInstance(component, name, runtime) catch return false;
+        if (!restored) runtime_state_mod.delete(self.allocator, self.paths, component, name);
+        return restored;
+    }
+
+    fn terminatePersistedRuntime(
+        self: *Server,
+        runtime: *runtime_state_mod.PersistedRuntime,
+        component: []const u8,
+        name: []const u8,
+    ) void {
+        if (process_mod.reopenPersistedPid(runtime.pid)) |pid| {
+            defer process_mod.releasePidHandle(pid);
+            if (process_mod.isAlive(pid)) {
+                process_mod.terminate(pid) catch {};
+                var attempts: usize = 0;
+                while (attempts < 5 and process_mod.isAlive(pid)) : (attempts += 1) {
+                    std_compat.thread.sleep(50 * std.time.ns_per_ms);
+                }
+                if (process_mod.isAlive(pid)) {
+                    process_mod.forceKill(pid) catch {};
                 }
             }
         }
+        runtime_state_mod.delete(self.allocator, self.paths, component, name);
+    }
+
+    fn persistedMatchesDesired(
+        runtime: runtime_state_mod.PersistedRuntime,
+        desired_binary: []const u8,
+        desired_command: []const u8,
+        desired_args: []const []const u8,
+    ) bool {
+        if (!std.mem.eql(u8, runtime.binary_path, desired_binary)) return false;
+        if (!std.mem.eql(u8, runtime.launch_command, desired_command)) return false;
+        if (runtime.launch_args.len != desired_args.len) return false;
+        for (runtime.launch_args, desired_args) |lhs, rhs| {
+            if (!std.mem.eql(u8, lhs, rhs)) return false;
+        }
+        return true;
     }
 
     fn handleUiModules(self: *Server, allocator: std.mem.Allocator) Response {
@@ -124,14 +202,13 @@ pub const Server = struct {
         };
         defer allocator.free(ui_path);
 
-        var dir = std.fs.openDirAbsolute(ui_path, .{ .iterate = true }) catch {
+        var dir = std_compat.fs.openDirAbsolute(ui_path, .{ .iterate = true }) catch {
             return jsonResponse("{\"modules\":{}}");
         };
         defer dir.close();
 
         var buf: [4096]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const writer = stream.writer();
+        var writer: std.Io.Writer = .fixed(&buf);
         var modules: std.ArrayListUnmanaged(struct { name: []u8, version: []u8 }) = .empty;
         defer {
             for (modules.items) |entry| {
@@ -191,7 +268,7 @@ pub const Server = struct {
         }
         writer.writeAll("}}") catch {};
 
-        const json = allocator.dupe(u8, stream.getWritten()) catch return jsonResponse("{\"modules\":{}}");
+        const json = allocator.dupe(u8, writer.buffered()) catch return jsonResponse("{\"modules\":{}}");
         return jsonResponse(json);
     }
 
@@ -204,8 +281,7 @@ pub const Server = struct {
     fn handleAvailableUiModules(self: *Server, allocator: std.mem.Allocator) Response {
         _ = self;
         var buf: [4096]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const writer = stream.writer();
+        var writer: std.Io.Writer = .fixed(&buf);
         writer.writeAll("[") catch return jsonResponse("[]");
         var first = true;
         for (&registry.known_components) |comp| {
@@ -216,7 +292,7 @@ pub const Server = struct {
             }
         }
         writer.writeAll("]") catch {};
-        const json = allocator.dupe(u8, stream.getWritten()) catch return jsonResponse("[]");
+        const json = allocator.dupe(u8, writer.buffered()) catch return jsonResponse("[]");
         return jsonResponse(json);
     }
 
@@ -253,7 +329,7 @@ pub const Server = struct {
         };
         defer allocator.free(ui_path);
 
-        var dir = std.fs.openDirAbsolute(ui_path, .{ .iterate = true }) catch {
+        var dir = std_compat.fs.openDirAbsolute(ui_path, .{ .iterate = true }) catch {
             return .{ .status = "404 Not Found", .content_type = "application/json", .body = "{\"error\":\"not found\"}" };
         };
         defer dir.close();
@@ -290,7 +366,7 @@ pub const Server = struct {
         };
         defer allocator.free(full_path);
 
-        const file = std.fs.openFileAbsolute(full_path, .{}) catch {
+        const file = std_compat.fs.openFileAbsolute(full_path, .{}) catch {
             return .{ .status = "404 Not Found", .content_type = "text/plain", .body = "not found" };
         };
         defer file.close();
@@ -303,7 +379,7 @@ pub const Server = struct {
     }
 
     pub fn run(self: *Server) !void {
-        const addr = try std.net.Address.resolveIp(self.host, self.port);
+        const addr = try std_compat.net.Address.resolveIp(self.host, self.port);
         var listener = try addr.listen(.{ .reuse_address = true });
         defer listener.deinit();
 
@@ -336,7 +412,7 @@ pub const Server = struct {
         }
     }
 
-    fn handleConnection(self: *Server, conn: std.net.Server.Connection, alloc: std.mem.Allocator) !void {
+    fn handleConnection(self: *Server, conn: std_compat.net.Server.Connection, alloc: std.mem.Allocator) !void {
         var req_buf: [max_request_size]u8 = undefined;
         const n = net_compat.streamRead(conn.stream, &req_buf) catch return;
         if (n == 0) return;
@@ -421,7 +497,17 @@ pub const Server = struct {
     fn getEnv(name: []const u8) ?[]const u8 {
         const native = @import("builtin").os.tag;
         if (native == .windows) return null;
-        return std.posix.getenv(name);
+        const name_z: [*:0]const u8 = if (std.mem.eql(u8, name, "NULLBOILER_URL"))
+            "NULLBOILER_URL"
+        else if (std.mem.eql(u8, name, "NULLBOILER_TOKEN"))
+            "NULLBOILER_TOKEN"
+        else if (std.mem.eql(u8, name, "NULLTICKETS_URL"))
+            "NULLTICKETS_URL"
+        else if (std.mem.eql(u8, name, "NULLTICKETS_TOKEN"))
+            "NULLTICKETS_TOKEN"
+        else
+            return null;
+        return if (std.c.getenv(name_z)) |value| std.mem.span(value) else null;
     }
 
     fn getBoilerUrl(self: *Server) ?[]const u8 {
@@ -458,7 +544,7 @@ pub const Server = struct {
                 };
             }
             if (std.mem.eql(u8, target, "/api/status")) {
-                const now = std.time.timestamp();
+                const now = std_compat.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
                 const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.currentAccessOptions());
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
@@ -920,7 +1006,7 @@ pub const Server = struct {
         if (config_api.isConfigPath(target)) {
             if (config_api.parseConfigPath(target)) |parsed| {
                 if (std.mem.eql(u8, method, "GET")) {
-                    const resp = config_api.handleGet(allocator, self.paths, parsed.component, parsed.name);
+                    const resp = config_api.handleGetManaged(allocator, self.state, self.paths, parsed.component, parsed.name, target);
                     return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
                 }
                 if (std.mem.eql(u8, method, "PUT")) {
@@ -1037,7 +1123,7 @@ fn jsonResponse(body: []const u8) Response {
     return .{ .status = "200 OK", .content_type = "application/json", .body = body };
 }
 
-fn readBody(raw: []const u8, n: usize, stream: std.net.Stream, alloc: std.mem.Allocator) ![]const u8 {
+fn readBody(raw: []const u8, n: usize, stream: std_compat.net.Stream, alloc: std.mem.Allocator) ![]const u8 {
     if (extractHeader(raw, "Content-Length")) |cl_str| {
         const content_length = std.fmt.parseInt(usize, cl_str, 10) catch 0;
         if (content_length > 0) {
@@ -1064,35 +1150,33 @@ fn readBody(raw: []const u8, n: usize, stream: std.net.Stream, alloc: std.mem.Al
     return extractBody(raw);
 }
 
-fn sendResponse(stream: std.net.Stream, response: Response, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
+fn sendResponse(stream: std_compat.net.Stream, response: Response, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
     var buf: [4096]u8 = undefined;
-    var header_stream = std.io.fixedBufferStream(&buf);
-    const writer = header_stream.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.print("HTTP/1.1 {s}\r\n", .{response.status});
     try writer.print("Content-Type: {s}\r\n", .{response.content_type});
     try writer.print("Content-Length: {d}\r\n", .{response.body.len});
-    try appendCorsHeaders(writer, raw_request, bind_host, port);
+    try appendCorsHeaders(&writer, raw_request, bind_host, port);
     try writer.writeAll("Connection: close\r\n\r\n");
 
-    try net_compat.streamWriteAll(stream, header_stream.getWritten());
+    try net_compat.streamWriteAll(stream, writer.buffered());
     if (response.body.len > 0) {
         try net_compat.streamWriteAll(stream, response.body);
     }
 }
 
-fn sendRedirect(stream: std.net.Stream, location: []const u8, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
+fn sendRedirect(stream: std_compat.net.Stream, location: []const u8, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
     var buf: [4096]u8 = undefined;
-    var header_stream = std.io.fixedBufferStream(&buf);
-    const writer = header_stream.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.writeAll("HTTP/1.1 308 Permanent Redirect\r\n");
     try writer.print("Location: {s}\r\n", .{location});
     try writer.writeAll("Content-Length: 0\r\n");
-    try appendCorsHeaders(writer, raw_request, bind_host, port);
+    try appendCorsHeaders(&writer, raw_request, bind_host, port);
     try writer.writeAll("Connection: close\r\n\r\n");
 
-    try net_compat.streamWriteAll(stream, header_stream.getWritten());
+    try net_compat.streamWriteAll(stream, writer.buffered());
 }
 
 pub fn extractBody(raw: []const u8) []const u8 {
@@ -1115,7 +1199,7 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
             const hdr_key = line[0..colon];
             if (std.ascii.eqlIgnoreCase(hdr_key, name)) {
-                return std.mem.trimLeft(u8, line[colon + 1 ..], " ");
+                return std_compat.mem.trimLeft(u8, line[colon + 1 ..], " ");
             }
         }
     }
@@ -1239,13 +1323,17 @@ const TestContext = struct {
     state: *state_mod.State,
     paths: paths_mod.Paths,
     manager: manager_mod.Manager,
-    mutex: std.Thread.Mutex,
+    mutex: std_compat.sync.Mutex,
     server: Server,
 
     fn init(allocator: std.mem.Allocator) TestContext {
+        return initAtRoot(allocator, "/tmp/nullhub-test-server", "/tmp/nullhub-test-server-state.json");
+    }
+
+    fn initAtRoot(allocator: std.mem.Allocator, root: []const u8, state_path: []const u8) TestContext {
         const state = allocator.create(state_mod.State) catch @panic("OOM");
-        state.* = state_mod.State.init(allocator, "/tmp/nullhub-test-server-state.json");
-        const paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-server") catch @panic("Paths.init failed");
+        state.* = state_mod.State.init(allocator, state_path);
+        const paths = paths_mod.Paths.init(allocator, root) catch @panic("Paths.init failed");
         var ctx: TestContext = undefined;
         ctx.state = state;
         ctx.paths = paths;
@@ -1279,6 +1367,149 @@ test "route GET /health returns 200 OK" {
     try std.testing.expectEqualStrings("{\"status\":\"ok\"}", resp.body);
 }
 
+test "reconcileInstancesOnBoot adopts persisted managed instance without respawn" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-server-reconcile";
+    const tmp_state = "/tmp/nullhub-test-server-reconcile-state.json";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+
+    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    defer allocator.free(output_path);
+
+    const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
+    defer allocator.free(binary_path);
+    {
+        const script = try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\nprintf 'started\\n' >> '{s}'\nsleep 60\n",
+            .{output_path},
+        );
+        defer allocator.free(script);
+
+        const file = try std_compat.fs.createFileAbsolute(binary_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(script);
+        try file.chmod(0o755);
+    }
+
+    try ctx.state.addInstance("nullclaw", "demo", .{
+        .version = "1.0.0",
+        .auto_start = false,
+        .launch_mode = "agent",
+    });
+
+    var launch = try launch_args_mod.resolve(allocator, "agent", false);
+    defer launch.deinit();
+
+    const spawned = try process_mod.spawn(allocator, .{
+        .binary = binary_path,
+        .argv = launch.argv,
+    });
+
+    try runtime_state_mod.write(allocator, ctx.paths, "nullclaw", "demo", .{
+        .pid = process_mod.persistedPidValue(spawned.pid).?,
+        .port = 0,
+        .health_endpoint = "/health",
+        .binary_path = binary_path,
+        .launch_command = launch.primary_command,
+        .launch_args = launch.argv,
+        .started_at = std_compat.time.milliTimestamp(),
+        .starting_since = std_compat.time.milliTimestamp(),
+    });
+
+    ctx.reconcileInstancesOnBoot();
+
+    const status = ctx.manager.getStatus("nullclaw", "demo").?;
+    try std.testing.expectEqual(manager_mod.Status.running, status.status);
+
+    ctx.manager.stopInstance("nullclaw", "demo") catch {};
+    _ = spawned.child.wait() catch {};
+
+    const file = try std_compat.fs.openFileAbsolute(output_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 1024);
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("started\n", contents);
+}
+
+test "reconcileInstancesOnBoot restarts auto-start instance when persisted pid is stale" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-server-reconcile-stale";
+    const tmp_state = "/tmp/nullhub-test-server-reconcile-stale-state.json";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+
+    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    defer allocator.free(output_path);
+
+    const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
+    defer allocator.free(binary_path);
+    {
+        const script = try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\nprintf 'started\\n' >> '{s}'\nsleep 60\n",
+            .{output_path},
+        );
+        defer allocator.free(script);
+
+        const file = try std_compat.fs.createFileAbsolute(binary_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(script);
+        try file.chmod(0o755);
+    }
+
+    try ctx.state.addInstance("nullclaw", "demo", .{
+        .version = "1.0.0",
+        .auto_start = true,
+        .launch_mode = "agent",
+    });
+
+    var launch = try launch_args_mod.resolve(allocator, "agent", false);
+    defer launch.deinit();
+
+    try runtime_state_mod.write(allocator, ctx.paths, "nullclaw", "demo", .{
+        .pid = 999_999_999,
+        .port = 0,
+        .health_endpoint = "/health",
+        .binary_path = binary_path,
+        .launch_command = launch.primary_command,
+        .launch_args = launch.argv,
+        .started_at = std_compat.time.milliTimestamp(),
+        .starting_since = std_compat.time.milliTimestamp(),
+    });
+
+    ctx.reconcileInstancesOnBoot();
+    ctx.manager.tick();
+
+    const status = ctx.manager.getStatus("nullclaw", "demo").?;
+    try std.testing.expectEqual(manager_mod.Status.running, status.status);
+
+    const file = try std_compat.fs.openFileAbsolute(output_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 1024);
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("started\n", contents);
+}
+
 test "route GET /api/status returns version and platform" {
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -1305,6 +1536,18 @@ test "route GET /api/meta/routes returns route catalog" {
     try std.testing.expectEqualStrings("application/json", resp.content_type);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\": \"meta.routes.get\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "/api/instances/{component}/{name}") != null);
+}
+
+test "route GET /api/spec returns route catalog alias" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api/spec", "");
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\": \"meta.spec.get\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"path_template\": \"/api/spec\"") != null);
 }
 
 test "route unknown non-API path attempts static file serving" {
@@ -1449,20 +1692,20 @@ test "route GET /api/ui-modules prefers dev-local and deduplicates module versio
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
-    std.fs.deleteTreeAbsolute(ctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(ctx.paths.root) catch {};
     try ctx.paths.ensureDirs();
 
     const release_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "v2026.3.1");
     defer std.testing.allocator.free(release_dir);
-    try std.fs.makeDirAbsolute(release_dir);
+    try std_compat.fs.makeDirAbsolute(release_dir);
 
     const dev_local_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "dev-local");
     defer std.testing.allocator.free(dev_local_dir);
-    try std.fs.makeDirAbsolute(dev_local_dir);
+    try std_compat.fs.makeDirAbsolute(dev_local_dir);
 
     const other_release_dir = try ctx.paths.uiModule(std.testing.allocator, "other-ui", "v1.0.0");
     defer std.testing.allocator.free(other_release_dir);
-    try std.fs.makeDirAbsolute(other_release_dir);
+    try std_compat.fs.makeDirAbsolute(other_release_dir);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/api/ui-modules", "");
     defer std.testing.allocator.free(resp.body);
@@ -1606,7 +1849,7 @@ test "Server init sets fields" {
     const paths = try paths_mod.Paths.init(std.testing.allocator, null);
     var mgr = manager_mod.Manager.init(std.testing.allocator, paths);
     defer mgr.deinit();
-    var mutex = std.Thread.Mutex{};
+    var mutex: std_compat.sync.Mutex = .{};
     var s = try Server.init(std.testing.allocator, "127.0.0.1", access.default_port, &mgr, &mutex);
     defer s.deinit();
     try std.testing.expectEqualStrings("127.0.0.1", s.host);
