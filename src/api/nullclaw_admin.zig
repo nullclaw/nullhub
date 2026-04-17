@@ -34,6 +34,21 @@ pub fn tryReadModelsSummaryJson(
     return tryRunJson(allocator, s, paths, component, name, &.{ "models", "summary", "--json" });
 }
 
+pub fn tryReadChannelsJson(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    type_name: ?[]const u8,
+) ?[]const u8 {
+    if (!supports(component)) return null;
+    return if (type_name) |value|
+        tryRunJson(allocator, s, paths, component, name, &.{ "channel", "info", value, "--json" })
+    else
+        tryRunJson(allocator, s, paths, component, name, &.{ "channel", "list", "--json" });
+}
+
 pub fn readConfigBytes(
     allocator: std.mem.Allocator,
     paths: paths_mod.Paths,
@@ -133,6 +148,168 @@ pub fn buildModelsSummaryJsonFromConfig(
     try buf.appendSlice("]}");
 
     return try buf.toOwnedSlice();
+}
+
+const ChannelTypeEntry = struct {
+    field: []const u8,
+    type_name: []const u8,
+};
+
+const channel_types = [_]ChannelTypeEntry{
+    .{ .field = "telegram", .type_name = "telegram" },
+    .{ .field = "discord", .type_name = "discord" },
+    .{ .field = "slack", .type_name = "slack" },
+    .{ .field = "imessage", .type_name = "imessage" },
+    .{ .field = "matrix", .type_name = "matrix" },
+    .{ .field = "mattermost", .type_name = "mattermost" },
+    .{ .field = "whatsapp", .type_name = "whatsapp" },
+    .{ .field = "teams", .type_name = "teams" },
+    .{ .field = "irc", .type_name = "irc" },
+    .{ .field = "lark", .type_name = "lark" },
+    .{ .field = "dingtalk", .type_name = "dingtalk" },
+    .{ .field = "wechat", .type_name = "wechat" },
+    .{ .field = "wecom", .type_name = "wecom" },
+    .{ .field = "signal", .type_name = "signal" },
+    .{ .field = "email", .type_name = "email" },
+    .{ .field = "line", .type_name = "line" },
+    .{ .field = "qq", .type_name = "qq" },
+    .{ .field = "onebot", .type_name = "onebot" },
+    .{ .field = "maixcam", .type_name = "maixcam" },
+    .{ .field = "web", .type_name = "web" },
+    .{ .field = "max", .type_name = "max" },
+    .{ .field = "external", .type_name = "external" },
+};
+
+const ChannelAccountSummary = struct {
+    type: []const u8,
+    account_id: []const u8,
+    configured: bool = true,
+    status: []const u8 = "unknown",
+};
+
+const ChannelAccountDetail = struct {
+    account_id: []const u8,
+    configured: bool = true,
+};
+
+const ChannelTypeDetail = struct {
+    type: []const u8,
+    status: []const u8 = "unknown",
+    accounts: []const ChannelAccountDetail,
+};
+
+pub fn buildChannelsJsonFromConfig(
+    allocator: std.mem.Allocator,
+    config_bytes: []const u8,
+    type_name: ?[]const u8,
+) ![]u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, config_bytes, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    return if (type_name) |value|
+        buildChannelDetailJson(allocator, parsed.value, value)
+    else
+        buildChannelListJson(allocator, parsed.value);
+}
+
+fn buildChannelListJson(allocator: std.mem.Allocator, root: std.json.Value) ![]u8 {
+    var entries = std.ArrayListUnmanaged(ChannelAccountSummary).empty;
+    defer entries.deinit(allocator);
+
+    inline for (channel_types) |entry| {
+        const account_ids = try accountIdsForType(allocator, root, entry.field);
+        defer if (account_ids.len > 0) allocator.free(account_ids);
+
+        for (account_ids) |account_id| {
+            try entries.append(allocator, .{
+                .type = entry.type_name,
+                .account_id = account_id,
+            });
+        }
+    }
+
+    return try std.json.Stringify.valueAlloc(allocator, entries.items, .{
+        .emit_null_optional_fields = false,
+    });
+}
+
+fn buildChannelDetailJson(
+    allocator: std.mem.Allocator,
+    root: std.json.Value,
+    type_name: []const u8,
+) ![]u8 {
+    inline for (channel_types) |entry| {
+        if (std.mem.eql(u8, entry.type_name, type_name)) {
+            const account_ids = try accountIdsForType(allocator, root, entry.field);
+            defer if (account_ids.len > 0) allocator.free(account_ids);
+
+            var accounts = std.ArrayListUnmanaged(ChannelAccountDetail).empty;
+            defer accounts.deinit(allocator);
+
+            for (account_ids) |account_id| {
+                try accounts.append(allocator, .{
+                    .account_id = account_id,
+                });
+            }
+
+            return try std.json.Stringify.valueAlloc(allocator, ChannelTypeDetail{
+                .type = entry.type_name,
+                .accounts = accounts.items,
+            }, .{
+                .emit_null_optional_fields = false,
+            });
+        }
+    }
+
+    return error.UnknownChannelType;
+}
+
+fn accountIdsForType(
+    allocator: std.mem.Allocator,
+    root: std.json.Value,
+    field_name: []const u8,
+) ![]const []const u8 {
+    var account_ids = std.ArrayListUnmanaged([]const u8).empty;
+    errdefer account_ids.deinit(allocator);
+
+    const channels_value = jsonValuePath(root, &.{"channels"}) orelse return &.{};
+    if (channels_value != .object) return &.{};
+
+    const channel_value = channels_value.object.get(field_name) orelse return &.{};
+    if (channel_value != .object) return &.{};
+
+    if (channel_value.object.get("accounts")) |accounts_value| {
+        if (accounts_value == .object) {
+            var it = accounts_value.object.iterator();
+            while (it.next()) |account| {
+                try account_ids.append(allocator, account.key_ptr.*);
+            }
+        }
+    } else if (channelValueLooksConfigured(channel_value)) {
+        try account_ids.append(allocator, "default");
+    }
+
+    if (account_ids.items.len > 1) {
+        std.mem.sort([]const u8, account_ids.items, {}, struct {
+            fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+                return std.mem.order(u8, lhs, rhs) == .lt;
+            }
+        }.lessThan);
+    }
+
+    return try account_ids.toOwnedSlice(allocator);
+}
+
+fn channelValueLooksConfigured(value: std.json.Value) bool {
+    return switch (value) {
+        .object => |obj| obj.count() > 0,
+        .string => |text| text.len > 0,
+        .integer, .float, .bool => true,
+        else => false,
+    };
 }
 
 fn tryRunJson(
@@ -294,4 +471,40 @@ test "isValidJsonPayload rejects malformed cli output" {
     const allocator = std.testing.allocator;
     try std.testing.expect(!isValidJsonPayload(allocator, "\n\"default_provider\":\"openrouter\"}"));
     try std.testing.expect(isValidJsonPayload(allocator, "{\"default_provider\":\"openrouter\"}"));
+}
+
+test "buildChannelsJsonFromConfig lists configured accounts without secrets" {
+    const allocator = std.testing.allocator;
+    const config_bytes =
+        \\{"channels":{"telegram":{"accounts":{"main":{"bot_token":"secret"},"backup":{"bot_token":"hidden"}}},"discord":{"accounts":{"guild":{"token":"discord-secret"}}}}}
+    ;
+
+    const json = try buildChannelsJsonFromConfig(allocator, config_bytes, null);
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"telegram\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"account_id\":\"backup\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"discord\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "secret") == null);
+}
+
+test "buildChannelsJsonFromConfig returns detail for known type with empty accounts" {
+    const allocator = std.testing.allocator;
+    const config_bytes =
+        \\{"channels":{"telegram":{"accounts":{"main":{"bot_token":"secret"}}}}}
+    ;
+
+    const json = try buildChannelsJsonFromConfig(allocator, config_bytes, "discord");
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"discord\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\":[]") != null);
+}
+
+test "buildChannelsJsonFromConfig rejects unknown type" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.UnknownChannelType,
+        buildChannelsJsonFromConfig(allocator, "{\"channels\":{}}", "nonexistent"),
+    );
 }

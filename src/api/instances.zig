@@ -742,6 +742,12 @@ pub const ParsedPath = struct {
     action: ?[]const u8,
 };
 
+const ParsedChannelsPath = struct {
+    component: []const u8,
+    name: []const u8,
+    channel_type: ?[]const u8,
+};
+
 fn stripQuery(target: []const u8) []const u8 {
     if (std.mem.indexOfScalar(u8, target, '?')) |qmark| {
         return target[0..qmark];
@@ -775,6 +781,34 @@ pub fn parsePath(target: []const u8) ?ParsedPath {
     const action: ?[]const u8 = if (action_raw) |a| (if (a.len == 0) null else a) else null;
 
     return .{ .component = component, .name = name, .action = action };
+}
+
+fn parseChannelsPath(target: []const u8) ?ParsedChannelsPath {
+    const clean = stripQuery(target);
+    const prefix = "/api/instances/";
+    if (!std.mem.startsWith(u8, clean, prefix)) return null;
+
+    const rest = clean[prefix.len..];
+    if (rest.len == 0) return null;
+
+    var it = std.mem.splitScalar(u8, rest, '/');
+    const component = it.next() orelse return null;
+    if (component.len == 0) return null;
+
+    const name = it.next() orelse return null;
+    if (name.len == 0) return null;
+
+    const action = it.next() orelse return null;
+    if (!std.mem.eql(u8, action, "channels")) return null;
+
+    const channel_type_raw = it.next();
+    if (it.next() != null) return null;
+
+    return .{
+        .component = component,
+        .name = name,
+        .channel_type = if (channel_type_raw) |value| if (value.len > 0) value else null else null,
+    };
 }
 
 pub const UsageLedgerLine = struct {
@@ -2559,6 +2593,42 @@ fn handleSkillsCatalog(allocator: std.mem.Allocator, component: []const u8) ApiR
     return jsonOk(body);
 }
 
+fn handleChannels(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    channel_type: ?[]const u8,
+) ApiResponse {
+    _ = s.getInstance(component, name) orelse return notFound();
+    if (!nullclaw_admin.supports(component)) {
+        return badRequest("{\"error\":\"channel inspection is only supported for nullclaw instances\"}");
+    }
+
+    if (nullclaw_admin.tryReadChannelsJson(allocator, s, paths, component, name, channel_type)) |json| {
+        return jsonOk(json);
+    }
+
+    const config_bytes = nullclaw_admin.readConfigBytes(allocator, paths, component, name) catch |err| switch (err) {
+        error.FileNotFound => return notFound(),
+        else => return helpers.serverError(),
+    };
+    defer allocator.free(config_bytes);
+
+    const fallback_json = nullclaw_admin.buildChannelsJsonFromConfig(allocator, config_bytes, channel_type) catch |err| switch (err) {
+        error.UnknownChannelType => return notFound(),
+        else => return jsonCliError(
+            allocator,
+            "channels_unavailable",
+            "Failed to inspect channels for this instance",
+            null,
+            null,
+        ),
+    };
+    return jsonOk(fallback_json);
+}
+
 fn handleSkillsInstall(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
@@ -2576,6 +2646,8 @@ fn handleSkillsInstall(
         bundled: ?[]const u8 = null,
         clawhub_slug: ?[]const u8 = null,
         source: ?[]const u8 = null,
+        url: ?[]const u8 = null,
+        name: ?[]const u8 = null,
     }, allocator, body, .{
         .ignore_unknown_fields = true,
     }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
@@ -2584,13 +2656,17 @@ fn handleSkillsInstall(
     const bundled_name = if (parsed.value.bundled) |value| if (value.len > 0) value else null else null;
     const clawhub_slug = if (parsed.value.clawhub_slug) |value| if (value.len > 0) value else null else null;
     const source = if (parsed.value.source) |value| if (value.len > 0) value else null else null;
+    const url = if (parsed.value.url) |value| if (value.len > 0) value else null else null;
+    const skill_query = if (parsed.value.name) |value| if (value.len > 0) value else null else null;
 
     var selected: usize = 0;
     if (bundled_name != null) selected += 1;
     if (clawhub_slug != null) selected += 1;
     if (source != null) selected += 1;
+    if (url != null) selected += 1;
+    if (skill_query != null) selected += 1;
     if (selected != 1) {
-        return badRequest("{\"error\":\"provide exactly one of bundled, clawhub_slug, or source\"}");
+        return badRequest("{\"error\":\"provide exactly one of bundled, clawhub_slug, source, url, or name\"}");
     }
 
     if (bundled_name) |value| {
@@ -2669,7 +2745,12 @@ fn handleSkillsInstall(
     defer args.deinit(allocator);
     args.append(allocator, "skills") catch return helpers.serverError();
     args.append(allocator, "install") catch return helpers.serverError();
-    args.append(allocator, source.?) catch return helpers.serverError();
+    if (skill_query) |value| {
+        args.append(allocator, "--name") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+    } else {
+        args.append(allocator, if (source) |value| value else url.?) catch return helpers.serverError();
+    }
 
     const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
     const result = switch (captured) {
@@ -2691,16 +2772,27 @@ fn handleSkillsInstall(
         return jsonCliConflict(
             allocator,
             "skills_install_failed",
-            "Failed to install skill from source",
+            if (skill_query != null) "Failed to install skill from registry search" else "Failed to install skill from source",
             result.stderr,
             result.stdout,
         );
     }
 
-    const resp_body = std.json.Stringify.valueAlloc(allocator, .{
-        .status = "installed",
-        .source = source.?,
-    }, .{}) catch return helpers.serverError();
+    const resp_body = if (skill_query) |value|
+        std.json.Stringify.valueAlloc(allocator, .{
+            .status = "installed",
+            .name = value,
+        }, .{}) catch return helpers.serverError()
+    else if (source) |value|
+        std.json.Stringify.valueAlloc(allocator, .{
+            .status = "installed",
+            .source = value,
+        }, .{}) catch return helpers.serverError()
+    else
+        std.json.Stringify.valueAlloc(allocator, .{
+            .status = "installed",
+            .source = url.?,
+        }, .{}) catch return helpers.serverError();
     return jsonOk(resp_body);
 }
 
@@ -3409,6 +3501,11 @@ pub fn dispatch(
         };
     }
 
+    if (parseChannelsPath(target)) |parsed_channels| {
+        if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+        return handleChannels(allocator, s, paths, parsed_channels.component, parsed_channels.name, parsed_channels.channel_type);
+    }
+
     const parsed = parsePath(target) orelse return null;
 
     if (parsed.action) |action| {
@@ -3625,6 +3722,20 @@ test "parsePath: onboarding action" {
     try std.testing.expectEqualStrings("onboarding", p.action.?);
 }
 
+test "parseChannelsPath: collection route" {
+    const p = parseChannelsPath("/api/instances/nullclaw/default/channels").?;
+    try std.testing.expectEqualStrings("nullclaw", p.component);
+    try std.testing.expectEqualStrings("default", p.name);
+    try std.testing.expect(p.channel_type == null);
+}
+
+test "parseChannelsPath: detail route" {
+    const p = parseChannelsPath("/api/instances/nullclaw/default/channels/telegram").?;
+    try std.testing.expectEqualStrings("nullclaw", p.component);
+    try std.testing.expectEqualStrings("default", p.name);
+    try std.testing.expectEqualStrings("telegram", p.channel_type.?);
+}
+
 test "parseCronPath: collection route" {
     const p = parseCronPath("/api/instances/nullclaw/default/cron").?;
     try std.testing.expectEqualStrings("nullclaw", p.component);
@@ -3701,6 +3812,10 @@ test "parsePath: rejects wrong prefix" {
 
 test "parsePath: rejects too many segments" {
     try std.testing.expect(parsePath("/api/instances/a/b/c/d") == null);
+}
+
+test "parseChannelsPath: rejects extra segments" {
+    try std.testing.expect(parseChannelsPath("/api/instances/nullclaw/default/channels/telegram/extra") == null);
 }
 
 test "parsePath: component only (no name) returns null" {
@@ -4876,6 +4991,63 @@ test "dispatch routes GET skills action" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"checks\"") != null);
 }
 
+test "dispatch routes GET channels action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "channel" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '[{"type":"telegram","account_id":"main","configured":true,"status":"ok"}]'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2", script);
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/channels", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"type\":\"telegram\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"account_id\":\"main\"") != null);
+}
+
+test "dispatch routes GET channel detail falls back to config" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    try writeTestInstanceConfig(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "{\"channels\":{\"telegram\":{\"accounts\":{\"main\":{\"bot_token\":\"secret\"},\"backup\":{\"bot_token\":\"hidden\"}}}}}",
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/channels/telegram", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"type\":\"telegram\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"account_id\":\"backup\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "secret") == null);
+}
+
 test "dispatch routes GET skills catalog" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -4996,6 +5168,82 @@ test "dispatch routes POST source install returns conflict on CLI failure" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("409 Conflict", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"skills_install_failed\"") != null);
+}
+
+test "dispatch routes POST registry skill install alias" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.5" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "install" ] && [ "$3" = "--name" ] && [ "$4" = "news-digest" ]; then
+        \\  printf '%s\n' 'Skill installed from registry search: news-digest'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.5", script);
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/skills",
+        "{\"name\":\"news-digest\"}",
+    ).?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"news-digest\"") != null);
+}
+
+test "dispatch routes POST url skill install alias" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.6" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "install" ] && [ "$3" = "https://example.com/skill.git" ]; then
+        \\  printf '%s\n' 'Skill installed from: https://example.com/skill.git'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.6", script);
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/skills",
+        "{\"url\":\"https://example.com/skill.git\"}",
+    ).?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"source\":\"https://example.com/skill.git\"") != null);
 }
 
 test "dispatch returns null for non-matching path" {

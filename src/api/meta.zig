@@ -181,6 +181,13 @@ const skill_catalog_query = ParamSpec{
     .description = "When true, return the recommended skill catalog instead of installed skills.",
 };
 
+const instance_channel_type_param = ParamSpec{
+    .name = "channel_type",
+    .location = "path",
+    .required = true,
+    .description = "Canonical nullclaw channel type such as telegram, discord, or web.",
+};
+
 const config_path_query = ParamSpec{
     .name = "path",
     .location = "query",
@@ -255,12 +262,27 @@ const route_examples_skill_install = [_]ExampleSpec{
         .command = "nullhub api POST /api/instances/nullclaw/instance-1/skills --body '{\"clawhub_slug\":\"my-skill\"}'",
         .description = "Install a skill from ClawHub when the host has the clawhub CLI available.",
     },
+    .{
+        .command = "nullhub api POST /api/instances/nullclaw/instance-1/skills --body '{\"name\":\"news-digest\"}'",
+        .description = "Search the skill registry and install the best matching skill through the managed nullclaw CLI.",
+    },
 };
 
 const route_examples_skill_remove = [_]ExampleSpec{
     .{
         .command = "nullhub api DELETE '/api/instances/nullclaw/instance-1/skills?name=nullhub-admin'",
         .description = "Remove a workspace-installed skill from a managed nullclaw instance.",
+    },
+};
+
+const route_examples_channels = [_]ExampleSpec{
+    .{
+        .command = "nullhub api GET /api/instances/nullclaw/instance-1/channels --pretty",
+        .description = "List configured channel accounts for a managed nullclaw instance.",
+    },
+    .{
+        .command = "nullhub api GET /api/instances/nullclaw/instance-1/channels/telegram --pretty",
+        .description = "Inspect all configured accounts for a specific channel type.",
     },
 };
 
@@ -765,6 +787,28 @@ const routes = [_]RouteSpec{
         .response = "Memory stats or memory entry list depending on query mode.",
     },
     .{
+        .id = "instances.channels",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/channels",
+        .category = "instances",
+        .summary = "List configured channel accounts for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Configured channel account list with per-type health status.",
+        .examples = route_examples_channels[0..1],
+    },
+    .{
+        .id = "instances.channels.detail",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/channels/{channel_type}",
+        .category = "instances",
+        .summary = "Inspect a specific configured nullclaw channel type.",
+        .auth_mode = "optional_bearer",
+        .path_params = &.{ component_param, instance_name_param, instance_channel_type_param },
+        .response = "Channel type detail with configured accounts and health status.",
+        .examples = route_examples_channels[1..2],
+    },
+    .{
         .id = "instances.skills",
         .method = "GET",
         .path_template = "/api/instances/{component}/{name}/skills",
@@ -792,10 +836,10 @@ const routes = [_]RouteSpec{
         .method = "POST",
         .path_template = "/api/instances/{component}/{name}/skills",
         .category = "instances",
-        .summary = "Install a skill into a managed nullclaw workspace from a bundled skill, ClawHub slug, or source URL/path.",
+        .summary = "Install a skill into a managed nullclaw workspace from a bundled skill, ClawHub slug, registry search name, or source URL/path.",
         .auth_mode = "optional_bearer",
         .path_params = common_instance_params[0..],
-        .body = "JSON body with exactly one of bundled, clawhub_slug, or source.",
+        .body = "JSON body with exactly one of bundled, clawhub_slug, name, source, or url.",
         .response = "Install result payload.",
         .examples = route_examples_skill_install[0..],
     },
