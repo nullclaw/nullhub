@@ -204,6 +204,23 @@ fn lookupJsonPath(root: std.json.Value, dot_path: []const u8) ?std.json.Value {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+fn writeManagedTestBinary(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    component: []const u8,
+    version: []const u8,
+    script: []const u8,
+) !void {
+    try p.ensureDirs();
+    const bin_path = try p.binary(allocator, component, version);
+    defer allocator.free(bin_path);
+
+    const file = try std_compat.fs.createFileAbsolute(bin_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(script);
+    if (comptime std_compat.fs.has_executable_bit) try file.chmod(0o755);
+}
+
 test "parseConfigPath: valid path" {
     const p = parseConfigPath("/api/instances/nullclaw/my-agent/config").?;
     try std.testing.expectEqualStrings("nullclaw", p.component);
@@ -309,6 +326,48 @@ test "handleGet returns a single dotted-path value when path query is present" {
     defer allocator.free(get_resp.body);
     try std.testing.expectEqualStrings("200 OK", get_resp.status);
     try std.testing.expectEqualStrings("{\"path\":\"gateway.port\",\"value\":8080}", get_resp.body);
+}
+
+test "handleGetManaged prefers nullclaw CLI JSON when available" {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-config-api-managed";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-state.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeManagedTestBinary(
+        allocator,
+        p,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "gateway.port" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"path":"gateway.port","value":43123}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = handleGetManaged(
+        allocator,
+        &s,
+        p,
+        "nullclaw",
+        "my-agent",
+        "/api/instances/nullclaw/my-agent/config?path=gateway.port",
+    );
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("{\"path\":\"gateway.port\",\"value\":43123}", resp.body);
 }
 
 test "handlePatch writes config (same as PUT for now)" {

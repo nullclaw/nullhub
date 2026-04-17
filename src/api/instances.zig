@@ -4959,6 +4959,43 @@ test "dispatch routes GET models action" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "sk-test") == null);
 }
 
+test "dispatch routes GET models action via nullclaw CLI when available" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-cli.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "models" ] && [ "$2" = "summary" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '{"default_provider":"openai","default_model":"openai/gpt-5","providers":[{"name":"openai","has_key":true},{"name":"ollama","has_key":false}]}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_provider\":\"openai\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_model\":\"openai/gpt-5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"ollama\",\"has_key\":false") != null);
+}
+
 test "dispatch routes GET models action infers provider from current config shape" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-current.json");
@@ -5946,6 +5983,39 @@ test "dispatch routes GET channel detail falls back to config" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "secret") == null);
 }
 
+test "dispatch routes GET channel detail via nullclaw CLI when available" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-channel-detail-cli.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-detail" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "channel" ] && [ "$2" = "info" ] && [ "$3" = "telegram" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"type":"telegram","status":"ok","accounts":[{"account_id":"main","configured":true,"status":"ok"}]}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-detail", script);
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/channels/telegram", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"type\":\"telegram\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"account_id\":\"main\"") != null);
+}
+
 test "dispatch routes GET skills catalog" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -6142,6 +6212,493 @@ test "dispatch routes POST url skill install alias" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"source\":\"https://example.com/skill.git\"") != null);
+}
+
+test "dispatch routes cron detail and lifecycle actions" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-lifecycle.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.7" });
+    try writeTestCronStore(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "[{\"id\":\"job-1\",\"expression\":\"*/5 * * * *\",\"command\":\"echo hello\",\"paused\":false,\"one_shot\":false}]",
+    );
+    const script =
+        \\#!/bin/sh
+        \\set -eu
+        \\home="${NULLCLAW_HOME:?}"
+        \\if [ "$1" = "cron" ] && [ "$2" = "get" ] && [ "$3" = "job-1" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"id":"job-1","expression":"*/5 * * * *","command":"echo hello","paused":false,"one_shot":false}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "runs" ] && [ "$3" = "job-1" ] && [ "$4" = "--limit" ] && [ "$5" = "5" ] && [ "$6" = "--json" ]; then
+        \\  printf '%s\n' '{"runs":[{"id":1,"job_id":"job-1","started_at_s":100,"finished_at_s":101,"status":"ok","output":"done","duration_ms":250}],"total":1}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "once" ] && [ "$3" = "5m" ] && [ "$4" = "echo later" ]; then
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-1","expression":"*/5 * * * *","command":"echo hello","paused":false,"one_shot":false},{"id":"job-2","expression":"@once","command":"echo later","paused":false,"one_shot":true}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "run" ] && [ "$3" = "job-1" ]; then
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "pause" ] && [ "$3" = "job-1" ]; then
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-1","expression":"*/5 * * * *","command":"echo hello","paused":true,"one_shot":false},{"id":"job-2","expression":"@once","command":"echo later","paused":false,"one_shot":true}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "resume" ] && [ "$3" = "job-1" ]; then
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-1","expression":"*/5 * * * *","command":"echo hello","paused":false,"one_shot":false},{"id":"job-2","expression":"@once","command":"echo later","paused":false,"one_shot":true}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "update" ] && [ "$3" = "job-1" ] && [ "$4" = "--expression" ] && [ "$5" = "0 * * * *" ] && [ "$6" = "--command" ] && [ "$7" = "echo updated" ]; then
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-1","expression":"0 * * * *","command":"echo updated","paused":false,"one_shot":false},{"id":"job-2","expression":"@once","command":"echo later","paused":false,"one_shot":true}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "cron" ] && [ "$2" = "remove" ] && [ "$3" = "job-1" ]; then
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-2","expression":"@once","command":"echo later","paused":false,"one_shot":true}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.7", script);
+
+    const get_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/cron/job-1", "").?;
+    defer allocator.free(get_resp.body);
+    try std.testing.expectEqualStrings("200 OK", get_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, get_resp.body, "\"id\":\"job-1\"") != null);
+
+    const runs_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/cron/job-1/runs?limit=5", "").?;
+    defer allocator.free(runs_resp.body);
+    try std.testing.expectEqualStrings("200 OK", runs_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, runs_resp.body, "\"duration_ms\":250") != null);
+
+    const once_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/cron/once",
+        "{\"delay\":\"5m\",\"command\":\"echo later\"}",
+    ).?;
+    defer allocator.free(once_resp.body);
+    try std.testing.expectEqualStrings("200 OK", once_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, once_resp.body, "\"id\":\"job-2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, once_resp.body, "\"one_shot\":true") != null);
+
+    const run_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/cron/job-1/run", "").?;
+    defer allocator.free(run_resp.body);
+    try std.testing.expectEqualStrings("200 OK", run_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, run_resp.body, "\"status\":\"ran\"") != null);
+
+    const pause_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/cron/job-1/pause", "").?;
+    defer allocator.free(pause_resp.body);
+    try std.testing.expectEqualStrings("200 OK", pause_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, pause_resp.body, "\"paused\":true") != null);
+
+    const resume_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/cron/job-1/resume", "").?;
+    defer allocator.free(resume_resp.body);
+    try std.testing.expectEqualStrings("200 OK", resume_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resume_resp.body, "\"paused\":false") != null);
+
+    const update_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "PATCH",
+        "/api/instances/nullclaw/my-agent/cron/job-1",
+        "{\"expression\":\"0 * * * *\",\"command\":\"echo updated\"}",
+    ).?;
+    defer allocator.free(update_resp.body);
+    try std.testing.expectEqualStrings("200 OK", update_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, update_resp.body, "\"status\":\"updated\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, update_resp.body, "\"command\":\"echo updated\"") != null);
+
+    const delete_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "DELETE", "/api/instances/nullclaw/my-agent/cron/job-1", "").?;
+    defer allocator.free(delete_resp.body);
+    try std.testing.expectEqualStrings("200 OK", delete_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, delete_resp.body, "\"status\":\"deleted\"") != null);
+}
+
+test "dispatch routes config mutation actions" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-config-actions.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.8" });
+    const script =
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "config" ] && [ "$2" = "set" ] && [ "$3" = "gateway.port" ] && [ "$4" = "43123" ] && [ "$5" = "--json" ]; then
+        \\  printf '%s\n' '{"action":"set","path":"gateway.port","changed":true,"applied":true,"requires_restart":false,"old_value":3000,"new_value":43123,"backup_path":null}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "config" ] && [ "$2" = "unset" ] && [ "$3" = "channels.telegram" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"action":"unset","path":"channels.telegram","changed":true,"applied":true,"requires_restart":true,"old_value":{"enabled":true},"new_value":null,"backup_path":null}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "config" ] && [ "$2" = "reload" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '{"reloaded":true,"live_applied":false,"message":"config.json re-read from disk; restart running daemons to apply changes"}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "config" ] && [ "$2" = "validate" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"valid":true}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.8", script);
+
+    const set_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/config-set",
+        "{\"path\":\"gateway.port\",\"value\":43123}",
+    ).?;
+    defer allocator.free(set_resp.body);
+    try std.testing.expectEqualStrings("200 OK", set_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, set_resp.body, "\"new_value\":43123") != null);
+
+    const unset_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/config-unset",
+        "{\"path\":\"channels.telegram\"}",
+    ).?;
+    defer allocator.free(unset_resp.body);
+    try std.testing.expectEqualStrings("200 OK", unset_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, unset_resp.body, "\"action\":\"unset\"") != null);
+
+    const reload_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/config-reload", "").?;
+    defer allocator.free(reload_resp.body);
+    try std.testing.expectEqualStrings("200 OK", reload_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, reload_resp.body, "\"reloaded\":true") != null);
+
+    const validate_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/config-validate",
+        "{\"gateway\":{\"port\":43123}}",
+    ).?;
+    defer allocator.free(validate_resp.body);
+    try std.testing.expectEqualStrings("200 OK", validate_resp.status);
+    try std.testing.expectEqualStrings("{\"valid\":true}\n", validate_resp.body);
+}
+
+test "dispatch routes doctor capabilities mcp and models detail" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-admin-read.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.9" });
+    const script =
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "doctor" ] && [ "$2" = "--json" ]; then
+        \\  printf '%s\n' '{"ready":true,"overall_status":"ok","components":{"gateway":{"status":"ok","pid":123,"uptime_seconds":10,"restart_count":0,"last_ok":"2026-04-17T00:00:00Z","last_error":null}}}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "capabilities" ] && [ "$2" = "--json" ]; then
+        \\  printf '%s\n' '{"channels":["telegram"],"tools":["memory_store"],"tools_detail":[{"name":"memory_store","runtime_loaded":true}],"memory_engines":["sqlite"],"active_backend":"sqlite"}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "mcp" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '[{"name":"context7","transport":"stdio","command":"npx","args":["-y","@upstash/context7-mcp"],"env_keys":["CONTEXT7_API_KEY"],"tool_count":7}]'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "mcp" ] && [ "$2" = "info" ] && [ "$3" = "context7" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"name":"context7","transport":"stdio","command":"npx","args":["-y","@upstash/context7-mcp"],"env_keys":["CONTEXT7_API_KEY"],"tool_count":7}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "models" ] && [ "$2" = "info" ] && [ "$3" = "openai/gpt-5" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"name":"openai/gpt-5","provider":"openai","canonical_name":"openai/gpt-5","context_window":null}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.9", script);
+
+    const doctor_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/doctor", "").?;
+    defer allocator.free(doctor_resp.body);
+    try std.testing.expectEqualStrings("200 OK", doctor_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, doctor_resp.body, "\"ready\":true") != null);
+
+    const capabilities_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/capabilities", "").?;
+    defer allocator.free(capabilities_resp.body);
+    try std.testing.expectEqualStrings("200 OK", capabilities_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, capabilities_resp.body, "\"tools\":[\"memory_store\"]") != null);
+
+    const mcp_list_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/mcp", "").?;
+    defer allocator.free(mcp_list_resp.body);
+    try std.testing.expectEqualStrings("200 OK", mcp_list_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, mcp_list_resp.body, "\"name\":\"context7\"") != null);
+
+    const mcp_info_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/mcp?name=context7", "").?;
+    defer allocator.free(mcp_info_resp.body);
+    try std.testing.expectEqualStrings("200 OK", mcp_info_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, mcp_info_resp.body, "\"tool_count\":7") != null);
+
+    const model_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models?name=openai%2Fgpt-5", "").?;
+    defer allocator.free(model_resp.body);
+    try std.testing.expectEqualStrings("200 OK", model_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, model_resp.body, "\"provider\":\"openai\"") != null);
+
+    const refresh_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/models", "").?;
+    try std.testing.expectEqualStrings("501 Not Implemented", refresh_resp.status);
+}
+
+test "dispatch routes agent invoke stream and sessions" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-agent.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.10" });
+    const script =
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "agent" ] && [ "$2" = "invoke" ] && [ "$3" = "--message" ] && [ "$4" = "hello" ] && [ "$5" = "--session" ] && [ "$6" = "s-1" ] && [ "$7" = "--provider" ] && [ "$8" = "openai" ] && [ "$9" = "--model" ] && [ "${10}" = "gpt-5" ] && [ "${11}" = "--temperature" ] && [ "${12}" = "0.3" ] && [ "${13}" = "--agent" ] && [ "${14}" = "helper" ] && [ "${15}" = "--json" ]; then
+        \\  printf '%s\n' '{"session":"s-1","response":"world","turn_count":2}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "agent" ] && [ "$2" = "sessions" ] && [ "$3" = "list" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"sessions":[{"session_key":"s-1","created_at":"2026-04-17T00:00:00Z","last_active":"2026-04-17T00:01:00Z","turn_count":1,"turn_running":false}],"total":1}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "agent" ] && [ "$2" = "sessions" ] && [ "$3" = "get" ] && [ "$4" = "s-1" ] && [ "$5" = "--json" ]; then
+        \\  printf '%s\n' '{"session_key":"s-1","created_at":"2026-04-17T00:00:00Z","last_active":"2026-04-17T00:01:00Z","turn_count":1,"turn_running":false}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "agent" ] && [ "$2" = "sessions" ] && [ "$3" = "terminate" ] && [ "$4" = "s-1" ] && [ "$5" = "--json" ]; then
+        \\  printf '%s\n' '{"session_key":"s-1","terminated":true}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.10", script);
+
+    const invoke_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/agent",
+        "{\"message\":\"hello\",\"session_key\":\"s-1\",\"provider\":\"openai\",\"model\":\"gpt-5\",\"temperature\":\"0.3\",\"agent\":\"helper\"}",
+    ).?;
+    defer allocator.free(invoke_resp.body);
+    try std.testing.expectEqualStrings("200 OK", invoke_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, invoke_resp.body, "\"response\":\"world\"") != null);
+
+    const stream_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/agent-stream", "").?;
+    try std.testing.expectEqualStrings("501 Not Implemented", stream_resp.status);
+
+    const list_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/agent-sessions", "").?;
+    defer allocator.free(list_resp.body);
+    try std.testing.expectEqualStrings("200 OK", list_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, list_resp.body, "\"session_key\":\"s-1\"") != null);
+
+    const get_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/agent-sessions?session_id=s-1", "").?;
+    defer allocator.free(get_resp.body);
+    try std.testing.expectEqualStrings("200 OK", get_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, get_resp.body, "\"turn_count\":1") != null);
+
+    const delete_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "DELETE", "/api/instances/nullclaw/my-agent/agent-sessions?session_id=s-1", "").?;
+    defer allocator.free(delete_resp.body);
+    try std.testing.expectEqualStrings("200 OK", delete_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, delete_resp.body, "\"terminated\":true") != null);
+}
+
+test "dispatch routes memory write read stats and search actions" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-memory-actions.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.11" });
+    const script =
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "memory" ] && [ "$2" = "store" ] && [ "$3" = "fact" ] && [ "$4" = "hello" ] && [ "$5" = "--category" ] && [ "$6" = "conversation" ] && [ "$7" = "--session" ] && [ "$8" = "s-1" ] && [ "$9" = "--json" ]; then
+        \\  printf '%s\n' '{"action":"store","entry":{"key":"fact","category":"conversation","timestamp":"2026-04-17T00:00:00Z","content":"hello","session_id":"s-1"}}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "get" ] && [ "$3" = "fact" ] && [ "$4" = "--session" ] && [ "$5" = "s-1" ] && [ "$6" = "--json" ]; then
+        \\  printf '%s\n' '{"key":"fact","category":"conversation","timestamp":"2026-04-17T00:00:00Z","content":"hello","session_id":"s-1"}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "update" ] && [ "$3" = "fact" ] && [ "$4" = "updated" ] && [ "$5" = "--category" ] && [ "$6" = "conversation" ] && [ "$7" = "--session" ] && [ "$8" = "s-1" ] && [ "$9" = "--json" ]; then
+        \\  printf '%s\n' '{"action":"update","entry":{"key":"fact","category":"conversation","timestamp":"2026-04-17T00:00:01Z","content":"updated","session_id":"s-1"}}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "delete" ] && [ "$3" = "fact" ] && [ "$4" = "--session" ] && [ "$5" = "s-1" ] && [ "$6" = "--json" ]; then
+        \\  printf '%s\n' '{"key":"fact","session_id":"s-1","deleted":true}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "stats" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '{"backend":"sqlite","retrieval":"hybrid","vector":"sqlite","embedding":"disabled","rollout":"primary","sync":"inline","sources":1,"fallback":"none","entries":1,"vector_entries":0,"outbox_pending":0}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "search" ] && [ "$3" = "hello" ] && [ "$4" = "--limit" ] && [ "$5" = "3" ] && [ "$6" = "--session" ] && [ "$7" = "s-1" ] && [ "$8" = "--json" ]; then
+        \\  printf '%s\n' '[{"key":"fact","category":"conversation","snippet":"hello","source":"primary","source_path":"memory://fact","final_score":0.9,"start_line":1,"end_line":1,"created_at":0,"keyword_rank":1,"vector_score":null}]'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.11", script);
+
+    const store_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/memory",
+        "{\"key\":\"fact\",\"content\":\"hello\",\"category\":\"conversation\",\"session_id\":\"s-1\"}",
+    ).?;
+    defer allocator.free(store_resp.body);
+    try std.testing.expectEqualStrings("200 OK", store_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, store_resp.body, "\"action\":\"store\"") != null);
+
+    const get_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/memory?key=fact&session_id=s-1", "").?;
+    defer allocator.free(get_resp.body);
+    try std.testing.expectEqualStrings("200 OK", get_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, get_resp.body, "\"content\":\"hello\"") != null);
+
+    const update_resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "PATCH",
+        "/api/instances/nullclaw/my-agent/memory?key=fact&session_id=s-1",
+        "{\"content\":\"updated\",\"category\":\"conversation\"}",
+    ).?;
+    defer allocator.free(update_resp.body);
+    try std.testing.expectEqualStrings("200 OK", update_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, update_resp.body, "\"action\":\"update\"") != null);
+
+    const stats_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/memory?stats=1", "").?;
+    defer allocator.free(stats_resp.body);
+    try std.testing.expectEqualStrings("200 OK", stats_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, stats_resp.body, "\"backend\":\"sqlite\"") != null);
+
+    const search_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/memory?q=hello&limit=3&session_id=s-1", "").?;
+    defer allocator.free(search_resp.body);
+    try std.testing.expectEqualStrings("200 OK", search_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, search_resp.body, "\"snippet\":\"hello\"") != null);
+
+    const delete_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "DELETE", "/api/instances/nullclaw/my-agent/memory?key=fact&session_id=s-1", "").?;
+    defer allocator.free(delete_resp.body);
+    try std.testing.expectEqualStrings("200 OK", delete_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, delete_resp.body, "\"deleted\":true") != null);
+}
+
+test "dispatch routes GET skill detail action" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-skill-detail.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.12" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "info" ] && [ "$3" = "checks" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"name":"checks","version":"1.0.0","description":"Checks","author":"nullclaw","enabled":true,"always":false,"available":true,"missing_deps":"","path":"/tmp/checks","source":"workspace","instructions_bytes":42}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.12", script);
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/skills?name=checks", "").?;
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"checks\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"instructions_bytes\":42") != null);
 }
 
 test "dispatch returns null for non-matching path" {
