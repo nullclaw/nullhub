@@ -34,6 +34,28 @@ pub fn tryReadModelsSummaryJson(
     return tryRunJson(allocator, s, paths, component, name, &.{ "models", "summary", "--json" });
 }
 
+pub fn tryReadStatusJson(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) ?[]const u8 {
+    if (!supports(component)) return null;
+    return tryRunJson(allocator, s, paths, component, name, &.{ "status", "--json" });
+}
+
+pub fn tryReadCronListJson(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) ?[]const u8 {
+    if (!supports(component)) return null;
+    return tryRunJson(allocator, s, paths, component, name, &.{ "cron", "list", "--json" });
+}
+
 pub fn tryReadChannelsJson(
     allocator: std.mem.Allocator,
     s: *state_mod.State,

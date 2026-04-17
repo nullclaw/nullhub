@@ -232,6 +232,13 @@ const route_examples_instances = [_]ExampleSpec{
     },
 };
 
+const route_examples_instance_status = [_]ExampleSpec{
+    .{
+        .command = "nullhub api GET /api/instances/nullclaw/instance-1/status --pretty",
+        .description = "Read the managed nullclaw runtime status through the instance admin boundary.",
+    },
+};
+
 const route_examples_delete_instance = [_]ExampleSpec{
     .{
         .command = "nullhub api DELETE /api/instances/nullclaw/instance-2",
@@ -667,6 +674,17 @@ const routes = [_]RouteSpec{
         .auth_mode = "optional_bearer",
         .path_params = common_instance_params[0..],
         .response = "Instance detail payload.",
+    },
+    .{
+        .id = "instances.status",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/status",
+        .category = "instances",
+        .summary = "Read managed nullclaw runtime status using the instance admin CLI when available.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Nullclaw-style status payload with version, pid, uptime, overall_status, and components.",
+        .examples = route_examples_instance_status[0..],
     },
     .{
         .id = "instances.patch",

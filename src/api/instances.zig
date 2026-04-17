@@ -1585,8 +1585,89 @@ fn instanceCronUnsupported() ApiResponse {
     return badRequest("{\"error\":\"cron routes are only supported for nullclaw instances\"}");
 }
 
+fn instanceStatusUnsupported() ApiResponse {
+    return badRequest("{\"error\":\"status route is only supported for nullclaw instances\"}");
+}
+
 fn instanceModelsUnsupported() ApiResponse {
     return badRequest("{\"error\":\"models route is only supported for nullclaw instances\"}");
+}
+
+fn statusOverallFromRuntime(runtime_status: ?manager_mod.InstanceStatus) []const u8 {
+    return if (runtime_status) |status|
+        switch (status.status) {
+            .running => "ok",
+            .starting, .restarting => "starting",
+            .failed => "error",
+            .stopped, .stopping => "idle",
+        }
+    else
+        "idle";
+}
+
+fn buildInstanceStatusFallbackJson(
+    allocator: std.mem.Allocator,
+    entry: state_mod.InstanceEntry,
+    runtime_status: ?manager_mod.InstanceStatus,
+) ![]u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+
+    try buf.appendSlice("{\"version\":\"");
+    try appendEscaped(&buf, entry.version);
+    try buf.appendSlice("\",\"pid\":");
+    if (runtime_status) |status| {
+        if (status.pid) |pid| {
+            var num_buf: [20]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
+            try buf.appendSlice(text);
+        } else {
+            try buf.appendSlice("null");
+        }
+    } else {
+        try buf.appendSlice("null");
+    }
+
+    try buf.appendSlice(",\"uptime_seconds\":");
+    if (runtime_status) |status| {
+        if (status.uptime_seconds) |uptime| {
+            var num_buf: [20]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
+            try buf.appendSlice(text);
+        } else {
+            try buf.appendSlice("0");
+        }
+    } else {
+        try buf.appendSlice("0");
+    }
+
+    try buf.appendSlice(",\"overall_status\":\"");
+    try buf.appendSlice(statusOverallFromRuntime(runtime_status));
+    try buf.appendSlice("\",\"components\":{}}");
+    return buf.toOwnedSlice();
+}
+
+fn handleInstanceStatus(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    manager: *manager_mod.Manager,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceStatusUnsupported();
+    const entry = s.getInstance(component, name) orelse return notFound();
+
+    if (nullclaw_admin.tryReadStatusJson(allocator, s, paths, component, name)) |body| {
+        return jsonOk(body);
+    }
+
+    const fallback_json = buildInstanceStatusFallbackJson(
+        allocator,
+        entry,
+        manager.getStatus(component, name),
+    ) catch return helpers.serverError();
+    return jsonOk(fallback_json);
 }
 
 fn handleModels(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
@@ -1615,6 +1696,12 @@ fn handleModels(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_
 fn handleCronList(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
+
+    if (nullclaw_admin.tryReadCronListJson(allocator, s, paths, component, name)) |jobs_json| {
+        defer allocator.free(jobs_json);
+        const body = std.fmt.allocPrint(allocator, "{{\"jobs\":{s}}}", .{jobs_json}) catch return helpers.serverError();
+        return jsonOk(body);
+    }
 
     var store = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
     defer store.deinit();
@@ -3509,6 +3596,10 @@ pub fn dispatch(
     const parsed = parsePath(target) orelse return null;
 
     if (parsed.action) |action| {
+        if (std.mem.eql(u8, action, "status")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleInstanceStatus(allocator, s, manager, paths, parsed.component, parsed.name);
+        }
         if (std.mem.eql(u8, action, "models")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleModels(allocator, s, paths, parsed.component, parsed.name);
@@ -3910,6 +4001,61 @@ test "handleGet returns instance detail JSON" {
     try std.testing.expectEqualStrings("stopped", parsed.value.status);
 }
 
+test "handleInstanceStatus uses nullclaw CLI when available" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-cli.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+        \\  printf '%s\n' '{"version":"1.0.0","pid":1234,"uptime_seconds":42,"overall_status":"ok","components":{"gateway":{"status":"ok","updated_at":"2026-04-17T00:00:00Z","last_ok":"2026-04-17T00:00:00Z","last_error":null,"restart_count":0}}}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = handleInstanceStatus(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"pid\":1234") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"components\":{\"gateway\"") != null);
+}
+
+test "handleInstanceStatus falls back to supervisor status when CLI is unavailable" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-fallback.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.4.17" });
+
+    const resp = handleInstanceStatus(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"version\":\"2026.4.17\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"idle\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"components\":{}") != null);
+}
+
 test "handleStart returns 404 for missing instance" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -4238,6 +4384,42 @@ test "dispatch routes GET provider-health action" {
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
 }
 
+test "dispatch routes GET status action" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-dispatch.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+        \\  printf '%s\n' '{"version":"1.0.0","pid":321,"uptime_seconds":7,"overall_status":"starting","components":{}}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/status", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"uptime_seconds\":7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"starting\"") != null);
+}
+
 test "dispatch routes GET models action" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models.json");
@@ -4312,6 +4494,42 @@ test "dispatch routes GET cron action" {
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"jobs\":[") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\":\"job-1\"") != null);
+}
+
+test "dispatch routes GET cron action via nullclaw CLI when available" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-cli.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "cron" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '[{"id":"job-cli","expression":"*/10 * * * *","command":"echo cli","paused":false,"one_shot":false}]'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/cron", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"jobs\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\":\"job-cli\"") != null);
 }
 
 test "dispatch routes POST cron create action" {
