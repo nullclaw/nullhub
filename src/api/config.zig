@@ -4,7 +4,7 @@ const fs_compat = @import("../fs_compat.zig");
 const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
 const helpers = @import("helpers.zig");
-const nullclaw_admin = @import("nullclaw_admin.zig");
+const managed_cli = @import("managed_cli.zig");
 const query = @import("query.zig");
 
 const ApiResponse = helpers.ApiResponse;
@@ -87,8 +87,15 @@ pub fn handleGetManaged(
     const path = query.valueAlloc(allocator, target, "path") catch return helpers.serverError();
     defer if (path) |value| allocator.free(value);
 
-    if (nullclaw_admin.tryReadConfigJson(allocator, s, p, component, name, path)) |body| {
-        return .{ .status = "200 OK", .content_type = "application/json", .body = body };
+    if (managed_cli.supports(component)) {
+        return if (path) |value|
+            managed_cli.runJsonAdvanced(allocator, s, p, component, name, &.{ "config", "get", value, "--json" }, .{
+                .not_found_error_codes = &.{ "config_not_found", "config_path_not_found" },
+            })
+        else
+            managed_cli.runJsonAdvanced(allocator, s, p, component, name, &.{ "config", "show", "--json" }, .{
+                .not_found_error_codes = &.{"config_not_found"},
+            });
     }
     return handleGet(allocator, p, component, name, target);
 }
@@ -368,6 +375,90 @@ test "handleGetManaged prefers nullclaw CLI JSON when available" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("{\"path\":\"gateway.port\",\"value\":43123}", resp.body);
+}
+
+test "handleGetManaged maps managed nullclaw config misses to 404" {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-config-api-managed-not-found";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-not-found-state.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1" });
+    try writeManagedTestBinary(
+        allocator,
+        p,
+        "nullclaw",
+        "1.0.1",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "missing.path" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"error":"config_path_not_found","message":"Config path not found"}'
+        \\  exit 1
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = handleGetManaged(
+        allocator,
+        &s,
+        p,
+        "nullclaw",
+        "my-agent",
+        "/api/instances/nullclaw/my-agent/config?path=missing.path",
+    );
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"config_path_not_found\"") != null);
+}
+
+test "handleGetManaged rejects malformed managed CLI JSON" {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-config-api-managed-invalid-json";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-invalid-json-state.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
+    try writeManagedTestBinary(
+        allocator,
+        p,
+        "nullclaw",
+        "1.0.2",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "config" ] && [ "$2" = "show" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '"broken":true}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
+    );
+
+    const resp = handleGetManaged(
+        allocator,
+        &s,
+        p,
+        "nullclaw",
+        "my-agent",
+        "/api/instances/nullclaw/my-agent/config",
+    );
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"invalid_cli_response\"") != null);
 }
 
 test "handlePatch writes config (same as PUT for now)" {

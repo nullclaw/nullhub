@@ -11,8 +11,8 @@ const integration_mod = @import("../core/integration.zig");
 const launch_args_mod = @import("../core/launch_args.zig");
 const managed_skills = @import("../managed_skills.zig");
 const manifest_mod = @import("../core/manifest.zig");
+const managed_cli = @import("managed_cli.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
-const nullclaw_admin = @import("nullclaw_admin.zig");
 const query_api = @import("query.zig");
 
 const ApiResponse = helpers.ApiResponse;
@@ -61,7 +61,17 @@ fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, comp
     }
 }
 
-fn fetchJsonValue(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?[]const u8) ?std.json.Value {
+const FetchedJsonValue = struct {
+    bytes: []u8,
+    parsed: std.json.Parsed(std.json.Value),
+
+    fn deinit(self: *FetchedJsonValue, allocator: std.mem.Allocator) void {
+        self.parsed.deinit();
+        allocator.free(self.bytes);
+    }
+};
+
+fn fetchJsonValue(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?[]const u8) ?FetchedJsonValue {
     var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
@@ -86,11 +96,16 @@ fn fetchJsonValue(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?
     if (@intFromEnum(result.status) < 200 or @intFromEnum(result.status) >= 300) return null;
 
     const bytes = response_body.toOwnedSlice() catch return null;
+    errdefer allocator.free(bytes);
+
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, bytes, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
     }) catch return null;
-    return parsed.value;
+    return .{
+        .bytes = bytes,
+        .parsed = parsed,
+    };
 }
 
 fn buildInstanceUrl(allocator: std.mem.Allocator, port: u16, path: []const u8) ?[]const u8 {
@@ -157,35 +172,16 @@ fn probeNullclawBootstrapInMemory(
     component: []const u8,
     name: []const u8,
 ) NullclawBootstrapMemoryProbe {
-    const entry = s.getInstance(component, name) orelse return .{};
-
-    const bin_path = paths.binary(allocator, component, entry.version) catch return .{};
-    defer allocator.free(bin_path);
-    std_compat.fs.accessAbsolute(bin_path, .{}) catch return .{};
-
-    const inst_dir = paths.instanceDir(allocator, component, name) catch return .{};
-    defer allocator.free(inst_dir);
-
     const args = [_][]const u8{
         "memory",
         "get",
         nullclaw_bootstrap_memory_key,
         "--json",
     };
-    const result = component_cli.runWithComponentHome(
-        allocator,
-        component,
-        bin_path,
-        &args,
-        null,
-        inst_dir,
-    ) catch return .{};
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    const stdout = managed_cli.tryRunJsonSuccess(allocator, s, paths, component, name, &args) orelse return .{};
+    defer allocator.free(stdout);
 
-    if (!result.success or !isLikelyJsonPayload(result.stdout)) return .{};
-
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, stdout, .{
         .allocate = .alloc_if_needed,
         .ignore_unknown_fields = true,
     }) catch return .{};
@@ -1214,73 +1210,6 @@ pub fn usageWindowMinTs(window: []const u8, now_ts: i64) ?i64 {
     return now_ts - 24 * 60 * 60;
 }
 
-fn isLikelyJsonPayload(bytes: []const u8) bool {
-    const trimmed = std.mem.trim(u8, bytes, " \t\r\n");
-    if (trimmed.len == 0) return false;
-    return switch (trimmed[0]) {
-        '{', '[', '"', 'n', 't', 'f', '-', '0'...'9' => true,
-        else => false,
-    };
-}
-
-fn firstMeaningfulLine(text: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, text, " \t\r\n");
-    if (trimmed.len == 0) return "";
-    if (std.mem.indexOfScalar(u8, trimmed, '\n')) |idx| {
-        return std.mem.trim(u8, trimmed[0..idx], " \t\r");
-    }
-    return trimmed;
-}
-
-fn buildCliJsonError(
-    allocator: std.mem.Allocator,
-    code: []const u8,
-    message: []const u8,
-    stderr: ?[]const u8,
-    stdout: ?[]const u8,
-) ![]u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    errdefer buf.deinit();
-
-    try buf.appendSlice("{\"error\":\"");
-    try appendEscaped(&buf, code);
-    try buf.appendSlice("\",\"message\":\"");
-    try appendEscaped(&buf, message);
-    try buf.append('"');
-
-    if (stderr) |value| {
-        const trimmed = std.mem.trim(u8, value, " \t\r\n");
-        if (trimmed.len > 0) {
-            try buf.appendSlice(",\"stderr\":\"");
-            try appendEscaped(&buf, trimmed);
-            try buf.append('"');
-        }
-    }
-
-    if (stdout) |value| {
-        const trimmed = std.mem.trim(u8, value, " \t\r\n");
-        if (trimmed.len > 0) {
-            try buf.appendSlice(",\"stdout\":\"");
-            try appendEscaped(&buf, trimmed);
-            try buf.append('"');
-        }
-    }
-
-    try buf.append('}');
-    return try buf.toOwnedSlice();
-}
-
-fn jsonCliError(
-    allocator: std.mem.Allocator,
-    code: []const u8,
-    message: []const u8,
-    stderr: ?[]const u8,
-    stdout: ?[]const u8,
-) ApiResponse {
-    const body = buildCliJsonError(allocator, code, message, stderr, stdout) catch return helpers.serverError();
-    return jsonOk(body);
-}
-
 fn jsonCliConflict(
     allocator: std.mem.Allocator,
     code: []const u8,
@@ -1288,174 +1217,12 @@ fn jsonCliConflict(
     stderr: ?[]const u8,
     stdout: ?[]const u8,
 ) ApiResponse {
-    const body = buildCliJsonError(allocator, code, message, stderr, stdout) catch return helpers.serverError();
+    const body = managed_cli.buildJsonErrorBody(allocator, code, message, stderr, stdout) catch return helpers.serverError();
     return .{
         .status = "409 Conflict",
         .content_type = "application/json",
         .body = body,
     };
-}
-
-const CapturedInstanceCli = union(enum) {
-    response: ApiResponse,
-    result: component_cli.RunResult,
-};
-
-fn runInstanceCliCaptured(
-    allocator: std.mem.Allocator,
-    s: *state_mod.State,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    name: []const u8,
-    args: []const []const u8,
-) CapturedInstanceCli {
-    const entry = s.getInstance(component, name) orelse return .{ .response = notFound() };
-
-    const bin_path = paths.binary(allocator, component, entry.version) catch return .{ .response = helpers.serverError() };
-    defer allocator.free(bin_path);
-    std_compat.fs.accessAbsolute(bin_path, .{}) catch {
-        return .{ .response = jsonCliError(
-            allocator,
-            "component_binary_missing",
-            "Component binary is missing for this instance version",
-            null,
-            null,
-        ) };
-    };
-
-    const inst_dir = paths.instanceDir(allocator, component, name) catch return .{ .response = helpers.serverError() };
-    defer allocator.free(inst_dir);
-
-    const result = component_cli.runWithComponentHome(
-        allocator,
-        component,
-        bin_path,
-        args,
-        null,
-        inst_dir,
-    ) catch {
-        return .{ .response = jsonCliError(
-            allocator,
-            "cli_exec_failed",
-            "Failed to execute component CLI",
-            null,
-            null,
-        ) };
-    };
-
-    return .{ .result = result };
-}
-
-fn runInstanceCliJson(
-    allocator: std.mem.Allocator,
-    s: *state_mod.State,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    name: []const u8,
-    args: []const []const u8,
-) ApiResponse {
-    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args, .{});
-}
-
-const CliJsonOptions = struct {
-    null_is_not_found: bool = false,
-    not_found_error_code: ?[]const u8 = null,
-};
-
-fn cliJsonErrorMatches(payload: []const u8, expected_code: []const u8) bool {
-    const parsed = std.json.parseFromSlice(struct {
-        @"error": ?[]const u8 = null,
-    }, std.heap.page_allocator, payload, .{
-        .allocate = .alloc_if_needed,
-        .ignore_unknown_fields = true,
-    }) catch return false;
-    defer parsed.deinit();
-    return if (parsed.value.@"error") |value| std.mem.eql(u8, value, expected_code) else false;
-}
-
-fn runInstanceCliJsonAdvanced(
-    allocator: std.mem.Allocator,
-    s: *state_mod.State,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    name: []const u8,
-    args: []const []const u8,
-    options: CliJsonOptions,
-) ApiResponse {
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
-    const result = switch (captured) {
-        .response => |resp| return resp,
-        .result => |value| value,
-    };
-    defer allocator.free(result.stderr);
-
-    if (result.success and isLikelyJsonPayload(result.stdout)) {
-        if (options.null_is_not_found and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \t\r\n"), "null")) {
-            allocator.free(result.stdout);
-            return notFound();
-        }
-        return jsonOk(result.stdout);
-    }
-    if (!result.success and isLikelyJsonPayload(result.stdout)) {
-        if (options.not_found_error_code) |code| {
-            if (cliJsonErrorMatches(result.stdout, code)) {
-                return .{
-                    .status = "404 Not Found",
-                    .content_type = "application/json",
-                    .body = result.stdout,
-                };
-            }
-        }
-        return .{
-            .status = "400 Bad Request",
-            .content_type = "application/json",
-            .body = result.stdout,
-        };
-    }
-
-    defer allocator.free(result.stdout);
-
-    const stderr_line = firstMeaningfulLine(result.stderr);
-    const stdout_line = firstMeaningfulLine(result.stdout);
-    const message = if (stderr_line.len > 0)
-        stderr_line
-    else if (stdout_line.len > 0)
-        stdout_line
-    else if (result.success)
-        "CLI returned a non-JSON response"
-    else
-        "CLI command failed";
-
-    return jsonCliError(
-        allocator,
-        if (result.success) "invalid_cli_response" else "cli_command_failed",
-        message,
-        result.stderr,
-        result.stdout,
-    );
-}
-
-fn tryRunInstanceCliJsonSuccess(
-    allocator: std.mem.Allocator,
-    s: *state_mod.State,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    name: []const u8,
-    args: []const []const u8,
-) ?[]const u8 {
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
-    const result = switch (captured) {
-        .response => return null,
-        .result => |value| value,
-    };
-    defer allocator.free(result.stderr);
-
-    if (!result.success or !isLikelyJsonPayload(result.stdout)) {
-        allocator.free(result.stdout);
-        return null;
-    }
-
-    return result.stdout;
 }
 
 const ParsedCronPath = struct {
@@ -1612,8 +1379,8 @@ fn cronCliBadRequest(
     code: []const u8,
     result: component_cli.RunResult,
 ) ApiResponse {
-    const stderr_line = firstMeaningfulLine(result.stderr);
-    const stdout_line = firstMeaningfulLine(result.stdout);
+    const stderr_line = managed_cli.firstMeaningfulLine(result.stderr);
+    const stdout_line = managed_cli.firstMeaningfulLine(result.stdout);
     const message = if (stderr_line.len > 0)
         stderr_line
     else if (stdout_line.len > 0)
@@ -1621,7 +1388,7 @@ fn cronCliBadRequest(
     else
         "cron command failed";
 
-    const body = buildCliJsonError(allocator, code, message, result.stderr, result.stdout) catch return helpers.serverError();
+    const body = managed_cli.buildJsonErrorBody(allocator, code, message, result.stderr, result.stdout) catch return helpers.serverError();
     return .{
         .status = "400 Bad Request",
         .content_type = "application/json",
@@ -1641,120 +1408,31 @@ fn instanceModelsUnsupported() ApiResponse {
     return badRequest("{\"error\":\"models route is only supported for nullclaw instances\"}");
 }
 
-fn statusOverallFromRuntime(runtime_status: ?manager_mod.InstanceStatus) []const u8 {
-    return if (runtime_status) |status|
-        switch (status.status) {
-            .running => "ok",
-            .starting, .restarting => "starting",
-            .failed => "error",
-            .stopped, .stopping => "idle",
-        }
-    else
-        "idle";
-}
-
-fn buildInstanceStatusFallbackJson(
-    allocator: std.mem.Allocator,
-    entry: state_mod.InstanceEntry,
-    runtime_status: ?manager_mod.InstanceStatus,
-) ![]u8 {
-    var buf = std.array_list.Managed(u8).init(allocator);
-    errdefer buf.deinit();
-
-    try buf.appendSlice("{\"version\":\"");
-    try appendEscaped(&buf, entry.version);
-    try buf.appendSlice("\",\"pid\":");
-    if (runtime_status) |status| {
-        if (status.pid) |pid| {
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
-            try buf.appendSlice(text);
-        } else {
-            try buf.appendSlice("null");
-        }
-    } else {
-        try buf.appendSlice("null");
-    }
-
-    try buf.appendSlice(",\"uptime_seconds\":");
-    if (runtime_status) |status| {
-        if (status.uptime_seconds) |uptime| {
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
-            try buf.appendSlice(text);
-        } else {
-            try buf.appendSlice("0");
-        }
-    } else {
-        try buf.appendSlice("0");
-    }
-
-    try buf.appendSlice(",\"overall_status\":\"");
-    try buf.appendSlice(statusOverallFromRuntime(runtime_status));
-    try buf.appendSlice("\",\"components\":{}}");
-    return buf.toOwnedSlice();
-}
-
 fn handleInstanceStatus(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
-    manager: *manager_mod.Manager,
+    _: *manager_mod.Manager,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceStatusUnsupported();
-    const entry = s.getInstance(component, name) orelse return notFound();
-
-    if (nullclaw_admin.tryReadStatusJson(allocator, s, paths, component, name)) |body| {
-        return jsonOk(body);
-    }
-
-    const fallback_json = buildInstanceStatusFallbackJson(
-        allocator,
-        entry,
-        manager.getStatus(component, name),
-    ) catch return helpers.serverError();
-    return jsonOk(fallback_json);
+    if (!managed_cli.supports(component)) return instanceStatusUnsupported();
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "status", "--json" });
 }
 
 fn handleModels(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceModelsUnsupported();
-    _ = s.getInstance(component, name) orelse return notFound();
-
-    if (nullclaw_admin.tryReadModelsSummaryJson(allocator, s, paths, component, name)) |body| {
-        return jsonOk(body);
-    }
-
-    const config_bytes = nullclaw_admin.readConfigBytes(allocator, paths, component, name) catch |err| switch (err) {
-        error.FileNotFound => return .{
-            .status = "404 Not Found",
-            .content_type = "application/json",
-            .body = "{\"error\":\"config not found\"}",
-        },
-        else => return helpers.serverError(),
-    };
-    defer allocator.free(config_bytes);
-
-    const body = nullclaw_admin.buildModelsSummaryJsonFromConfig(allocator, config_bytes) catch
-        return badRequest("{\"error\":\"invalid config JSON\"}");
-    return jsonOk(body);
+    if (!managed_cli.supports(component)) return instanceModelsUnsupported();
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "models", "summary", "--json" });
 }
 
 fn handleCronList(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
-    _ = s.getInstance(component, name) orelse return notFound();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
 
-    if (nullclaw_admin.tryReadCronListJson(allocator, s, paths, component, name)) |jobs_json| {
-        defer allocator.free(jobs_json);
-        const body = std.fmt.allocPrint(allocator, "{{\"jobs\":{s}}}", .{jobs_json}) catch return helpers.serverError();
-        return jsonOk(body);
-    }
-
-    var store = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
-    defer store.deinit();
-
-    const jobs_json = std.json.Stringify.valueAlloc(allocator, store.parsed.value, .{}) catch return helpers.serverError();
+    const captured = managed_cli.captureJson(allocator, s, paths, component, name, &.{ "cron", "list", "--json" }, .{});
+    const jobs_json = switch (captured) {
+        .response => |resp| return resp,
+        .body => |body| body,
+    };
     defer allocator.free(jobs_json);
 
     const body = std.fmt.allocPrint(allocator, "{{\"jobs\":{s}}}", .{jobs_json}) catch return helpers.serverError();
@@ -1769,23 +1447,10 @@ fn handleCronGet(
     name: []const u8,
     job_id: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
-    _ = s.getInstance(component, name) orelse return notFound();
-
-    const cli_json = tryRunInstanceCliJsonSuccess(
-        allocator,
-        s,
-        paths,
-        component,
-        name,
-        &.{ "cron", "get", job_id, "--json" },
-    );
-    if (cli_json) |body| return jsonOk(body);
-
-    var store = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
-    defer store.deinit();
-    const job_json = (findCronJobJson(allocator, &store, job_id) catch return helpers.serverError()) orelse return notFound();
-    return jsonOk(job_json);
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
+    return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, &.{ "cron", "get", job_id, "--json" }, .{
+        .null_is_not_found = true,
+    });
 }
 
 fn handleCronRuns(
@@ -1797,14 +1462,14 @@ fn handleCronRuns(
     job_id: []const u8,
     target: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
 
     const limit = query_api.usizeValue(target, "limit", 10);
     var limit_buf: [32]u8 = undefined;
     const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
 
-    return runInstanceCliJson(
+    return managed_cli.runJson(
         allocator,
         s,
         paths,
@@ -1823,7 +1488,7 @@ fn handleCronCreate(
     body: []const u8,
     once: bool,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
 
     const CreateBody = struct {
@@ -1912,7 +1577,7 @@ fn handleCronCreate(
         args.append(value) catch return helpers.serverError();
     }
 
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, args.items);
     const result = switch (captured) {
         .response => |resp| return resp,
         .result => |value| value,
@@ -1944,14 +1609,14 @@ fn handleCronCommandWithJob(
     success_status: []const u8,
     error_code: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
 
     var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
     defer before.deinit();
     if (!cronStoreHasJobId(&before, job_id)) return notFound();
 
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, args);
     const result = switch (captured) {
         .response => |resp| return resp,
         .result => |value| value,
@@ -1983,7 +1648,7 @@ fn handleCronUpdate(
     job_id: []const u8,
     body: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
 
     const UpdateBody = struct {
@@ -2044,7 +1709,7 @@ fn handleCronUpdate(
         args.append(value) catch return helpers.serverError();
     }
 
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, args.items);
     const result = switch (captured) {
         .response => |resp| return resp,
         .result => |value| value,
@@ -2071,7 +1736,7 @@ fn handleCronDelete(
     name: []const u8,
     job_id: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    if (!managed_cli.supports(component)) return instanceCronUnsupported();
     _ = s.getInstance(component, name) orelse return notFound();
 
     var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
@@ -2079,7 +1744,7 @@ fn handleCronDelete(
     if (!cronStoreHasJobId(&before, job_id)) return notFound();
 
     const args = [_][]const u8{ "cron", "remove", job_id };
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, &args);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, &args);
     const result = switch (captured) {
         .response => |resp| return resp,
         .result => |value| value,
@@ -2673,7 +2338,7 @@ pub fn handleHistory(allocator: std.mem.Allocator, s: *state_mod.State, paths: p
     args.append(allocator, offset_str) catch return helpers.serverError();
     args.append(allocator, "--json") catch return helpers.serverError();
 
-    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    return managed_cli.runJson(allocator, s, paths, component, name, args.items);
 }
 
 /// GET /api/instances/{component}/{name}/onboarding
@@ -2735,7 +2400,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     if (query_api.boolValue(target, "stats")) {
         args.append(allocator, "stats") catch return helpers.serverError();
         args.append(allocator, "--json") catch return helpers.serverError();
-        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+        return managed_cli.runJson(allocator, s, paths, component, name, args.items);
     }
 
     if (key) |value| {
@@ -2750,7 +2415,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
             args.append(allocator, session) catch return helpers.serverError();
         }
         args.append(allocator, "--json") catch return helpers.serverError();
-        return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, args.items, .{
             .null_is_not_found = true,
         });
     }
@@ -2767,7 +2432,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
             args.append(allocator, session) catch return helpers.serverError();
         }
         args.append(allocator, "--json") catch return helpers.serverError();
-        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+        return managed_cli.runJson(allocator, s, paths, component, name, args.items);
     }
 
     args.append(allocator, "list") catch return helpers.serverError();
@@ -2788,7 +2453,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     args.append(allocator, "--limit") catch return helpers.serverError();
     args.append(allocator, limit_str) catch return helpers.serverError();
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    return managed_cli.runJson(allocator, s, paths, component, name, args.items);
 }
 
 fn handleMemoryWrite(
@@ -2855,8 +2520,11 @@ fn handleMemoryWrite(
         args.append(allocator, value) catch return helpers.serverError();
     }
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
-        .not_found_error_code = if (std.mem.eql(u8, method, "PATCH")) "memory_not_found" else null,
+    return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_codes = if (std.mem.eql(u8, method, "PATCH"))
+            &.{"memory_not_found"}
+        else
+            &.{},
     });
 }
 
@@ -2868,22 +2536,22 @@ fn handleMemoryMaintenance(
     name: []const u8,
     subcommand: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"memory maintenance is only supported for nullclaw instances\"}");
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "memory", subcommand, "--json" });
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"memory maintenance is only supported for nullclaw instances\"}");
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "memory", subcommand, "--json" });
 }
 
 fn handleDoctor(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"doctor is only supported for nullclaw instances\"}");
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "doctor", "--json" });
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"doctor is only supported for nullclaw instances\"}");
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "doctor", "--json" });
 }
 
 fn handleCapabilities(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"capabilities are only supported for nullclaw instances\"}");
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "capabilities", "--json" });
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"capabilities are only supported for nullclaw instances\"}");
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "capabilities", "--json" });
 }
 
 fn handleMcp(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"mcp inspection is only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"mcp inspection is only supported for nullclaw instances\"}");
     const server_name = query_api.valueAlloc(allocator, target, "name") catch return helpers.serverError();
     defer if (server_name) |value| allocator.free(value);
 
@@ -2898,8 +2566,11 @@ fn handleMcp(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod
         args.append(allocator, "list") catch return helpers.serverError();
     }
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
-        .not_found_error_code = if (server_name != null) "mcp_not_found" else null,
+    return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_codes = if (server_name != null)
+            &.{"mcp_not_found"}
+        else
+            &.{},
     });
 }
 
@@ -2913,7 +2584,7 @@ fn handleModelsAction(
     target: []const u8,
 ) ApiResponse {
     if (!std.mem.eql(u8, method, "GET") and !std.mem.eql(u8, method, "POST")) return methodNotAllowed();
-    if (!nullclaw_admin.supports(component)) return instanceModelsUnsupported();
+    if (!managed_cli.supports(component)) return instanceModelsUnsupported();
 
     if (std.mem.eql(u8, method, "POST")) {
         return .{
@@ -2927,7 +2598,7 @@ fn handleModelsAction(
     defer if (model_name) |value| allocator.free(value);
     if (model_name) |value| {
         if (value.len == 0) return badRequest("{\"error\":\"name is required\"}");
-        return runInstanceCliJson(allocator, s, paths, component, name, &.{ "models", "info", value, "--json" });
+        return managed_cli.runJson(allocator, s, paths, component, name, &.{ "models", "info", value, "--json" });
     }
     return handleModels(allocator, s, paths, component, name);
 }
@@ -2940,7 +2611,7 @@ fn handleAgentInvoke(
     name: []const u8,
     body: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"agent route is only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"agent route is only supported for nullclaw instances\"}");
 
     const parsed = std.json.parseFromSlice(struct {
         message: ?[]const u8 = null,
@@ -2994,7 +2665,7 @@ fn handleAgentInvoke(
         }
     }
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    return managed_cli.runJson(allocator, s, paths, component, name, args.items);
 }
 
 fn handleAgentSessions(
@@ -3006,7 +2677,7 @@ fn handleAgentSessions(
     method: []const u8,
     target: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"agent sessions are only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"agent sessions are only supported for nullclaw instances\"}");
     const session_id = query_api.valueAlloc(allocator, target, "session_id") catch return helpers.serverError();
     defer if (session_id) |value| allocator.free(value);
 
@@ -3032,8 +2703,11 @@ fn handleAgentSessions(
     }
 
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
-        .not_found_error_code = if (session_id != null) "session_not_found" else null,
+    return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_codes = if (session_id != null)
+            &.{"session_not_found"}
+        else
+            &.{},
     });
 }
 
@@ -3045,7 +2719,7 @@ fn handleConfigSet(
     name: []const u8,
     body: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
 
     const parsed = std.json.parseFromSlice(struct {
         path: ?[]const u8 = null,
@@ -3061,7 +2735,7 @@ fn handleConfigSet(
     const raw_json = std.json.Stringify.valueAlloc(allocator, raw_value, .{}) catch return helpers.serverError();
     defer allocator.free(raw_json);
 
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "set", path_value, raw_json, "--json" });
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "config", "set", path_value, raw_json, "--json" });
 }
 
 fn handleConfigUnset(
@@ -3072,7 +2746,7 @@ fn handleConfigUnset(
     name: []const u8,
     body: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
 
     const parsed = std.json.parseFromSlice(struct {
         path: ?[]const u8 = null,
@@ -3082,7 +2756,7 @@ fn handleConfigUnset(
     defer parsed.deinit();
 
     const path_value = parsed.value.path orelse return badRequest("{\"error\":\"path is required\"}");
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "unset", path_value, "--json" });
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "config", "unset", path_value, "--json" });
 }
 
 fn handleConfigReload(
@@ -3092,8 +2766,8 @@ fn handleConfigReload(
     component: []const u8,
     name: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config reload is only supported for nullclaw instances\"}");
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "reload", "--json" });
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"config reload is only supported for nullclaw instances\"}");
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "config", "reload", "--json" });
 }
 
 fn handleConfigValidate(
@@ -3104,12 +2778,12 @@ fn handleConfigValidate(
     name: []const u8,
     body: []const u8,
 ) ApiResponse {
-    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config validate is only supported for nullclaw instances\"}");
+    if (!managed_cli.supports(component)) return badRequest("{\"error\":\"config validate is only supported for nullclaw instances\"}");
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
     if (trimmed.len == 0) {
-        return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "validate", "--json" });
+        return managed_cli.runJson(allocator, s, paths, component, name, &.{ "config", "validate", "--json" });
     }
-    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "validate", body, "--json" });
+    return managed_cli.runJson(allocator, s, paths, component, name, &.{ "config", "validate", body, "--json" });
 }
 
 fn instanceWorkspaceDir(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) ![]u8 {
@@ -3140,31 +2814,16 @@ fn handleChannels(
     channel_type: ?[]const u8,
 ) ApiResponse {
     _ = s.getInstance(component, name) orelse return notFound();
-    if (!nullclaw_admin.supports(component)) {
+    if (!managed_cli.supports(component)) {
         return badRequest("{\"error\":\"channel inspection is only supported for nullclaw instances\"}");
     }
 
-    if (nullclaw_admin.tryReadChannelsJson(allocator, s, paths, component, name, channel_type)) |json| {
-        return jsonOk(json);
-    }
-
-    const config_bytes = nullclaw_admin.readConfigBytes(allocator, paths, component, name) catch |err| switch (err) {
-        error.FileNotFound => return notFound(),
-        else => return helpers.serverError(),
-    };
-    defer allocator.free(config_bytes);
-
-    const fallback_json = nullclaw_admin.buildChannelsJsonFromConfig(allocator, config_bytes, channel_type) catch |err| switch (err) {
-        error.UnknownChannelType => return notFound(),
-        else => return jsonCliError(
-            allocator,
-            "channels_unavailable",
-            "Failed to inspect channels for this instance",
-            null,
-            null,
-        ),
-    };
-    return jsonOk(fallback_json);
+    return if (channel_type) |value|
+        managed_cli.runJsonAdvanced(allocator, s, paths, component, name, &.{ "channel", "info", value, "--json" }, .{
+            .not_found_error_codes = &.{"channel_type_not_found"},
+        })
+    else
+        managed_cli.runJson(allocator, s, paths, component, name, &.{ "channel", "list", "--json" });
 }
 
 fn handleSkillsInstall(
@@ -3290,18 +2949,9 @@ fn handleSkillsInstall(
         args.append(allocator, if (source) |value| value else url.?) catch return helpers.serverError();
     }
 
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, args.items);
     const result = switch (captured) {
-        .response => |resp| {
-            if (std.mem.eql(u8, resp.status, "200 OK")) {
-                return .{
-                    .status = "409 Conflict",
-                    .content_type = resp.content_type,
-                    .body = resp.body,
-                };
-            }
-            return resp;
-        },
+        .response => |resp| return resp,
         .result => |value| value,
     };
     defer allocator.free(result.stdout);
@@ -3357,18 +3007,9 @@ fn handleSkillsRemove(
     args.append(allocator, "remove") catch return helpers.serverError();
     args.append(allocator, skill_name.?) catch return helpers.serverError();
 
-    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const captured = managed_cli.capture(allocator, s, paths, component, name, args.items);
     const result = switch (captured) {
-        .response => |resp| {
-            if (std.mem.eql(u8, resp.status, "200 OK")) {
-                return .{
-                    .status = "409 Conflict",
-                    .content_type = resp.content_type,
-                    .body = resp.body,
-                };
-            }
-            return resp;
-        },
+        .response => |resp| return resp,
         .result => |value| value,
     };
     defer allocator.free(result.stdout);
@@ -3411,7 +3052,7 @@ pub fn handleSkills(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
         args.append(allocator, "list") catch return helpers.serverError();
     }
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+    return managed_cli.runJsonAdvanced(allocator, s, paths, component, name, args.items, .{
         .null_is_not_found = skill_name != null,
     });
 }
@@ -3633,29 +3274,32 @@ fn handleIntegrationGet(
                 const status = getStatusLocked(mutex, manager, "nulltickets", tracker.name) orelse break :blk false;
                 break :blk status.status == .running;
             };
-            const pipelines = blk: {
+            var pipelines = blk: {
                 if (!is_running) break :blk allocator.alloc(PipelineSummary, 0) catch return helpers.serverError();
                 const url = buildInstanceUrl(allocator, tracker.port, "/pipelines") orelse break :blk allocator.alloc(PipelineSummary, 0) catch return helpers.serverError();
                 defer allocator.free(url);
                 break :blk fetchPipelineSummaries(allocator, url, tracker.api_token) orelse (allocator.alloc(PipelineSummary, 0) catch return helpers.serverError());
             };
+            errdefer deinitPipelineSummaries(allocator, pipelines);
             tracker_options.append(allocator, .{
                 .name = tracker.name,
                 .port = tracker.port,
                 .running = is_running,
                 .pipelines = pipelines,
             }) catch return helpers.serverError();
+            pipelines = &.{};
         }
 
-        const tracker_status = blk: {
+        var tracker_status = blk: {
             const status = getStatusLocked(mutex, manager, "nullboiler", name) orelse break :blk null;
             if (status.status != .running) break :blk null;
             const url = buildInstanceUrl(allocator, boiler_cfg.port, "/tracker/status") orelse break :blk null;
             defer allocator.free(url);
             break :blk fetchJsonValue(allocator, url, boiler_cfg.api_token);
         };
+        defer if (tracker_status) |*value| value.deinit(allocator);
 
-        const queue_status = blk: {
+        var queue_status = blk: {
             const linked_tracker = linked orelse break :blk null;
             const status = getStatusLocked(mutex, manager, "nulltickets", linked_tracker.name) orelse break :blk null;
             if (status.status != .running) break :blk null;
@@ -3663,6 +3307,7 @@ fn handleIntegrationGet(
             defer allocator.free(url);
             break :blk fetchJsonValue(allocator, url, linked_tracker.api_token);
         };
+        defer if (queue_status) |*value| value.deinit(allocator);
 
         const body = std.json.Stringify.valueAlloc(allocator, .{
             .kind = "nullboiler",
@@ -3680,8 +3325,8 @@ fn handleIntegrationGet(
                 .agent_id = tracker.agent_id,
                 .workflow_file = workflow.file_name,
             } else null else null,
-            .tracker = tracker_status,
-            .queue = queue_status,
+            .tracker = if (tracker_status) |value| value.parsed.value else null,
+            .queue = if (queue_status) |value| value.parsed.value else null,
         }, .{ .emit_null_optional_fields = false }) catch return helpers.serverError();
         return jsonOk(body);
     }
@@ -3692,42 +3337,67 @@ fn handleIntegrationGet(
         const boilers = listNullBoilersLocked(allocator, mutex, s, paths) catch return helpers.serverError();
         defer integration_mod.deinitNullBoilerConfigs(allocator, boilers);
 
-        var linked_boilers: std.ArrayListUnmanaged(struct {
+        const LinkedBoilerRuntime = struct {
+            name: []const u8,
+            port: u16,
+            tracker: ?FetchedJsonValue = null,
+        };
+        const LinkedBoilerView = struct {
             name: []const u8,
             port: u16,
             tracker: ?std.json.Value = null,
-        }) = .empty;
-        defer linked_boilers.deinit(allocator);
+        };
+
+        var linked_boilers: std.ArrayListUnmanaged(LinkedBoilerRuntime) = .empty;
+        defer {
+            for (linked_boilers.items) |*boiler| {
+                if (boiler.tracker) |*tracker| tracker.deinit(allocator);
+            }
+            linked_boilers.deinit(allocator);
+        }
 
         for (boilers) |boiler| {
             const linked = integration_mod.matchNullTicketsTarget(boiler, &.{tickets_cfg}) orelse continue;
             _ = linked;
-            const tracker_value = blk: {
+            var tracker_value = blk: {
                 const status = getStatusLocked(mutex, manager, "nullboiler", boiler.name) orelse break :blk null;
                 if (status.status != .running) break :blk null;
                 const url = buildInstanceUrl(allocator, boiler.port, "/tracker/status") orelse break :blk null;
                 defer allocator.free(url);
                 break :blk fetchJsonValue(allocator, url, boiler.api_token);
             };
+            errdefer if (tracker_value) |*value| value.deinit(allocator);
             linked_boilers.append(allocator, .{
                 .name = boiler.name,
                 .port = boiler.port,
                 .tracker = tracker_value,
             }) catch return helpers.serverError();
+            tracker_value = null;
         }
 
-        const queue = blk: {
+        var queue = blk: {
             const status = getStatusLocked(mutex, manager, "nulltickets", name) orelse break :blk null;
             if (status.status != .running) break :blk null;
             const url = buildInstanceUrl(allocator, tickets_cfg.port, "/ops/queue") orelse break :blk null;
             defer allocator.free(url);
             break :blk fetchJsonValue(allocator, url, tickets_cfg.api_token);
         };
+        defer if (queue) |*value| value.deinit(allocator);
+
+        var linked_boiler_views: std.ArrayListUnmanaged(LinkedBoilerView) = .empty;
+        defer linked_boiler_views.deinit(allocator);
+        for (linked_boilers.items) |boiler| {
+            linked_boiler_views.append(allocator, .{
+                .name = boiler.name,
+                .port = boiler.port,
+                .tracker = if (boiler.tracker) |tracker| tracker.parsed.value else null,
+            }) catch return helpers.serverError();
+        }
 
         const body = std.json.Stringify.valueAlloc(allocator, .{
             .kind = "nulltickets",
-            .queue = queue,
-            .linked_boilers = linked_boilers.items,
+            .queue = if (queue) |value| value.parsed.value else null,
+            .linked_boilers = linked_boiler_views.items,
         }, .{ .emit_null_optional_fields = false }) catch return helpers.serverError();
         return jsonOk(body);
     }
@@ -4550,7 +4220,7 @@ test "handleInstanceStatus uses nullclaw CLI when available" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"components\":{\"gateway\"") != null);
 }
 
-test "handleInstanceStatus falls back to supervisor status when CLI is unavailable" {
+test "handleInstanceStatus returns gateway error when managed CLI is unavailable" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-fallback.json");
     defer s.deinit();
@@ -4562,10 +4232,8 @@ test "handleInstanceStatus falls back to supervisor status when CLI is unavailab
     const resp = handleInstanceStatus(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
     defer allocator.free(resp.body);
 
-    try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"version\":\"2026.4.17\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"idle\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"components\":{}") != null);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"component_binary_missing\"") != null);
 }
 
 test "handleStart returns 404 for missing instance" {
@@ -4932,7 +4600,7 @@ test "dispatch routes GET status action" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"starting\"") != null);
 }
 
-test "dispatch routes GET models action" {
+test "dispatch routes GET models action returns gateway error when CLI is unavailable" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models.json");
     defer s.deinit();
@@ -4940,23 +4608,12 @@ test "dispatch routes GET models action" {
     defer mctx.deinit(allocator);
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
-    try writeTestInstanceConfig(
-        allocator,
-        mctx.paths,
-        "nullclaw",
-        "my-agent",
-        "{\"default_provider\":\"openrouter\",\"agents\":{\"defaults\":{\"model\":{\"primary\":\"openrouter/anthropic/claude-sonnet-4\"}}},\"models\":{\"providers\":{\"openrouter\":{\"api_key\":\"sk-test\"},\"ollama\":{}}}}",
-    );
 
     const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models", "").?;
     defer allocator.free(resp.body);
 
-    try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_provider\":\"openrouter\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_model\":\"openrouter/anthropic/claude-sonnet-4\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"ollama\",\"has_key\":false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"openrouter\",\"has_key\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "sk-test") == null);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"component_binary_missing\"") != null);
 }
 
 test "dispatch routes GET models action via nullclaw CLI when available" {
@@ -4996,32 +4653,42 @@ test "dispatch routes GET models action via nullclaw CLI when available" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"ollama\",\"has_key\":false") != null);
 }
 
-test "dispatch routes GET models action infers provider from current config shape" {
+test "dispatch routes GET models action rejects malformed CLI JSON" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-current.json");
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-invalid.json");
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
-    try writeTestInstanceConfig(
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1-invalid" });
+    try writeTestBinary(
         allocator,
         mctx.paths,
         "nullclaw",
-        "my-agent",
-        "{\"agents\":{\"defaults\":{\"model\":{\"primary\":\"custom:https://gateway.example.com/api/qianfan/custom-model\"}}},\"models\":{\"providers\":{\"custom:https://gateway.example.com/api\":{\"api_key\":\"sk-test\"}}}}",
+        "1.0.1-invalid",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "models" ] && [ "$2" = "summary" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '"default_provider":"openai"}'
+        \\  exit 0
+        \\fi
+        \\exit 64
+        ,
     );
 
     const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models", "").?;
     defer allocator.free(resp.body);
 
-    try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_provider\":\"custom:https://gateway.example.com/api\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_model\":\"custom:https://gateway.example.com/api/qianfan/custom-model\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"custom:https://gateway.example.com/api\",\"has_key\":true") != null);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"invalid_cli_response\"") != null);
 }
 
-test "dispatch routes GET cron action" {
+test "dispatch routes GET cron action returns gateway error when CLI is unavailable" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron.json");
     defer s.deinit();
@@ -5029,20 +4696,12 @@ test "dispatch routes GET cron action" {
     defer mctx.deinit(allocator);
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
-    try writeTestCronStore(
-        allocator,
-        mctx.paths,
-        "nullclaw",
-        "my-agent",
-        "[{\"id\":\"job-1\",\"expression\":\"*/5 * * * *\",\"command\":\"echo hello\",\"paused\":false,\"one_shot\":false}]",
-    );
 
     const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/cron", "").?;
     defer allocator.free(resp.body);
 
-    try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"jobs\":[") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\":\"job-1\"") != null);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"component_binary_missing\"") != null);
 }
 
 test "dispatch routes GET cron action via nullclaw CLI when available" {
@@ -5724,7 +5383,7 @@ test "handleMemory wraps legacy CLI failures as JSON errors" {
 
     const resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?stats=1");
     defer allocator.free(resp.body);
-    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("502 Bad Gateway", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"cli_command_failed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "Unknown memory command") != null);
 }
@@ -5956,9 +5615,11 @@ test "dispatch routes GET channels action" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"account_id\":\"main\"") != null);
 }
 
-test "dispatch routes GET channel detail falls back to config" {
+test "dispatch routes GET channel detail maps missing type to 404" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-channel-detail-missing.json");
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5966,21 +5627,23 @@ test "dispatch routes GET channel detail falls back to config" {
     std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
     defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
-    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
-    try writeTestInstanceConfig(
-        allocator,
-        mctx.paths,
-        "nullclaw",
-        "my-agent",
-        "{\"channels\":{\"telegram\":{\"accounts\":{\"main\":{\"bot_token\":\"secret\"},\"backup\":{\"bot_token\":\"hidden\"}}}}}",
-    );
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-missing" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "channel" ] && [ "$2" = "info" ] && [ "$3" = "telegram" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' '{"error":"channel_type_not_found","message":"Unknown channel type"}'
+        \\  exit 1
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-missing", script);
 
     const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/channels/telegram", "").?;
     defer allocator.free(resp.body);
-    try std.testing.expectEqualStrings("200 OK", resp.status);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"type\":\"telegram\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"account_id\":\"backup\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "secret") == null);
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"channel_type_not_found\"") != null);
 }
 
 test "dispatch routes GET channel detail via nullclaw CLI when available" {
