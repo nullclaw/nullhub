@@ -9,6 +9,7 @@ const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
 const local_binary = @import("../core/local_binary.zig");
+const fs_compat = @import("../fs_compat.zig");
 const launch_args_mod = @import("../core/launch_args.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const manager_mod = @import("../supervisor/manager.zig");
@@ -630,6 +631,39 @@ fn findLocalUiModuleDir(allocator: std.mem.Allocator, module_name: []const u8) ?
     return module_dir;
 }
 
+fn npmCommand() []const u8 {
+    return if (builtin.os.tag == .windows) "npm.cmd" else "npm";
+}
+
+fn copyDirectoryContents(allocator: std.mem.Allocator, source_dir_path: []const u8, dest_dir_path: []const u8) !void {
+    try fs_compat.makePath(dest_dir_path);
+
+    var source_dir = try std_compat.fs.openDirAbsolute(source_dir_path, .{ .iterate = true });
+    defer source_dir.close();
+
+    var walker = try source_dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        const dest_path = try std.fs.path.join(allocator, &.{ dest_dir_path, entry.path });
+        defer allocator.free(dest_path);
+
+        switch (entry.kind) {
+            .directory => try fs_compat.makePath(dest_path),
+            .file => {
+                if (std.fs.path.dirname(dest_path)) |dest_parent| {
+                    try fs_compat.makePath(dest_parent);
+                }
+
+                const source_path = try std.fs.path.join(allocator, &.{ source_dir_path, entry.path });
+                defer allocator.free(source_path);
+                try std_compat.fs.copyFileAbsolute(source_path, dest_path, .{});
+            },
+            else => return error.UnsupportedFileKind,
+        }
+    }
+}
+
 fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u8, dest_dir: []const u8) bool {
     std.debug.print("Building UI module from local source: {s}\n", .{module_dir});
 
@@ -639,7 +673,7 @@ fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u
     // Run npm run build:module
     const build_result = std_compat.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "npm", "run", "build:module" },
+        .argv = &.{ npmCommand(), "run", "build:module" },
         .cwd = module_dir_z,
     }) catch return false;
     defer allocator.free(build_result.stdout);
@@ -653,36 +687,15 @@ fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u
         else => return false,
     }
 
-    // Create dest_dir
-    std_compat.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.FileNotFound => {
-            if (std.fs.path.dirname(dest_dir)) |p| {
-                std_compat.fs.makeDirAbsolute(p) catch return false;
-                std_compat.fs.makeDirAbsolute(dest_dir) catch return false;
-            } else return false;
-        },
-        else => return false,
-    };
-
     // Copy dist/ contents to dest_dir
     const dist_path = std.fs.path.join(allocator, &.{ module_dir, "dist" }) catch return false;
     defer allocator.free(dist_path);
 
-    const copy_cmd = std.fmt.allocPrint(allocator, "cp -r {s}/. {s}/", .{ dist_path, dest_dir }) catch return false;
-    defer allocator.free(copy_cmd);
-
-    const cp_result = std_compat.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ "sh", "-c", copy_cmd },
-    }) catch return false;
-    defer allocator.free(cp_result.stdout);
-    defer allocator.free(cp_result.stderr);
-
-    return switch (cp_result.term) {
-        .exited => |code| code == 0,
-        else => false,
+    copyDirectoryContents(allocator, dist_path, dest_dir) catch |err| {
+        std.debug.print("UI module copy failed ({s})\n", .{@errorName(err)});
+        return false;
     };
+    return true;
 }
 
 pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void {
@@ -927,6 +940,49 @@ test "directory creation succeeds in temp directory" {
         var d = try std_compat.fs.openDirAbsolute(logs_dir, .{});
         d.close();
     }
+}
+
+test "copyDirectoryContents recursively copies nested files" {
+    if (builtin.os.tag == .wasi) return;
+
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const root = try std_compat.fs.Dir.wrap(tmp_dir.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+
+    const source_dir = try std.fs.path.join(allocator, &.{ root, "source" });
+    defer allocator.free(source_dir);
+    const nested_dir = try std.fs.path.join(allocator, &.{ source_dir, "nested", "deep" });
+    defer allocator.free(nested_dir);
+    const dest_dir = try std.fs.path.join(allocator, &.{ root, "dest" });
+    defer allocator.free(dest_dir);
+
+    try fs_compat.makePath(nested_dir);
+
+    const top_level_file = try std.fs.path.join(allocator, &.{ source_dir, "index.js" });
+    defer allocator.free(top_level_file);
+    const nested_file = try std.fs.path.join(allocator, &.{ nested_dir, "chunk.js" });
+    defer allocator.free(nested_file);
+
+    try writeFile(top_level_file, "console.log('root');");
+    try writeFile(nested_file, "console.log('nested');");
+
+    try copyDirectoryContents(allocator, source_dir, dest_dir);
+
+    const copied_top_level = try std.fs.path.join(allocator, &.{ dest_dir, "index.js" });
+    defer allocator.free(copied_top_level);
+    const copied_nested = try std.fs.path.join(allocator, &.{ dest_dir, "nested", "deep", "chunk.js" });
+    defer allocator.free(copied_nested);
+
+    const top_bytes = try fs_compat.readFileAlloc(std_compat.fs.cwd(), allocator, copied_top_level, 1024);
+    defer allocator.free(top_bytes);
+    const nested_bytes = try fs_compat.readFileAlloc(std_compat.fs.cwd(), allocator, copied_nested, 1024);
+    defer allocator.free(nested_bytes);
+
+    try std.testing.expectEqualStrings("console.log('root');", top_bytes);
+    try std.testing.expectEqualStrings("console.log('nested');", nested_bytes);
 }
 
 test "injectHomeField adds home to JSON object" {
