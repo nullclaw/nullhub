@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const paths_mod = @import("paths.zig");
 const state_mod = @import("state.zig");
 
@@ -22,7 +23,7 @@ pub fn ensureNullclawWebChannelConfig(
     const config_path = paths.instanceConfig(allocator, component, name) catch return .{};
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => return err,
     };
@@ -36,6 +37,7 @@ pub fn ensureNullclawWebChannelConfig(
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
+    const json_allocator = parsed.arena.allocator();
 
     if (parsed.value != .object) return .{};
     const root = &parsed.value.object;
@@ -49,19 +51,19 @@ pub fn ensureNullclawWebChannelConfig(
     const web_port = pickAvailableWebPort(used_ports);
 
     var changed = false;
-    const channels_obj = (try ensureObjectField(allocator, root, "channels", &changed)) orelse return .{};
-    const web_obj = (try ensureObjectField(allocator, channels_obj, "web", &changed)) orelse return .{};
-    const accounts_obj = (try ensureObjectField(allocator, web_obj, "accounts", &changed)) orelse return .{};
-    const default_obj = (try ensureObjectField(allocator, accounts_obj, "default", &changed)) orelse return .{};
+    const channels_obj = (try ensureObjectField(json_allocator, root, "channels", &changed)) orelse return .{};
+    const web_obj = (try ensureObjectField(json_allocator, channels_obj, "web", &changed)) orelse return .{};
+    const accounts_obj = (try ensureObjectField(json_allocator, web_obj, "accounts", &changed)) orelse return .{};
+    const default_obj = (try ensureObjectField(json_allocator, accounts_obj, "default", &changed)) orelse return .{};
 
-    try setStringFieldIfMissing(default_obj, "account_id", "default", &changed);
-    try setStringFieldIfMissing(default_obj, "transport", "local", &changed);
-    try setIntegerFieldIfMissing(default_obj, "port", web_port, &changed);
-    try setStringFieldIfMissing(default_obj, "listen", "127.0.0.1", &changed);
-    try setStringFieldIfMissing(default_obj, "path", "/ws", &changed);
-    try setIntegerFieldIfMissing(default_obj, "max_connections", 10, &changed);
-    try setStringFieldIfMissing(default_obj, "message_auth_mode", "pairing", &changed);
-    try setOriginsIfMissing(allocator, default_obj, &changed);
+    try setStringFieldIfMissing(json_allocator, default_obj, "account_id", "default", &changed);
+    try setStringFieldIfMissing(json_allocator, default_obj, "transport", "local", &changed);
+    try setIntegerFieldIfMissing(json_allocator, default_obj, "port", web_port, &changed);
+    try setStringFieldIfMissing(json_allocator, default_obj, "listen", "127.0.0.1", &changed);
+    try setStringFieldIfMissing(json_allocator, default_obj, "path", "/ws", &changed);
+    try setIntegerFieldIfMissing(json_allocator, default_obj, "max_connections", 10, &changed);
+    try setStringFieldIfMissing(json_allocator, default_obj, "message_auth_mode", "pairing", &changed);
+    try setOriginsIfMissing(json_allocator, default_obj, &changed);
 
     if (!changed) {
         return .{ .web_port = web_port };
@@ -72,7 +74,7 @@ pub fn ensureNullclawWebChannelConfig(
     });
     defer allocator.free(rendered);
 
-    var out = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    var out = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer out.close();
     try out.writeAll(rendered);
     try out.writeAll("\n");
@@ -89,9 +91,9 @@ fn ensureObjectField(
     key: []const u8,
     changed: *bool,
 ) !?*std.json.ObjectMap {
-    const gop = try obj.getOrPut(key);
+    const gop = try obj.getOrPut(allocator, key);
     if (!gop.found_existing) {
-        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+        gop.value_ptr.* = .{ .object = .empty };
         changed.* = true;
         return &gop.value_ptr.object;
     }
@@ -100,24 +102,26 @@ fn ensureObjectField(
 }
 
 fn setStringFieldIfMissing(
+    allocator: std.mem.Allocator,
     obj: *std.json.ObjectMap,
     key: []const u8,
     value: []const u8,
     changed: *bool,
 ) !void {
     if (obj.get(key) != null) return;
-    try obj.put(key, .{ .string = value });
+    try obj.put(allocator, key, .{ .string = value });
     changed.* = true;
 }
 
 fn setIntegerFieldIfMissing(
+    allocator: std.mem.Allocator,
     obj: *std.json.ObjectMap,
     key: []const u8,
     value: u16,
     changed: *bool,
 ) !void {
     if (obj.get(key) != null) return;
-    try obj.put(key, .{ .integer = value });
+    try obj.put(allocator, key, .{ .integer = value });
     changed.* = true;
 }
 
@@ -130,7 +134,7 @@ fn setOriginsIfMissing(
 
     var origins = std.json.Array.init(allocator);
     try origins.append(.{ .string = "*" });
-    try obj.put("allowed_origins", .{ .array = origins });
+    try obj.put(allocator, "allowed_origins", .{ .array = origins });
     changed.* = true;
 }
 
@@ -224,7 +228,7 @@ fn collectUsedNullclawWebPorts(
 }
 
 fn readConfiguredWebPortFromFile(allocator: std.mem.Allocator, config_path: []const u8) !?u16 {
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
     defer file.close();
 
     const contents = try file.readToEndAlloc(allocator, MAX_CONFIG_BYTES);
@@ -249,7 +253,7 @@ fn pickAvailableWebPort(used_ports: std.AutoHashMap(u16, void)) u16 {
 }
 
 fn writeAbsolute(path: []const u8, content: []const u8) !void {
-    var file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
+    var file = try std_compat.fs.createFileAbsolute(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(content);
 }
@@ -257,8 +261,8 @@ fn writeAbsolute(path: []const u8, content: []const u8) !void {
 test "ensureNullclawWebChannelConfig injects web channel when missing" {
     const allocator = std.testing.allocator;
     const root = "/tmp/nullhub-test-web-channel-missing";
-    std.fs.deleteTreeAbsolute(root) catch {};
-    defer std.fs.deleteTreeAbsolute(root) catch {};
+    std_compat.fs.deleteTreeAbsolute(root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
 
     var paths = try paths_mod.Paths.init(allocator, root);
     defer paths.deinit();
@@ -275,7 +279,7 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
 
     const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-1");
     defer allocator.free(inst_dir);
-    try std.fs.makeDirAbsolute(inst_dir);
+    try std_compat.fs.makeDirAbsolute(inst_dir);
 
     const cfg_path = try paths.instanceConfig(allocator, "nullclaw", "instance-1");
     defer allocator.free(cfg_path);
@@ -292,7 +296,7 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
     try std.testing.expect(result.changed);
     try std.testing.expect(result.web_port != null);
 
-    const contents = try std.fs.cwd().readFileAlloc(allocator, cfg_path, MAX_CONFIG_BYTES);
+    const contents = try std_compat.fs.cwd().readFileAlloc(allocator, cfg_path, MAX_CONFIG_BYTES);
     defer allocator.free(contents);
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
         .allocate = .alloc_always,
@@ -306,8 +310,8 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
 test "ensureNullclawWebChannelConfig picks next free port among instances" {
     const allocator = std.testing.allocator;
     const root = "/tmp/nullhub-test-web-channel-port-pick";
-    std.fs.deleteTreeAbsolute(root) catch {};
-    defer std.fs.deleteTreeAbsolute(root) catch {};
+    std_compat.fs.deleteTreeAbsolute(root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
 
     var paths = try paths_mod.Paths.init(allocator, root);
     defer paths.deinit();
@@ -329,7 +333,7 @@ test "ensureNullclawWebChannelConfig picks next free port among instances" {
 
     const default_dir = try paths.instanceDir(allocator, "nullclaw", "default");
     defer allocator.free(default_dir);
-    try std.fs.makeDirAbsolute(default_dir);
+    try std_compat.fs.makeDirAbsolute(default_dir);
 
     const default_cfg = try paths.instanceConfig(allocator, "nullclaw", "default");
     defer allocator.free(default_cfg);
@@ -349,7 +353,7 @@ test "ensureNullclawWebChannelConfig picks next free port among instances" {
 
     const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-2");
     defer allocator.free(inst_dir);
-    try std.fs.makeDirAbsolute(inst_dir);
+    try std_compat.fs.makeDirAbsolute(inst_dir);
 
     const inst_cfg = try paths.instanceConfig(allocator, "nullclaw", "instance-2");
     defer allocator.free(inst_cfg);

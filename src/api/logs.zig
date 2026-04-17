@@ -1,6 +1,9 @@
 const std = @import("std");
+const std_compat = @import("compat");
+const fs_compat = @import("../fs_compat.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
+const query = @import("query.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -18,39 +21,20 @@ pub const LogSource = enum {
 /// Extract the `lines` query parameter from a target URL.
 /// Returns 100 as default if not specified.
 pub fn parseLines(target: []const u8) usize {
-    const val = queryValue(target, "lines") orelse return 100;
-    return std.fmt.parseInt(usize, val, 10) catch 100;
+    return query.usizeValue(target, "lines", 100);
 }
 
 pub fn parseSource(target: []const u8) LogSource {
-    const val = queryValue(target, "source") orelse return .instance;
+    const val = query.valueRaw(target, "source") orelse return .instance;
     if (std.mem.eql(u8, val, "nullhub") or std.mem.eql(u8, val, "supervisor")) {
         return .nullhub;
     }
     return .instance;
 }
 
-fn queryValue(target: []const u8, key: []const u8) ?[]const u8 {
-    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return null;
-    const query = target[qmark + 1 ..];
-
-    var params = std.mem.splitScalar(u8, query, '&');
-    while (params.next()) |param| {
-        if (std.mem.indexOfScalar(u8, param, '=')) |eq| {
-            if (std.mem.eql(u8, param[0..eq], key)) return param[eq + 1 ..];
-            continue;
-        }
-        if (std.mem.eql(u8, param, key)) return "";
-    }
-    return null;
-}
-
 /// Strip query string from target to get the path portion.
 pub fn stripQuery(target: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, target, '?')) |qmark| {
-        return target[0..qmark];
-    }
-    return target;
+    return query.stripTarget(target);
 }
 
 // ─── Path parsing ────────────────────────────────────────────────────────────
@@ -149,7 +133,7 @@ fn readSourceContents(
 }
 
 fn readFileOrEmpty(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return allocator.dupe(u8, ""),
         else => return err,
     };
@@ -203,7 +187,7 @@ fn joinContents(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
 }
 
 fn writeFileBestEffort(path: []const u8, contents: []const u8) void {
-    if (std.fs.createFileAbsolute(path, .{ .truncate = true })) |file| {
+    if (std_compat.fs.createFileAbsolute(path, .{ .truncate = true })) |file| {
         defer file.close();
         file.writeAll(contents) catch {};
     } else |_| {}
@@ -427,8 +411,8 @@ test "parseSource reads nullhub source" {
 test "handleGet returns empty lines when no log file" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-empty";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
@@ -442,8 +426,8 @@ test "handleGet returns empty lines when no log file" {
 test "handleGet reads actual log content" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-read";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
@@ -453,13 +437,13 @@ test "handleGet reads actual log content" {
     defer allocator.free(logs_dir);
 
     // Create directories recursively.
-    makeDirRecursive(logs_dir) catch unreachable;
+    fs_compat.makePath(logs_dir) catch unreachable;
 
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
     defer allocator.free(log_path);
 
     {
-        const file = try std.fs.createFileAbsolute(log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(log_path, .{});
         defer file.close();
         try file.writeAll("line1\nline2\nline3\n");
     }
@@ -488,21 +472,21 @@ test "handleGet reads actual log content" {
 test "handleGet tails last N lines" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-tail";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
 
     const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
-    makeDirRecursive(logs_dir) catch unreachable;
+    fs_compat.makePath(logs_dir) catch unreachable;
 
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
     defer allocator.free(log_path);
 
     {
-        const file = try std.fs.createFileAbsolute(log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(log_path, .{});
         defer file.close();
         try file.writeAll("a\nb\nc\nd\ne\n");
     }
@@ -526,21 +510,21 @@ test "handleGet tails last N lines" {
 test "handleStream returns SSE snapshot" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-stream";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
 
     const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
-    makeDirRecursive(logs_dir) catch unreachable;
+    fs_compat.makePath(logs_dir) catch unreachable;
 
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
     defer allocator.free(log_path);
 
     {
-        const file = try std.fs.createFileAbsolute(log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(log_path, .{});
         defer file.close();
         try file.writeAll("line-a\nline-b\n");
     }
@@ -557,15 +541,15 @@ test "handleStream returns SSE snapshot" {
 test "handleGet separates legacy stdout and nullhub logs by source" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-sources";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
 
     const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
-    makeDirRecursive(logs_dir) catch unreachable;
+    fs_compat.makePath(logs_dir) catch unreachable;
 
     const stdout_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
     defer allocator.free(stdout_log_path);
@@ -573,12 +557,12 @@ test "handleGet separates legacy stdout and nullhub logs by source" {
     defer allocator.free(nullhub_log_path);
 
     {
-        const file = try std.fs.createFileAbsolute(stdout_log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(stdout_log_path, .{});
         defer file.close();
         try file.writeAll("app line 1\n[nullhub/supervisor][1] old diag\napp line 2\n");
     }
     {
-        const file = try std.fs.createFileAbsolute(nullhub_log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(nullhub_log_path, .{});
         defer file.close();
         try file.writeAll("[nullhub/supervisor][2] new diag\n");
     }
@@ -613,15 +597,15 @@ test "handleGet separates legacy stdout and nullhub logs by source" {
 test "handleDelete clears selected source while preserving the other" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-logs-api-clear-source";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
 
     const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
-    makeDirRecursive(logs_dir) catch unreachable;
+    fs_compat.makePath(logs_dir) catch unreachable;
 
     const stdout_log_path = try std.fs.path.join(allocator, &.{ logs_dir, "stdout.log" });
     defer allocator.free(stdout_log_path);
@@ -629,12 +613,12 @@ test "handleDelete clears selected source while preserving the other" {
     defer allocator.free(nullhub_log_path);
 
     {
-        const file = try std.fs.createFileAbsolute(stdout_log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(stdout_log_path, .{});
         defer file.close();
         try file.writeAll("app line\n[nullhub/supervisor][1] legacy diag\n");
     }
     {
-        const file = try std.fs.createFileAbsolute(nullhub_log_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(nullhub_log_path, .{});
         defer file.close();
         try file.writeAll("[nullhub/supervisor][2] dedicated diag\n");
     }
@@ -643,14 +627,14 @@ test "handleDelete clears selected source while preserving the other" {
     try std.testing.expectEqualStrings("200 OK", clear_nullhub.status);
 
     {
-        const file = try std.fs.openFileAbsolute(stdout_log_path, .{});
+        const file = try std_compat.fs.openFileAbsolute(stdout_log_path, .{});
         defer file.close();
         const contents = try file.readToEndAlloc(allocator, 1024);
         defer allocator.free(contents);
         try std.testing.expectEqualStrings("app line\n", contents);
     }
     {
-        const file = try std.fs.openFileAbsolute(nullhub_log_path, .{});
+        const file = try std_compat.fs.openFileAbsolute(nullhub_log_path, .{});
         defer file.close();
         const contents = try file.readToEndAlloc(allocator, 1024);
         defer allocator.free(contents);
@@ -664,21 +648,4 @@ test "isLogsPath detects logs paths" {
     try std.testing.expect(isLogsPath("/api/instances/nullclaw/my-agent/logs?lines=50"));
     try std.testing.expect(!isLogsPath("/api/instances/nullclaw/my-agent/config"));
     try std.testing.expect(!isLogsPath("/api/instances/nullclaw/my-agent"));
-}
-
-fn makeDirRecursive(path: []const u8) !void {
-    var i: usize = 1;
-    while (i < path.len) {
-        if (path[i] == '/') {
-            std.fs.makeDirAbsolute(path[0..i]) catch |err| switch (err) {
-                error.PathAlreadyExists => {},
-                else => return err,
-            };
-        }
-        i += 1;
-    }
-    std.fs.makeDirAbsolute(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 }

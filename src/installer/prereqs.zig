@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 
 const log = std.log.scoped(.prereqs);
@@ -60,7 +61,7 @@ fn isCommandAvailable(allocator: std.mem.Allocator, command: []const u8) bool {
 }
 
 fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) bool {
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .max_output_bytes = 64 * 1024,
@@ -69,7 +70,7 @@ fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) bool {
     defer allocator.free(result.stderr);
 
     return switch (result.term) {
-        .Exited => |code| code == 0,
+        .exited => |code| code == 0,
         else => false,
     };
 }

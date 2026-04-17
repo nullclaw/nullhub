@@ -181,6 +181,20 @@ const skill_catalog_query = ParamSpec{
     .description = "When true, return the recommended skill catalog instead of installed skills.",
 };
 
+const config_path_query = ParamSpec{
+    .name = "path",
+    .location = "query",
+    .required = false,
+    .description = "Optional dotted config path such as gateway.port or models.providers.openrouter.",
+};
+
+const cron_job_id_param = ParamSpec{
+    .name = "id",
+    .location = "path",
+    .required = true,
+    .description = "Cron job identifier from the managed instance store.",
+};
+
 const common_instance_params = [_]ParamSpec{ component_param, instance_name_param };
 const component_only_params = [_]ParamSpec{component_param};
 const provider_id_params = [_]ParamSpec{provider_id_param};
@@ -194,6 +208,8 @@ const logs_query_params = [_]ParamSpec{ lines_query, log_source_query };
 const history_query_params = [_]ParamSpec{ history_session_query, history_limit_query, history_offset_query };
 const memory_query_params = [_]ParamSpec{ memory_stats_query, memory_key_query, memory_query_query, memory_category_query, memory_limit_query };
 const skills_query_params = [_]ParamSpec{ skill_name_query, skill_catalog_query };
+const config_query_params = [_]ParamSpec{config_path_query};
+const cron_job_id_params = [_]ParamSpec{ component_param, instance_name_param, cron_job_id_param };
 
 const route_examples_status = [_]ExampleSpec{
     .{
@@ -696,6 +712,16 @@ const routes = [_]RouteSpec{
         .response = "Provider probe result.",
     },
     .{
+        .id = "instances.models",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/models",
+        .category = "instances",
+        .summary = "List provider entries configured for a managed nullclaw instance without exposing secret values.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Instance-scoped default provider/model and provider has_key summary.",
+    },
+    .{
         .id = "instances.usage",
         .method = "GET",
         .path_template = "/api/instances/{component}/{name}/usage",
@@ -825,7 +851,19 @@ const routes = [_]RouteSpec{
         .summary = "Read the raw instance config.json managed by nullhub.",
         .auth_mode = "optional_bearer",
         .path_params = common_instance_params[0..],
+        .query_params = config_query_params[0..],
         .response = "Raw instance config JSON.",
+    },
+    .{
+        .id = "instances.config.value",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/config?path=...",
+        .category = "instances",
+        .summary = "Read a single dotted-path value from the managed instance config.json.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = config_query_params[0..],
+        .response = "JSON object with the requested path and value.",
     },
     .{
         .id = "instances.config.put",
@@ -848,6 +886,90 @@ const routes = [_]RouteSpec{
         .path_params = common_instance_params[0..],
         .body = "Complete config.json replacement body.",
         .response = "Save status payload.",
+    },
+    .{
+        .id = "instances.cron.list",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/cron",
+        .category = "instances",
+        .summary = "List scheduled cron jobs for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "JSON object containing the jobs array.",
+    },
+    .{
+        .id = "instances.cron.create",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/cron",
+        .category = "instances",
+        .summary = "Create a recurring shell or agent cron job for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with expression plus either command or prompt; optional model/session_target for agent jobs.",
+        .response = "Created cron job payload.",
+    },
+    .{
+        .id = "instances.cron.once",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/cron/once",
+        .category = "instances",
+        .summary = "Create a one-shot delayed shell or agent job for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with delay plus either command or prompt; optional model/session_target for agent jobs.",
+        .response = "Created cron job payload.",
+    },
+    .{
+        .id = "instances.cron.run",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}/run",
+        .category = "instances",
+        .summary = "Execute a managed cron job immediately.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .response = "Updated cron job payload.",
+    },
+    .{
+        .id = "instances.cron.pause",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}/pause",
+        .category = "instances",
+        .summary = "Pause a managed cron job.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .response = "Updated cron job payload.",
+    },
+    .{
+        .id = "instances.cron.resume",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}/resume",
+        .category = "instances",
+        .summary = "Resume a paused managed cron job.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .response = "Updated cron job payload.",
+    },
+    .{
+        .id = "instances.cron.update",
+        .method = "PATCH",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}",
+        .category = "instances",
+        .summary = "Update a managed cron job expression, payload, enabled flag, or session target.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .body = "Partial cron job update JSON.",
+        .response = "Updated cron job payload.",
+    },
+    .{
+        .id = "instances.cron.delete",
+        .method = "DELETE",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}",
+        .category = "instances",
+        .summary = "Delete a managed cron job.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .destructive = true,
+        .response = "Delete status payload.",
     },
     .{
         .id = "instances.logs.get",
@@ -927,28 +1049,27 @@ pub fn textAlloc(allocator: std.mem.Allocator) ![]u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
 
-    const writer = buf.writer();
-    try writer.print("nullhub routes ({d})\n", .{routes.len});
+    try buf.print("nullhub routes ({d})\n", .{routes.len});
 
     var current_category: ?[]const u8 = null;
     for (allRoutes()) |route| {
         if (current_category == null or !std.mem.eql(u8, current_category.?, route.category)) {
             current_category = route.category;
-            try writer.print("\n[{s}]\n", .{route.category});
+            try buf.print("\n[{s}]\n", .{route.category});
         }
 
-        try writer.print("{s: >6} {s}", .{ route.method, route.path_template });
+        try buf.print("{s: >6} {s}", .{ route.method, route.path_template });
         if (route.destructive) {
             try buf.appendSlice("  [destructive]");
         }
         try buf.appendSlice("\n");
-        try writer.print("  {s}\n", .{route.summary});
+        try buf.print("  {s}\n", .{route.summary});
 
         if (route.query_params.len > 0) {
             try buf.appendSlice("  query:");
             for (route.query_params, 0..) |param, index| {
                 if (index > 0) try buf.appendSlice(",");
-                try writer.print(" {s}", .{param.name});
+                try buf.print(" {s}", .{param.name});
             }
             try buf.appendSlice("\n");
         }

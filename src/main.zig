@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 pub const root = @import("root.zig");
 const cli = root.cli;
@@ -14,12 +15,14 @@ const status_cli = root.status_cli;
 const report_cli = @import("report_cli.zig");
 const version = root.version;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    std_compat.initProcess(init);
+
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
     _ = args.next(); // skip program name
 
@@ -36,7 +39,7 @@ pub fn main() !void {
 
             var mgr = manager_mod.Manager.init(allocator, paths);
             defer mgr.deinit();
-            var mutex = std.Thread.Mutex{};
+            var mutex: std_compat.sync.Mutex = .{};
 
             var srv = try server.Server.init(allocator, opts.host, opts.port, &mgr, &mutex);
             defer srv.deinit();
@@ -49,7 +52,7 @@ pub fn main() !void {
             const sup_thread = try std.Thread.spawn(.{}, supervisorLoop, .{ &mgr, &mutex });
             sup_thread.detach();
 
-            srv.autoStartAll();
+            srv.reconcileInstancesOnBoot();
 
             if (!opts.no_open) {
                 const browser_thread = try std.Thread.spawn(.{}, delayedOpenBrowser, .{
@@ -163,20 +166,20 @@ fn printVersionLine() !void {
 
 fn printStdout(text: []const u8) !void {
     var stdout_buf: [1024]u8 = undefined;
-    var bw = std.fs.File.stdout().writer(&stdout_buf);
+    var bw = std_compat.fs.File.stdout().writer(&stdout_buf);
     const w = &bw.interface;
     try w.writeAll(text);
     try w.flush();
 }
 
-fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std.Thread.Mutex) void {
+fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) void {
     while (true) {
         {
             mutex.lock();
             defer mutex.unlock();
             manager.tick();
         }
-        std.Thread.sleep(1_000_000_000); // 1 second
+        std_compat.thread.sleep(1_000_000_000); // 1 second
     }
 }
 
@@ -185,9 +188,9 @@ fn openBrowser(allocator: std.mem.Allocator, host: []const u8, port: u16, access
     defer urls.deinit(allocator);
 
     var child = switch (builtin.os.tag) {
-        .macos => std.process.Child.init(&.{ "open", urls.browser_open_url }, allocator),
-        .windows => std.process.Child.init(&.{ "cmd", "/c", "start", "", urls.browser_open_url }, allocator),
-        else => std.process.Child.init(&.{ "xdg-open", urls.browser_open_url }, allocator),
+        .macos => std_compat.process.Child.init(&.{ "open", urls.browser_open_url }, allocator),
+        .windows => std_compat.process.Child.init(&.{ "cmd", "/c", "start", "", urls.browser_open_url }, allocator),
+        else => std_compat.process.Child.init(&.{ "xdg-open", urls.browser_open_url }, allocator),
     };
     _ = child.spawnAndWait() catch return;
 }
@@ -198,6 +201,6 @@ fn delayedOpenBrowser(
     port: u16,
     publisher: *const mdns_mod.Publisher,
 ) void {
-    std.Thread.sleep(750 * std.time.ns_per_ms);
+    std_compat.thread.sleep(750 * std.time.ns_per_ms);
     openBrowser(allocator, host, port, publisher.accessOptions());
 }

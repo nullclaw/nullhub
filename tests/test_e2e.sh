@@ -18,7 +18,7 @@ EXPECTED_VERSION=$(./zig-out/bin/nullhub --version 2>&1 | awk '{print $2}' | sed
 
 # Start server in background
 echo "Starting nullhub on port $PORT..."
-./zig-out/bin/nullhub serve --port $PORT &
+./zig-out/bin/nullhub serve --port $PORT --no-open &
 SERVER_PID=$!
 
 # Cleanup on exit

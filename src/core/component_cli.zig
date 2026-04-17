@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 
 pub const CliError = error{
     CommandFailed,
@@ -39,20 +40,20 @@ pub fn runWithComponentHome(
     try argv.append(binary_path);
     for (args) |arg| try argv.append(arg);
 
-    var env_map_opt: ?std.process.EnvMap = null;
+    var env_map_opt: ?std_compat.process.EnvMap = null;
     defer {
         if (env_map_opt) |*env_map| env_map.deinit();
     }
     if (component_home) |home| {
         const env_name = homeEnvVarForComponent(component_name) orelse "";
         if (env_name.len > 0) {
-            var env_map = try std.process.getEnvMap(allocator);
+            var env_map = try std_compat.process.getEnvMap(allocator);
             try env_map.put(env_name, home);
             env_map_opt = env_map;
         }
     }
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = argv.items,
         .cwd = cwd,
@@ -63,7 +64,7 @@ pub fn runWithComponentHome(
         .stdout = result.stdout,
         .stderr = result.stderr,
         .success = switch (result.term) {
-            .Exited => |code| code == 0,
+            .exited => |code| code == 0,
             else => false,
         },
     };

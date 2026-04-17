@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const registry = @import("../installer/registry.zig");
 const downloader = @import("../installer/downloader.zig");
@@ -14,6 +15,7 @@ const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const integration_mod = @import("../core/integration.zig");
 const providers_api = @import("providers.zig");
+const query = @import("query.zig");
 
 const appendEscaped = helpers.appendEscaped;
 pub const ProviderProbeResult = struct {
@@ -184,27 +186,14 @@ fn listModelsForProvider(
 pub fn handleGetModels(allocator: std.mem.Allocator, component_name: []const u8, paths: paths_mod.Paths, target: []const u8) ?[]const u8 {
     if (registry.findKnownComponent(component_name) == null) return null;
 
-    // Parse query string for provider and api_key
-    const query_start = std.mem.indexOf(u8, target, "?") orelse return null;
-    const query = target[query_start + 1 ..];
+    const provider = query.valueAlloc(allocator, target, "provider") catch return null;
+    defer if (provider) |value| allocator.free(value);
 
-    var provider: ?[]const u8 = null;
-    var api_key: ?[]const u8 = null;
-
-    var pairs = std.mem.splitScalar(u8, query, '&');
-    while (pairs.next()) |pair| {
-        if (std.mem.indexOf(u8, pair, "=")) |eq| {
-            const key = pair[0..eq];
-            const val = pair[eq + 1 ..];
-            if (std.mem.eql(u8, key, "provider")) provider = val;
-            if (std.mem.eql(u8, key, "api_key")) api_key = val;
-        }
-    }
+    const api_key = query.valueAlloc(allocator, target, "api_key") catch return null;
+    defer if (api_key) |value| allocator.free(value);
 
     const prov = provider orelse return null;
-    const key = api_key orelse "";
-
-    return listModelsForProvider(allocator, component_name, paths, prov, key);
+    return listModelsForProvider(allocator, component_name, paths, prov, api_key orelse "");
 }
 
 /// Handle POST /api/wizard/{component}/models — runs component --list-models.
@@ -288,10 +277,9 @@ pub fn handleFreePort(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn isPortFree(port: u16) bool {
-    const addr = std.net.Address.resolveIp("127.0.0.1", port) catch return false;
-    const sock = std.posix.socket(addr.any.family, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP) catch return false;
-    defer std.posix.close(sock);
-    std.posix.bind(sock, &addr.any, addr.getOsSockLen()) catch return false;
+    const addr = std_compat.net.Address.resolveIp("127.0.0.1", port) catch return false;
+    var listener = addr.listen(.{}) catch return false;
+    defer listener.deinit();
     return true;
 }
 
@@ -379,13 +367,13 @@ fn prepareWizardBody(
 
     var root = parsed.value.object;
     const tracker_url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{tracker_cfg.port}) catch return null;
-    root.put("tracker_enabled", .{ .string = "true" }) catch return null;
-    root.put("tracker_url", .{ .string = tracker_url }) catch return null;
+    root.put(allocator, "tracker_enabled", .{ .string = "true" }) catch return null;
+    root.put(allocator, "tracker_url", .{ .string = tracker_url }) catch return null;
     if (tracker_cfg.api_token) |token| {
-        root.put("tracker_api_token", .{ .string = token }) catch return null;
+        root.put(allocator, "tracker_api_token", .{ .string = token }) catch return null;
     }
     if (!root.contains("tracker_claim_role")) {
-        root.put("tracker_claim_role", .{ .string = "coder" }) catch return null;
+        root.put(allocator, "tracker_claim_role", .{ .string = "coder" }) catch return null;
     }
 
     return std.json.Stringify.valueAlloc(allocator, parsed.value, .{}) catch return null;
@@ -431,7 +419,7 @@ fn findInstalledComponentBinary(allocator: std.mem.Allocator, component: []const
     const bin_dir = std.fmt.allocPrint(allocator, "{s}/bin", .{paths.root}) catch return null;
     defer allocator.free(bin_dir);
 
-    var dir = std.fs.openDirAbsolute(bin_dir, .{ .iterate = true }) catch return null;
+    var dir = std_compat.fs.openDirAbsolute(bin_dir, .{ .iterate = true }) catch return null;
     defer dir.close();
 
     const prefix = std.fmt.allocPrint(allocator, "{s}-", .{component}) catch return null;
@@ -447,7 +435,7 @@ fn findInstalledComponentBinary(allocator: std.mem.Allocator, component: []const
         if (!std.mem.startsWith(u8, entry.name, prefix)) continue;
 
         const candidate = std.fmt.allocPrint(allocator, "{s}/{s}", .{ bin_dir, entry.name }) catch continue;
-        if (std.fs.openFileAbsolute(candidate, .{})) |f| {
+        if (std_compat.fs.openFileAbsolute(candidate, .{})) |f| {
             f.close();
         } else |_| {
             allocator.free(candidate);
@@ -492,7 +480,7 @@ fn fetchLatestComponentBinary(allocator: std.mem.Allocator, component: []const u
     paths.ensureDirs() catch return null;
     const bin_path = paths.binary(allocator, component, release.value.tag_name) catch return null;
 
-    if (std.fs.openFileAbsolute(bin_path, .{})) |f| {
+    if (std_compat.fs.openFileAbsolute(bin_path, .{})) |f| {
         f.close();
         return bin_path;
     } else |_| {}
@@ -624,10 +612,10 @@ pub fn handleValidateProviders(
     // Create temp directory for probes
     const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-wizard-validate", "") catch return null;
     defer {
-        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
     }
-    std.fs.makeDirAbsolute(tmp_dir) catch return null;
+    std_compat.fs.makeDirAbsolute(tmp_dir) catch return null;
 
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
@@ -747,7 +735,7 @@ fn writeMinimalProviderConfig(
     }
     try cfg_buf.appendSlice("}}}}");
 
-    const file = try std.fs.createFileAbsolute(config_path, .{});
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{});
     defer file.close();
     try file.writeAll(cfg_buf.items);
 }
@@ -823,16 +811,16 @@ pub fn handleValidateChannels(
 
     const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-wizard-validate-ch", "") catch return null;
     defer {
-        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
     }
-    std.fs.makeDirAbsolute(tmp_dir) catch return null;
+    std_compat.fs.makeDirAbsolute(tmp_dir) catch return null;
 
     // Write the full body as config (it contains {"channels": {...}})
     const config_path = std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp_dir}) catch return null;
     defer allocator.free(config_path);
     {
-        const file = std.fs.createFileAbsolute(config_path, .{}) catch return null;
+        const file = std_compat.fs.createFileAbsolute(config_path, .{}) catch return null;
         defer file.close();
         file.writeAll(body) catch return null;
     }
@@ -1062,8 +1050,8 @@ test "compareVersionTags compares numeric version segments" {
 test "findInstalledComponentBinary finds binary in bin directory" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/nullhub-test-find-installed-binary";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var paths = try paths_mod.Paths.init(allocator, tmp_root);
     defer paths.deinit(allocator);
@@ -1073,7 +1061,7 @@ test "findInstalledComponentBinary finds binary in bin directory" {
     defer allocator.free(bin_path);
 
     {
-        const file = try std.fs.createFileAbsolute(bin_path, .{});
+        const file = try std_compat.fs.createFileAbsolute(bin_path, .{});
         defer file.close();
         try file.writeAll("#!/bin/sh\n");
     }
@@ -1110,7 +1098,7 @@ test "prepareWizardBody injects tracker settings for nullboiler" {
     var paths = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-wizard-prepare") catch @panic("Paths.init");
     defer paths.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(paths.root) catch {};
     paths.ensureDirs() catch @panic("ensureDirs");
 
     const inst_dir = paths.instanceDir(allocator, "nulltickets", "tracker-a") catch @panic("instanceDir");
@@ -1120,7 +1108,7 @@ test "prepareWizardBody injects tracker settings for nullboiler" {
     const config_path = paths.instanceConfig(allocator, "nulltickets", "tracker-a") catch @panic("instanceConfig");
     defer allocator.free(config_path);
     {
-        const file = std.fs.createFileAbsolute(config_path, .{ .truncate = true }) catch @panic("createFileAbsolute");
+        const file = std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true }) catch @panic("createFileAbsolute");
         defer file.close();
         file.writeAll("{\"port\":7711,\"api_token\":\"secret-token\"}\n") catch @panic("writeAll");
     }

@@ -15,7 +15,7 @@ pub fn handleGetSettings(allocator: std.mem.Allocator, host: []const u8, port: u
     errdefer buf.deinit();
 
     try buf.appendSlice("{\"port\":");
-    try buf.writer().print("{d}", .{port});
+    try buf.print("{d}", .{port});
     try buf.appendSlice(",\"host\":\"");
     try buf.appendSlice(host);
     try buf.appendSlice("\",\"auth_token\":null,\"auto_update_check\":true,");

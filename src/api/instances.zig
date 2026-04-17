@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
@@ -11,6 +12,8 @@ const launch_args_mod = @import("../core/launch_args.zig");
 const managed_skills = @import("../managed_skills.zig");
 const manifest_mod = @import("../core/manifest.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
+const nullclaw_admin = @import("nullclaw_admin.zig");
+const query_api = @import("query.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -30,7 +33,7 @@ fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, comp
     const config_path = paths.instanceConfig(allocator, component, name) catch return null;
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
     defer file.close();
     const contents = file.readToEndAlloc(allocator, 4 * 1024 * 1024) catch return null;
     defer allocator.free(contents);
@@ -59,10 +62,10 @@ fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, comp
 }
 
 fn fetchJsonValue(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?[]const u8) ?std.json.Value {
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
-    var response_body: std.io.Writer.Allocating = .init(allocator);
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
     var auth_header: ?[]const u8 = null;
@@ -95,7 +98,7 @@ fn buildInstanceUrl(allocator: std.mem.Allocator, port: u16, path: []const u8) ?
 }
 
 fn getStatusLocked(
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     manager: *manager_mod.Manager,
     component: []const u8,
     name: []const u8,
@@ -139,7 +142,7 @@ const NullclawBootstrapMemoryProbe = struct {
 const nullclaw_bootstrap_memory_key = "__bootstrap.prompt.BOOTSTRAP.md";
 
 fn fileExistsAbsolute(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+    std_compat.fs.accessAbsolute(path, .{}) catch return false;
     return true;
 }
 
@@ -158,7 +161,7 @@ fn probeNullclawBootstrapInMemory(
 
     const bin_path = paths.binary(allocator, component, entry.version) catch return .{};
     defer allocator.free(bin_path);
-    std.fs.accessAbsolute(bin_path, .{}) catch return .{};
+    std_compat.fs.accessAbsolute(bin_path, .{}) catch return .{};
 
     const inst_dir = paths.instanceDir(allocator, component, name) catch return .{};
     defer allocator.free(inst_dir);
@@ -228,7 +231,7 @@ fn readNullclawOnboardingStatus(
     const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
     defer allocator.free(state_path);
 
-    const state_file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+    const state_file = std_compat.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
     };
@@ -275,7 +278,7 @@ fn readNullclawOnboardingStatus(
 
 fn listNullTicketsLocked(
     allocator: std.mem.Allocator,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     state: *state_mod.State,
     paths: paths_mod.Paths,
 ) ![]integration_mod.NullTicketsConfig {
@@ -286,7 +289,7 @@ fn listNullTicketsLocked(
 
 fn listNullBoilersLocked(
     allocator: std.mem.Allocator,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     state: *state_mod.State,
     paths: paths_mod.Paths,
 ) ![]integration_mod.NullBoilerConfig {
@@ -310,10 +313,10 @@ const TrackerIntegrationOption = struct {
 };
 
 fn fetchPipelineSummaries(allocator: std.mem.Allocator, url: []const u8, bearer_token: ?[]const u8) ?[]PipelineSummary {
-    var client: std.http.Client = .{ .allocator = allocator };
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
     defer client.deinit();
 
-    var response_body: std.io.Writer.Allocating = .init(allocator);
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
     var auth_header: ?[]const u8 = null;
@@ -443,10 +446,7 @@ fn pipelineContainsString(values: []const []const u8, candidate: []const u8) boo
 }
 
 fn ensurePath(path: []const u8) !void {
-    std.fs.cwd().makePath(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std_compat.fs.cwd().makePath(path);
 }
 
 fn ensureObjectField(
@@ -456,12 +456,12 @@ fn ensureObjectField(
 ) !*std.json.ObjectMap {
     if (parent.getPtr(key)) |value_ptr| {
         if (value_ptr.* != .object) {
-            value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+            value_ptr.* = .{ .object = .empty };
         }
         return &value_ptr.object;
     }
 
-    try parent.put(key, .{ .object = std.json.ObjectMap.init(allocator) });
+    try parent.put(allocator, key, .{ .object = .empty });
     return &parent.getPtr(key).?.object;
 }
 
@@ -475,7 +475,7 @@ fn isNullHubManagedWorkflow(
     allocator: std.mem.Allocator,
     workflow_path: []const u8,
 ) bool {
-    const file = std.fs.openFileAbsolute(workflow_path, .{}) catch return false;
+    const file = std_compat.fs.openFileAbsolute(workflow_path, .{}) catch return false;
     defer file.close();
 
     const bytes = file.readToEndAlloc(allocator, 1024 * 1024) catch return false;
@@ -728,7 +728,7 @@ fn probeComponentProvider(
     };
     defer allocator.free(bin_path);
 
-    std.fs.accessAbsolute(bin_path, .{}) catch return .{ .live_ok = false, .reason = "component_binary_missing" };
+    std_compat.fs.accessAbsolute(bin_path, .{}) catch return .{ .live_ok = false, .reason = "component_binary_missing" };
     const inst_dir = paths.instanceDir(allocator, component, name) catch return .{ .live_ok = false, .reason = "probe_home_path_failed" };
     defer allocator.free(inst_dir);
     return probeProviderViaComponentHealth(allocator, component, bin_path, inst_dir, provider, model);
@@ -854,9 +854,9 @@ pub fn isShortUsageWindow(window: []const u8) bool {
 
 pub fn resolveUsageLedgerPath(allocator: std.mem.Allocator, inst_dir: []const u8) ![]u8 {
     const preferred = try std.fs.path.join(allocator, &.{ inst_dir, TOKEN_USAGE_LEDGER_FILENAME });
-    std.fs.accessAbsolute(preferred, .{}) catch {
+    std_compat.fs.accessAbsolute(preferred, .{}) catch {
         const legacy = try std.fs.path.join(allocator, &.{ inst_dir, LEGACY_USAGE_LEDGER_FILENAME });
-        if (std.fs.accessAbsolute(legacy, .{})) |_| {
+        if (std_compat.fs.accessAbsolute(legacy, .{})) |_| {
             allocator.free(preferred);
             return legacy;
         } else |_| {}
@@ -931,7 +931,7 @@ fn parseUsageCacheBuckets(allocator: std.mem.Allocator, value: std.json.Value) !
 }
 
 pub fn loadUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, now_ts: i64) !?UsageCacheSnapshot {
-    const file = std.fs.openFileAbsolute(cache_path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(cache_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -992,12 +992,12 @@ fn writeUsageCacheBuckets(
 
 pub fn writeUsageCacheSnapshot(allocator: std.mem.Allocator, cache_path: []const u8, snapshot: *const UsageCacheSnapshot) !void {
     const cache_dir = std.fs.path.dirname(cache_path) orelse return error.InvalidPath;
-    std.fs.makeDirAbsolute(cache_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var file = try std.fs.createFileAbsolute(cache_path, .{ .truncate = true });
+    var file = try std_compat.fs.createFileAbsolute(cache_path, .{ .truncate = true });
     defer file.close();
 
     var writer_buf: [8192]u8 = undefined;
@@ -1095,7 +1095,7 @@ pub fn rebuildUsageCacheSnapshot(
         daily_list.deinit(allocator);
     }
 
-    const file = std.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
+    const file = std_compat.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             snapshot.hourly = &.{};
             snapshot.daily = &.{};
@@ -1164,17 +1164,11 @@ pub fn rebuildUsageCacheSnapshot(
 }
 
 pub fn parseUsageWindow(target: []const u8) []const u8 {
-    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return "24h";
-    const query = target[qmark + 1 ..];
-    var params = std.mem.splitScalar(u8, query, '&');
-    while (params.next()) |param| {
-        if (!std.mem.startsWith(u8, param, "window=")) continue;
-        const value = param["window=".len..];
-        if (std.mem.eql(u8, value, "24h")) return "24h";
-        if (std.mem.eql(u8, value, "7d")) return "7d";
-        if (std.mem.eql(u8, value, "30d")) return "30d";
-        if (std.mem.eql(u8, value, "all")) return "all";
-    }
+    const value = query_api.valueRaw(target, "window") orelse return "24h";
+    if (std.mem.eql(u8, value, "24h")) return "24h";
+    if (std.mem.eql(u8, value, "7d")) return "7d";
+    if (std.mem.eql(u8, value, "30d")) return "30d";
+    if (std.mem.eql(u8, value, "all")) return "all";
     return "24h";
 }
 
@@ -1184,47 +1178,6 @@ pub fn usageWindowMinTs(window: []const u8, now_ts: i64) ?i64 {
     if (std.mem.eql(u8, window, "7d")) return now_ts - 7 * 24 * 60 * 60;
     if (std.mem.eql(u8, window, "30d")) return now_ts - 30 * 24 * 60 * 60;
     return now_ts - 24 * 60 * 60;
-}
-
-fn queryParamRaw(target: []const u8, key: []const u8) ?[]const u8 {
-    const qmark = std.mem.indexOfScalar(u8, target, '?') orelse return null;
-    const query = target[qmark + 1 ..];
-    var params = std.mem.splitScalar(u8, query, '&');
-    while (params.next()) |param| {
-        if (param.len <= key.len) continue;
-        if (!std.mem.startsWith(u8, param, key)) continue;
-        if (param[key.len] != '=') continue;
-        return param[key.len + 1 ..];
-    }
-    return null;
-}
-
-fn decodeQueryValueAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    const encoded = try allocator.dupe(u8, raw);
-    for (encoded) |*ch| {
-        if (ch.* == '+') ch.* = ' ';
-    }
-    const decoded = std.Uri.percentDecodeInPlace(encoded);
-    if (decoded.ptr == encoded.ptr and decoded.len == encoded.len) return encoded;
-    const out = try allocator.dupe(u8, decoded);
-    allocator.free(encoded);
-    return out;
-}
-
-fn queryParamValueAlloc(allocator: std.mem.Allocator, target: []const u8, key: []const u8) !?[]u8 {
-    const raw = queryParamRaw(target, key) orelse return null;
-    const decoded = try decodeQueryValueAlloc(allocator, raw);
-    return decoded;
-}
-
-fn queryParamBool(target: []const u8, key: []const u8) bool {
-    const raw = queryParamRaw(target, key) orelse return false;
-    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
-}
-
-fn queryParamUsize(target: []const u8, key: []const u8, default_value: usize) usize {
-    const raw = queryParamRaw(target, key) orelse return default_value;
-    return std.fmt.parseInt(usize, raw, 10) catch default_value;
 }
 
 fn isLikelyJsonPayload(bytes: []const u8) bool {
@@ -1326,7 +1279,7 @@ fn runInstanceCliCaptured(
 
     const bin_path = paths.binary(allocator, component, entry.version) catch return .{ .response = helpers.serverError() };
     defer allocator.free(bin_path);
-    std.fs.accessAbsolute(bin_path, .{}) catch {
+    std_compat.fs.accessAbsolute(bin_path, .{}) catch {
         return .{ .response = jsonCliError(
             allocator,
             "component_binary_missing",
@@ -1403,9 +1356,537 @@ fn runInstanceCliJson(
     );
 }
 
+fn tryRunInstanceCliJsonSuccess(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    args: []const []const u8,
+) ?[]const u8 {
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
+    const result = switch (captured) {
+        .response => return null,
+        .result => |value| value,
+    };
+    defer allocator.free(result.stderr);
+
+    if (!result.success or !isLikelyJsonPayload(result.stdout)) {
+        allocator.free(result.stdout);
+        return null;
+    }
+
+    return result.stdout;
+}
+
+const ParsedCronPath = struct {
+    component: []const u8,
+    name: []const u8,
+    job_id: ?[]const u8 = null,
+    action: Action,
+
+    const Action = enum {
+        collection,
+        once,
+        update_or_delete,
+        run,
+        pause,
+        resume_job,
+    };
+};
+
+const LoadedCronStore = struct {
+    parsed: std.json.Parsed(std.json.Value),
+
+    fn deinit(self: *LoadedCronStore) void {
+        self.parsed.deinit();
+    }
+};
+
+fn parseCronPath(target: []const u8) ?ParsedCronPath {
+    const clean = stripQuery(target);
+    const prefix = "/api/instances/";
+    if (!std.mem.startsWith(u8, clean, prefix)) return null;
+
+    const rest = clean[prefix.len..];
+    if (rest.len == 0) return null;
+
+    var it = std.mem.splitScalar(u8, rest, '/');
+    const component = it.next() orelse return null;
+    const name = it.next() orelse return null;
+    const root = it.next() orelse return null;
+    if (component.len == 0 or name.len == 0 or !std.mem.eql(u8, root, "cron")) return null;
+
+    const seg4 = it.next();
+    const seg5 = it.next();
+    if (it.next() != null) return null;
+
+    if (seg4 == null) {
+        return .{
+            .component = component,
+            .name = name,
+            .action = .collection,
+        };
+    }
+
+    const extra = seg4.?;
+    if (extra.len == 0) return null;
+
+    if (seg5 == null) {
+        if (std.mem.eql(u8, extra, "once")) {
+            return .{
+                .component = component,
+                .name = name,
+                .action = .once,
+            };
+        }
+        return .{
+            .component = component,
+            .name = name,
+            .job_id = extra,
+            .action = .update_or_delete,
+        };
+    }
+
+    const verb = seg5.?;
+    if (verb.len == 0) return null;
+    const action: ParsedCronPath.Action = if (std.mem.eql(u8, verb, "run"))
+        .run
+    else if (std.mem.eql(u8, verb, "pause"))
+        .pause
+    else if (std.mem.eql(u8, verb, "resume"))
+        .resume_job
+    else
+        return null;
+
+    return .{
+        .component = component,
+        .name = name,
+        .job_id = extra,
+        .action = action,
+    };
+}
+
+fn loadCronStore(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) !LoadedCronStore {
+    const inst_dir = try paths.instanceDir(allocator, component, name);
+    defer allocator.free(inst_dir);
+
+    const cron_path = try std.fs.path.join(allocator, &.{ inst_dir, "cron.json" });
+    defer allocator.free(cron_path);
+
+    const raw = blk: {
+        const file = std_compat.fs.openFileAbsolute(cron_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk try allocator.dupe(u8, "[]"),
+            else => return err,
+        };
+        defer file.close();
+        break :blk try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
+    };
+    defer allocator.free(raw);
+
+    return .{
+        .parsed = try std.json.parseFromSlice(std.json.Value, allocator, raw, .{
+            .allocate = .alloc_always,
+            .ignore_unknown_fields = true,
+        }),
+    };
+}
+
+fn cronStoreHasJobId(store: *const LoadedCronStore, job_id: []const u8) bool {
+    if (store.parsed.value != .array) return false;
+    for (store.parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const id_value = item.object.get("id") orelse continue;
+        if (id_value == .string and std.mem.eql(u8, id_value.string, job_id)) return true;
+    }
+    return false;
+}
+
+fn findCronJobJson(allocator: std.mem.Allocator, store: *const LoadedCronStore, job_id: []const u8) !?[]u8 {
+    if (store.parsed.value != .array) return null;
+    for (store.parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const id_value = item.object.get("id") orelse continue;
+        if (id_value == .string and std.mem.eql(u8, id_value.string, job_id)) {
+            return try std.json.Stringify.valueAlloc(allocator, item, .{});
+        }
+    }
+    return null;
+}
+
+fn findNewCronJobId(before: *const LoadedCronStore, after: *const LoadedCronStore) ?[]const u8 {
+    if (after.parsed.value != .array) return null;
+    for (after.parsed.value.array.items) |item| {
+        if (item != .object) continue;
+        const id_value = item.object.get("id") orelse continue;
+        if (id_value != .string) continue;
+        if (!cronStoreHasJobId(before, id_value.string)) return id_value.string;
+    }
+    return null;
+}
+
+fn cronCliBadRequest(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    result: component_cli.RunResult,
+) ApiResponse {
+    const stderr_line = firstMeaningfulLine(result.stderr);
+    const stdout_line = firstMeaningfulLine(result.stdout);
+    const message = if (stderr_line.len > 0)
+        stderr_line
+    else if (stdout_line.len > 0)
+        stdout_line
+    else
+        "cron command failed";
+
+    const body = buildCliJsonError(allocator, code, message, result.stderr, result.stdout) catch return helpers.serverError();
+    return .{
+        .status = "400 Bad Request",
+        .content_type = "application/json",
+        .body = body,
+    };
+}
+
+fn instanceCronUnsupported() ApiResponse {
+    return badRequest("{\"error\":\"cron routes are only supported for nullclaw instances\"}");
+}
+
+fn instanceModelsUnsupported() ApiResponse {
+    return badRequest("{\"error\":\"models route is only supported for nullclaw instances\"}");
+}
+
+fn handleModels(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceModelsUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    if (nullclaw_admin.tryReadModelsSummaryJson(allocator, s, paths, component, name)) |body| {
+        return jsonOk(body);
+    }
+
+    const config_bytes = nullclaw_admin.readConfigBytes(allocator, paths, component, name) catch |err| switch (err) {
+        error.FileNotFound => return .{
+            .status = "404 Not Found",
+            .content_type = "application/json",
+            .body = "{\"error\":\"config not found\"}",
+        },
+        else => return helpers.serverError(),
+    };
+    defer allocator.free(config_bytes);
+
+    const body = nullclaw_admin.buildModelsSummaryJsonFromConfig(allocator, config_bytes) catch
+        return badRequest("{\"error\":\"invalid config JSON\"}");
+    return jsonOk(body);
+}
+
+fn handleCronList(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    var store = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer store.deinit();
+
+    const jobs_json = std.json.Stringify.valueAlloc(allocator, store.parsed.value, .{}) catch return helpers.serverError();
+    defer allocator.free(jobs_json);
+
+    const body = std.fmt.allocPrint(allocator, "{{\"jobs\":{s}}}", .{jobs_json}) catch return helpers.serverError();
+    return jsonOk(body);
+}
+
+fn handleCronCreate(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+    once: bool,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const CreateBody = struct {
+        expression: ?[]const u8 = null,
+        delay: ?[]const u8 = null,
+        command: ?[]const u8 = null,
+        prompt: ?[]const u8 = null,
+        model: ?[]const u8 = null,
+        session_target: ?[]const u8 = null,
+        announce: bool = false,
+        delivery_channel: ?[]const u8 = null,
+        delivery_account_id: ?[]const u8 = null,
+        delivery_to: ?[]const u8 = null,
+    };
+
+    const parsed = std.json.parseFromSlice(CreateBody, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const is_agent = parsed.value.prompt != null;
+    if ((parsed.value.command == null and parsed.value.prompt == null) or
+        (parsed.value.command != null and parsed.value.prompt != null))
+    {
+        return badRequest("{\"error\":\"exactly one of command or prompt is required\"}");
+    }
+
+    const schedule_value = if (once)
+        parsed.value.delay orelse return badRequest("{\"error\":\"delay is required\"}")
+    else
+        parsed.value.expression orelse return badRequest("{\"error\":\"expression is required\"}");
+
+    if (once and parsed.value.expression != null) {
+        return badRequest("{\"error\":\"expression is not allowed for one-shot jobs\"}");
+    }
+    if (!once and parsed.value.delay != null) {
+        return badRequest("{\"error\":\"delay is not allowed for recurring jobs\"}");
+    }
+    if (!is_agent and
+        (parsed.value.model != null or
+            parsed.value.session_target != null or
+            parsed.value.announce or
+            parsed.value.delivery_channel != null or
+            parsed.value.delivery_account_id != null or
+            parsed.value.delivery_to != null))
+    {
+        return badRequest("{\"error\":\"model, session_target, and delivery fields require a prompt-based agent job\"}");
+    }
+
+    var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer before.deinit();
+
+    var args = std.array_list.Managed([]const u8).init(allocator);
+    defer args.deinit();
+    args.append("cron") catch return helpers.serverError();
+    args.append(if (once)
+        if (is_agent) "once-agent" else "once"
+    else if (is_agent)
+        "add-agent"
+    else
+        "add") catch return helpers.serverError();
+    args.append(schedule_value) catch return helpers.serverError();
+    args.append(if (is_agent) parsed.value.prompt.? else parsed.value.command.?) catch return helpers.serverError();
+    if (parsed.value.model) |value| {
+        args.append("--model") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.session_target) |value| {
+        args.append("--session-target") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.announce) {
+        args.append("--announce") catch return helpers.serverError();
+    }
+    if (parsed.value.delivery_channel) |value| {
+        args.append("--channel") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.delivery_account_id) |value| {
+        args.append("--account") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.delivery_to) |value| {
+        args.append("--to") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const result = switch (captured) {
+        .response => |resp| return resp,
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!result.success) return cronCliBadRequest(allocator, "cron_create_failed", result);
+
+    var after = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer after.deinit();
+
+    const job_id = findNewCronJobId(&before, &after) orelse return helpers.serverError();
+    const job_json = (findCronJobJson(allocator, &after, job_id) catch return helpers.serverError()) orelse return helpers.serverError();
+    defer allocator.free(job_json);
+
+    const response_body = std.fmt.allocPrint(allocator, "{{\"job\":{s}}}", .{job_json}) catch return helpers.serverError();
+    return jsonOk(response_body);
+}
+
+fn handleCronCommandWithJob(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    job_id: []const u8,
+    args: []const []const u8,
+    success_status: []const u8,
+    error_code: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer before.deinit();
+    if (!cronStoreHasJobId(&before, job_id)) return notFound();
+
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
+    const result = switch (captured) {
+        .response => |resp| return resp,
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!result.success) return cronCliBadRequest(allocator, error_code, result);
+
+    var after = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer after.deinit();
+    const job_json = (findCronJobJson(allocator, &after, job_id) catch return helpers.serverError()) orelse return notFound();
+    defer allocator.free(job_json);
+
+    const response_body = std.fmt.allocPrint(
+        allocator,
+        "{{\"status\":\"{s}\",\"job\":{s}}}",
+        .{ success_status, job_json },
+    ) catch return helpers.serverError();
+    return jsonOk(response_body);
+}
+
+fn handleCronUpdate(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    job_id: []const u8,
+    body: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const UpdateBody = struct {
+        expression: ?[]const u8 = null,
+        command: ?[]const u8 = null,
+        prompt: ?[]const u8 = null,
+        model: ?[]const u8 = null,
+        enabled: ?bool = null,
+        session_target: ?[]const u8 = null,
+    };
+
+    const parsed = std.json.parseFromSlice(UpdateBody, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    if (parsed.value.expression == null and
+        parsed.value.command == null and
+        parsed.value.prompt == null and
+        parsed.value.model == null and
+        parsed.value.enabled == null and
+        parsed.value.session_target == null)
+    {
+        return badRequest("{\"error\":\"at least one field is required\"}");
+    }
+
+    var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer before.deinit();
+    if (!cronStoreHasJobId(&before, job_id)) return notFound();
+
+    var args = std.array_list.Managed([]const u8).init(allocator);
+    defer args.deinit();
+    args.append("cron") catch return helpers.serverError();
+    args.append("update") catch return helpers.serverError();
+    args.append(job_id) catch return helpers.serverError();
+    if (parsed.value.expression) |value| {
+        args.append("--expression") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.command) |value| {
+        args.append("--command") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.prompt) |value| {
+        args.append("--prompt") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.model) |value| {
+        args.append("--model") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+    if (parsed.value.enabled) |value| {
+        args.append(if (value) "--enable" else "--disable") catch return helpers.serverError();
+    }
+    if (parsed.value.session_target) |value| {
+        args.append("--session-target") catch return helpers.serverError();
+        args.append(value) catch return helpers.serverError();
+    }
+
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args.items);
+    const result = switch (captured) {
+        .response => |resp| return resp,
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!result.success) return cronCliBadRequest(allocator, "cron_update_failed", result);
+
+    var after = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer after.deinit();
+    const job_json = (findCronJobJson(allocator, &after, job_id) catch return helpers.serverError()) orelse return notFound();
+    defer allocator.free(job_json);
+
+    const response_body = std.fmt.allocPrint(allocator, "{{\"status\":\"updated\",\"job\":{s}}}", .{job_json}) catch return helpers.serverError();
+    return jsonOk(response_body);
+}
+
+fn handleCronDelete(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    job_id: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    var before = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer before.deinit();
+    if (!cronStoreHasJobId(&before, job_id)) return notFound();
+
+    const args = [_][]const u8{ "cron", "remove", job_id };
+    const captured = runInstanceCliCaptured(allocator, s, paths, component, name, &args);
+    const result = switch (captured) {
+        .response => |resp| return resp,
+        .result => |value| value,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!result.success) return cronCliBadRequest(allocator, "cron_remove_failed", result);
+
+    var after = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer after.deinit();
+    if (cronStoreHasJobId(&after, job_id)) return helpers.serverError();
+
+    const response_body = std.fmt.allocPrint(allocator, "{{\"status\":\"deleted\",\"id\":\"{s}\"}}", .{job_id}) catch return helpers.serverError();
+    return jsonOk(response_body);
+}
+
 // ─── JSON helpers ────────────────────────────────────────────────────────────
 
-fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, status_str: []const u8) !void {
+fn pidToU64(pid: std.process.Child.Id) u64 {
+    return switch (@typeInfo(@TypeOf(pid))) {
+        .int => @intCast(pid),
+        .pointer => @intFromPtr(pid),
+        else => 0,
+    };
+}
+
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, runtime_status: ?manager_mod.InstanceStatus) !void {
+    const status_str = if (runtime_status) |status| @tagName(status.status) else "stopped";
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
     try buf.appendSlice("\",\"auto_start\":");
@@ -1416,7 +1897,36 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.appendSlice(if (entry.verbose) "true" else "false");
     try buf.appendSlice(",\"status\":\"");
     try buf.appendSlice(status_str);
-    try buf.appendSlice("\"}");
+    try buf.append('"');
+
+    if (runtime_status) |status| {
+        if (status.pid) |pid| {
+            try buf.appendSlice(",\"pid\":");
+            var num_buf: [20]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
+            try buf.appendSlice(text);
+        }
+        if (status.uptime_seconds) |uptime| {
+            try buf.appendSlice(",\"uptime_seconds\":");
+            var num_buf: [20]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
+            try buf.appendSlice(text);
+        }
+        if (status.restart_count > 0) {
+            try buf.appendSlice(",\"restart_count\":");
+            var num_buf: [20]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.restart_count});
+            try buf.appendSlice(text);
+        }
+        if (status.port > 0) {
+            try buf.appendSlice(",\"port\":");
+            var num_buf: [10]u8 = undefined;
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.port});
+            try buf.appendSlice(text);
+        }
+    }
+
+    try buf.append('}');
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -1453,12 +1963,12 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
             if (!first_inst) try buf.append(',');
             first_inst = false;
 
-            const status_str = if (manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*)) |st| @tagName(st.status) else "stopped";
+            const runtime_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
 
             try buf.append('"');
             try appendEscaped(buf, inst_entry.key_ptr.*);
             try buf.appendSlice("\":");
-            try appendInstanceJson(buf, inst_entry.value_ptr.*, status_str);
+            try appendInstanceJson(buf, inst_entry.value_ptr.*, runtime_status);
         }
 
         try buf.append('}');
@@ -1471,10 +1981,10 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
 pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, component: []const u8, name: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    const status_str = if (manager.getStatus(component, name)) |st| @tagName(st.status) else "stopped";
+    const runtime_status = manager.getStatus(component, name);
 
     var buf = std.array_list.Managed(u8).init(allocator);
-    appendInstanceJson(&buf, entry, status_str) catch return .{
+    appendInstanceJson(&buf, entry, runtime_status) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -1552,18 +2062,17 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         }
     }
 
-    const launch_args = launch_args_mod.buildLaunchArgs(allocator, launch_cmd, launch_verbose) catch return helpers.serverError();
-    defer allocator.free(launch_args);
-    // Only HTTP server modes (e.g. "serve") expose a health endpoint.
-    // Non-HTTP modes — agent, gateway, channel, or any future long-lived non-server mode —
-    // should be supervised by process-alive checks only (port=0).
-    const effective_port = launch_args_mod.effectiveHealthPort(launch_cmd, port);
+    var launch = launch_args_mod.resolve(allocator, launch_cmd, launch_verbose) catch return badRequest("{\"error\":\"invalid launch_mode\"}");
+    defer launch.deinit();
+    // The launch-mode helper decides whether this mode should be supervised via
+    // an HTTP health endpoint or process liveness only.
+    const effective_port = launch.effectiveHealthPort(port);
 
     // Resolve instance working directory so the binary can find its config.
     const inst_dir = paths.instanceDir(allocator, component, name) catch return helpers.serverError();
     defer allocator.free(inst_dir);
 
-    manager.startInstance(component, name, bin_path, launch_args, effective_port, health_endpoint, inst_dir, "", launch_cmd) catch return helpers.serverError();
+    manager.startInstance(component, name, bin_path, launch.argv, effective_port, health_endpoint, inst_dir, "", launch.primary_command) catch return helpers.serverError();
     return jsonOk("{\"status\":\"started\"}");
 }
 
@@ -1589,7 +2098,7 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
     const config_path = paths.instanceConfig(allocator, component, name) catch return helpers.serverError();
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return .{
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return .{
         .status = "404 Not Found",
         .content_type = "application/json",
         .body = "{\"error\":\"config not found\"}",
@@ -1731,7 +2240,7 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
     appendEscaped(&buf, reason) catch return helpers.serverError();
     buf.appendSlice("\"") catch return helpers.serverError();
     if (status_code) |code| {
-        buf.writer().print(",\"status_code\":{d}", .{code}) catch return helpers.serverError();
+        buf.print(",\"status_code\":{d}", .{code}) catch return helpers.serverError();
     }
     buf.appendSlice("}") catch return helpers.serverError();
 
@@ -1743,7 +2252,7 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
 pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
     _ = s.getInstance(component, name) orelse return notFound();
 
-    const now_ts = std.time.timestamp();
+    const now_ts = std_compat.time.timestamp();
     const window = parseUsageWindow(target);
     const min_ts = usageWindowMinTs(window, now_ts);
 
@@ -1765,7 +2274,7 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
     var ledger_exists = false;
     var ledger_size: u64 = 0;
     var ledger_mtime_ns: i64 = 0;
-    const ledger_file = std.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
+    const ledger_file = std_compat.fs.openFileAbsolute(ledger_path, .{}) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return helpers.serverError(),
     };
@@ -1872,7 +2381,7 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
     var buf = std.array_list.Managed(u8).init(allocator);
     buf.appendSlice("{\"window\":\"") catch return helpers.serverError();
     appendEscaped(&buf, window) catch return helpers.serverError();
-    buf.writer().print("\",\"generated_at\":{d},\"rows\":[", .{now_ts}) catch return helpers.serverError();
+    buf.print("\",\"generated_at\":{d},\"rows\":[", .{now_ts}) catch return helpers.serverError();
 
     var it = aggregates.iterator();
     var first_row = true;
@@ -1886,26 +2395,26 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
         buf.appendSlice("\",\"model\":\"") catch return helpers.serverError();
         appendEscaped(&buf, row.model) catch return helpers.serverError();
         buf.appendSlice("\",\"prompt_tokens\":") catch return helpers.serverError();
-        buf.writer().print("{d}", .{row.prompt_tokens}) catch return helpers.serverError();
+        buf.print("{d}", .{row.prompt_tokens}) catch return helpers.serverError();
         buf.appendSlice(",\"completion_tokens\":") catch return helpers.serverError();
-        buf.writer().print("{d}", .{row.completion_tokens}) catch return helpers.serverError();
+        buf.print("{d}", .{row.completion_tokens}) catch return helpers.serverError();
         buf.appendSlice(",\"total_tokens\":") catch return helpers.serverError();
-        buf.writer().print("{d}", .{row.total_tokens}) catch return helpers.serverError();
+        buf.print("{d}", .{row.total_tokens}) catch return helpers.serverError();
         buf.appendSlice(",\"requests\":") catch return helpers.serverError();
-        buf.writer().print("{d}", .{row.requests}) catch return helpers.serverError();
+        buf.print("{d}", .{row.requests}) catch return helpers.serverError();
         buf.appendSlice(",\"last_used\":") catch return helpers.serverError();
-        buf.writer().print("{d}", .{row.last_used}) catch return helpers.serverError();
+        buf.print("{d}", .{row.last_used}) catch return helpers.serverError();
         buf.appendSlice("}") catch return helpers.serverError();
     }
 
     buf.appendSlice("],\"totals\":{\"prompt_tokens\":") catch return helpers.serverError();
-    buf.writer().print("{d}", .{total_prompt}) catch return helpers.serverError();
+    buf.print("{d}", .{total_prompt}) catch return helpers.serverError();
     buf.appendSlice(",\"completion_tokens\":") catch return helpers.serverError();
-    buf.writer().print("{d}", .{total_completion}) catch return helpers.serverError();
+    buf.print("{d}", .{total_completion}) catch return helpers.serverError();
     buf.appendSlice(",\"total_tokens\":") catch return helpers.serverError();
-    buf.writer().print("{d}", .{total_tokens}) catch return helpers.serverError();
+    buf.print("{d}", .{total_tokens}) catch return helpers.serverError();
     buf.appendSlice(",\"requests\":") catch return helpers.serverError();
-    buf.writer().print("{d}", .{total_requests}) catch return helpers.serverError();
+    buf.print("{d}", .{total_requests}) catch return helpers.serverError();
     buf.appendSlice("}}") catch return helpers.serverError();
 
     return jsonOk(buf.items);
@@ -1914,11 +2423,11 @@ pub fn handleUsage(allocator: std.mem.Allocator, s: *state_mod.State, paths: pat
 /// GET /api/instances/{component}/{name}/history?limit=N&offset=N
 /// GET /api/instances/{component}/{name}/history?session_id=...&limit=N&offset=N
 pub fn handleHistory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
-    const session_id = queryParamValueAlloc(allocator, target, "session_id") catch return helpers.serverError();
+    const session_id = query_api.valueAlloc(allocator, target, "session_id") catch return helpers.serverError();
     defer if (session_id) |value| allocator.free(value);
 
-    const limit = queryParamUsize(target, "limit", if (session_id != null) 100 else 50);
-    const offset = queryParamUsize(target, "offset", 0);
+    const limit = query_api.usizeValue(target, "limit", if (session_id != null) 100 else 50);
+    const offset = query_api.usizeValue(target, "offset", 0);
 
     var limit_buf: [32]u8 = undefined;
     var offset_buf: [32]u8 = undefined;
@@ -1977,15 +2486,15 @@ pub fn handleOnboarding(
 /// GET /api/instances/{component}/{name}/memory?query=...&limit=N
 /// GET /api/instances/{component}/{name}/memory?category=...&limit=N
 pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
-    const key = queryParamValueAlloc(allocator, target, "key") catch return helpers.serverError();
+    const key = query_api.valueAlloc(allocator, target, "key") catch return helpers.serverError();
     defer if (key) |value| allocator.free(value);
-    const query = queryParamValueAlloc(allocator, target, "query") catch return helpers.serverError();
-    defer if (query) |value| allocator.free(value);
-    const category = queryParamValueAlloc(allocator, target, "category") catch return helpers.serverError();
+    const search_query = query_api.valueAlloc(allocator, target, "query") catch return helpers.serverError();
+    defer if (search_query) |value| allocator.free(value);
+    const category = query_api.valueAlloc(allocator, target, "category") catch return helpers.serverError();
     defer if (category) |value| allocator.free(value);
 
-    const default_limit: usize = if (query != null) 6 else 20;
-    const limit = queryParamUsize(target, "limit", default_limit);
+    const default_limit: usize = if (search_query != null) 6 else 20;
+    const limit = query_api.usizeValue(target, "limit", default_limit);
 
     var limit_buf: [32]u8 = undefined;
     const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
@@ -1994,7 +2503,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     defer args.deinit(allocator);
 
     args.append(allocator, "memory") catch return helpers.serverError();
-    if (queryParamBool(target, "stats")) {
+    if (query_api.boolValue(target, "stats")) {
         args.append(allocator, "stats") catch return helpers.serverError();
         args.append(allocator, "--json") catch return helpers.serverError();
         return runInstanceCliJson(allocator, s, paths, component, name, args.items);
@@ -2008,7 +2517,7 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
         return runInstanceCliJson(allocator, s, paths, component, name, args.items);
     }
 
-    if (query) |value| {
+    if (search_query) |value| {
         if (value.len == 0) return badRequest("{\"error\":\"query is required\"}");
         args.append(allocator, "search") catch return helpers.serverError();
         args.append(allocator, value) catch return helpers.serverError();
@@ -2109,7 +2618,7 @@ fn handleSkillsInstall(
         const workspace_dir = instanceWorkspaceDir(allocator, paths, component, name) catch return helpers.serverError();
         defer allocator.free(workspace_dir);
 
-        const result = std.process.Child.run(.{
+        const result = std_compat.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ "clawhub", "install", value },
             .cwd = workspace_dir,
@@ -2136,7 +2645,7 @@ fn handleSkillsInstall(
         }
 
         const success = switch (result.term) {
-            .Exited => |code| code == 0,
+            .exited => |code| code == 0,
             else => false,
         };
         if (!success) {
@@ -2206,7 +2715,7 @@ fn handleSkillsRemove(
     if (!std.mem.eql(u8, component, "nullclaw")) {
         return badRequest("{\"error\":\"skill removal is only supported for nullclaw instances\"}");
     }
-    const skill_name = queryParamValueAlloc(allocator, target, "name") catch return helpers.serverError();
+    const skill_name = query_api.valueAlloc(allocator, target, "name") catch return helpers.serverError();
     defer if (skill_name) |value| allocator.free(value);
     if (skill_name == null or skill_name.?.len == 0) {
         return badRequest("{\"error\":\"name is required\"}");
@@ -2256,8 +2765,8 @@ fn handleSkillsRemove(
 /// GET /api/instances/{component}/{name}/skills?catalog=1
 pub fn handleSkills(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
     _ = s.getInstance(component, name) orelse return notFound();
-    if (queryParamBool(target, "catalog")) return handleSkillsCatalog(allocator, component);
-    const skill_name = queryParamValueAlloc(allocator, target, "name") catch return helpers.serverError();
+    if (query_api.boolValue(target, "catalog")) return handleSkillsCatalog(allocator, component);
+    const skill_name = query_api.valueAlloc(allocator, target, "name") catch return helpers.serverError();
     defer if (skill_name) |value| allocator.free(value);
 
     var args: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -2292,7 +2801,7 @@ pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
 
     if (!s.removeInstance(component, name)) {
         if (hidden_inst_dir) |path| {
-            std.fs.renameAbsolute(path, inst_dir) catch {};
+            std_compat.fs.renameAbsolute(path, inst_dir) catch {};
         }
         return notFound();
     }
@@ -2305,13 +2814,13 @@ pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
         }) catch {};
         _ = s.save() catch {};
         if (hidden_inst_dir) |path| {
-            std.fs.renameAbsolute(path, inst_dir) catch {};
+            std_compat.fs.renameAbsolute(path, inst_dir) catch {};
         }
         return helpers.serverError();
     };
 
     if (hidden_inst_dir) |path| {
-        std.fs.deleteTreeAbsolute(path) catch |err| {
+        std_compat.fs.deleteTreeAbsolute(path) catch |err| {
             std.log.warn("deleted instance {s}/{s} but failed to clean hidden dir '{s}': {s}", .{
                 component,
                 name,
@@ -2325,14 +2834,14 @@ pub fn handleDelete(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
 }
 
 fn hideInstanceDirForDelete(allocator: std.mem.Allocator, inst_dir: []const u8) !?[]const u8 {
-    std.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
+    std_compat.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
 
     const parent = std.fs.path.dirname(inst_dir) orelse return error.InvalidPath;
     const base = std.fs.path.basename(inst_dir);
-    const ts = @as(u64, @intCast(@max(0, std.time.milliTimestamp())));
+    const ts = @as(u64, @intCast(@max(0, std_compat.time.milliTimestamp())));
 
     var attempt: u32 = 0;
     while (attempt < 1024) : (attempt += 1) {
@@ -2344,9 +2853,8 @@ fn hideInstanceDirForDelete(allocator: std.mem.Allocator, inst_dir: []const u8) 
         });
         errdefer allocator.free(hidden_path);
 
-        std.fs.renameAbsolute(inst_dir, hidden_path) catch |err| switch (err) {
+        std_compat.fs.renameAbsolute(inst_dir, hidden_path) catch |err| switch (err) {
             error.FileNotFound => return null,
-            error.PathAlreadyExists => continue,
             else => return err,
         };
         return hidden_path;
@@ -2359,9 +2867,9 @@ fn hideInstanceDirForDelete(allocator: std.mem.Allocator, inst_dir: []const u8) 
 /// Copies config and data from ~/.{component}/ into the nullhub instance directory.
 /// The binary will be downloaded via the normal install flow on first start.
 pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8) ApiResponse {
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch blk: {
+    const home = std_compat.process.getEnvVarOwned(allocator, "HOME") catch blk: {
         if (builtin.os.tag == .windows) {
-            break :blk std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return helpers.serverError();
+            break :blk std_compat.process.getEnvVarOwned(allocator, "USERPROFILE") catch return helpers.serverError();
         }
         return helpers.serverError();
     };
@@ -2370,7 +2878,7 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     // 1. Verify standalone dir exists
     const dot_dir = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return helpers.serverError();
     defer allocator.free(dot_dir);
-    std.fs.accessAbsolute(dot_dir, .{}) catch return notFound();
+    std_compat.fs.accessAbsolute(dot_dir, .{}) catch return notFound();
 
     // 2. Create instance directory structure
     const inst_dir = paths.instanceDir(allocator, component, "default") catch return helpers.serverError();
@@ -2379,7 +2887,7 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     // Ensure parent component dir exists
     const comp_dir = std.fs.path.join(allocator, &.{ paths.root, "instances", component }) catch return helpers.serverError();
     defer allocator.free(comp_dir);
-    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return helpers.serverError(),
     };
@@ -2387,9 +2895,9 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     // 3. Symlink the entire standalone dir as the instance dir
     //    ~/.nullclaw → ~/.nullhub/instances/nullclaw/default
     //    This preserves all data in place (config, auth, workspace, state, logs)
-    std.fs.deleteFileAbsolute(inst_dir) catch {};
-    std.fs.deleteTreeAbsolute(inst_dir) catch {};
-    std.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
+    std_compat.fs.deleteFileAbsolute(inst_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(inst_dir) catch {};
+    std_compat.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
 
     // 4. Stage binary — copy from local dev build or leave for download on start
     const version = blk: {
@@ -2398,11 +2906,11 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
             const ver = "dev-local";
             const dest_bin = paths.binary(allocator, component, ver) catch break :blk "standalone";
             defer allocator.free(dest_bin);
-            std.fs.deleteFileAbsolute(dest_bin) catch {};
-            std.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
-            if (comptime std.fs.has_executable_bit) {
+            std_compat.fs.deleteFileAbsolute(dest_bin) catch {};
+            std_compat.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
+            if (comptime std_compat.fs.has_executable_bit) {
                 // Make executable on platforms that support executable bits.
-                if (std.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
+                if (std_compat.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
                     defer f.close();
                     f.chmod(0o755) catch {};
                 } else |_| {}
@@ -2444,6 +2952,10 @@ pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8,
     const new_launch_mode = parsed.value.launch_mode orelse entry.launch_mode;
     const new_verbose = parsed.value.verbose orelse entry.verbose;
 
+    var validated_launch = launch_args_mod.resolve(s.allocator, new_launch_mode, new_verbose) catch
+        return badRequest("{\"error\":\"invalid launch_mode\"}");
+    validated_launch.deinit();
+
     _ = s.updateInstance(component, name, .{
         .version = entry.version,
         .auto_start = new_auto_start,
@@ -2464,7 +2976,7 @@ fn handleIntegrationGet(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     manager: *manager_mod.Manager,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
@@ -2476,7 +2988,7 @@ fn handleIntegrationGet(
         defer integration_mod.deinitNullTicketsConfigs(allocator, trackers);
         const linked = integration_mod.matchNullTicketsTarget(boiler_cfg, trackers);
 
-        var tracker_options = std.ArrayListUnmanaged(TrackerIntegrationOption){};
+        var tracker_options: std.ArrayListUnmanaged(TrackerIntegrationOption) = .empty;
         defer {
             for (tracker_options.items) |option| {
                 deinitPipelineSummaries(allocator, option.pipelines);
@@ -2548,11 +3060,11 @@ fn handleIntegrationGet(
         const boilers = listNullBoilersLocked(allocator, mutex, s, paths) catch return helpers.serverError();
         defer integration_mod.deinitNullBoilerConfigs(allocator, boilers);
 
-        var linked_boilers = std.ArrayListUnmanaged(struct {
+        var linked_boilers: std.ArrayListUnmanaged(struct {
             name: []const u8,
             port: u16,
             tracker: ?std.json.Value = null,
-        }){};
+        }) = .empty;
         defer linked_boilers.deinit(allocator);
 
         for (boilers) |boiler| {
@@ -2595,7 +3107,7 @@ fn handleIntegrationPost(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     manager: *manager_mod.Manager,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     paths: paths_mod.Paths,
     component: []const u8,
     name: []const u8,
@@ -2676,7 +3188,7 @@ fn handleIntegrationPost(
 
     const config_path = paths.instanceConfig(allocator, "nullboiler", name) catch return helpers.serverError();
     defer allocator.free(config_path);
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return helpers.serverError();
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return helpers.serverError();
     defer file.close();
     const config_bytes = file.readToEndAlloc(allocator, 1024 * 1024) catch return helpers.serverError();
     defer allocator.free(config_bytes);
@@ -2690,32 +3202,32 @@ fn handleIntegrationPost(
 
     const tracker_map = ensureObjectField(allocator, &parsed_config.value.object, "tracker") catch return helpers.serverError();
     const tracker_url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{tracker_cfg.tickets.port}) catch return helpers.serverError();
-    tracker_map.put("url", .{ .string = tracker_url }) catch return helpers.serverError();
+    tracker_map.put(allocator, "url", .{ .string = tracker_url }) catch return helpers.serverError();
     if (tracker_cfg.tickets.api_token) |token| {
-        tracker_map.put("api_token", .{ .string = token }) catch return helpers.serverError();
+        tracker_map.put(allocator, "api_token", .{ .string = token }) catch return helpers.serverError();
     } else {
         _ = tracker_map.swapRemove("api_token");
     }
     if (jsonString(tracker_map.*, "agent_id")) |agent_id| {
         if (agent_id.len == 0) {
-            tracker_map.put("agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
+            tracker_map.put(allocator, "agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
         }
     } else {
-        tracker_map.put("agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
+        tracker_map.put(allocator, "agent_id", .{ .string = if (existing.tracker) |tracker| tracker.agent_id else name }) catch return helpers.serverError();
     }
     if (jsonString(tracker_map.*, "workflows_dir")) |workflows_dir| {
         if (workflows_dir.len == 0) {
-            tracker_map.put("workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
+            tracker_map.put(allocator, "workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
         }
     } else {
-        tracker_map.put("workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
+        tracker_map.put(allocator, "workflows_dir", .{ .string = "workflows" }) catch return helpers.serverError();
     }
 
     const concurrency_map = ensureObjectField(allocator, tracker_map, "concurrency") catch return helpers.serverError();
     if (tracker_cfg.max_concurrent_tasks) |max_concurrent_tasks| {
-        concurrency_map.put("max_concurrent_tasks", .{ .integer = max_concurrent_tasks }) catch return helpers.serverError();
+        concurrency_map.put(allocator, "max_concurrent_tasks", .{ .integer = max_concurrent_tasks }) catch return helpers.serverError();
     } else if (concurrency_map.get("max_concurrent_tasks") == null) {
-        concurrency_map.put("max_concurrent_tasks", .{ .integer = if (existing.tracker) |tracker| tracker.max_concurrent_tasks else 1 }) catch return helpers.serverError();
+        concurrency_map.put(allocator, "max_concurrent_tasks", .{ .integer = if (existing.tracker) |tracker| tracker.max_concurrent_tasks else 1 }) catch return helpers.serverError();
     }
 
     const workflows_dir_value = jsonStringOrEmpty(tracker_map.*, "workflows_dir");
@@ -2725,7 +3237,7 @@ fn handleIntegrationPost(
     }) catch return helpers.serverError();
     defer allocator.free(rendered);
 
-    const out = std.fs.createFileAbsolute(config_path, .{ .truncate = true }) catch return helpers.serverError();
+    const out = std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true }) catch return helpers.serverError();
     defer out.close();
     out.writeAll(rendered) catch return helpers.serverError();
     out.writeAll("\n") catch return helpers.serverError();
@@ -2770,7 +3282,7 @@ fn ensureTrackerWorkflowFile(
             const previous_path = try std.fs.path.join(allocator, &.{ workflows_dir, file_name });
             defer allocator.free(previous_path);
             if (isNullHubManagedWorkflow(allocator, previous_path)) {
-                std.fs.deleteFileAbsolute(previous_path) catch {};
+                std_compat.fs.deleteFileAbsolute(previous_path) catch {};
             }
         }
     }
@@ -2778,11 +3290,11 @@ fn ensureTrackerWorkflowFile(
     const config_dir = std.fs.path.dirname(config_path) orelse return error.InvalidPath;
     const legacy_path = try std.fs.path.join(allocator, &.{ config_dir, integration_mod.legacy_workflow_file_name });
     defer allocator.free(legacy_path);
-    std.fs.deleteFileAbsolute(legacy_path) catch {};
+    std_compat.fs.deleteFileAbsolute(legacy_path) catch {};
 
     const legacy_workflows_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.legacy_workflow_file_name });
     defer allocator.free(legacy_workflows_path);
-    std.fs.deleteFileAbsolute(legacy_workflows_path) catch {};
+    std_compat.fs.deleteFileAbsolute(legacy_workflows_path) catch {};
 
     const workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.managed_workflow_file_name });
     defer allocator.free(workflow_path);
@@ -2802,7 +3314,7 @@ fn ensureTrackerWorkflowFile(
     });
     defer allocator.free(rendered);
 
-    const file_out = try std.fs.createFileAbsolute(workflow_path, .{ .truncate = true });
+    const file_out = try std_compat.fs.createFileAbsolute(workflow_path, .{ .truncate = true });
     defer file_out.close();
     try file_out.writeAll(rendered);
     try file_out.writeAll("\n");
@@ -2822,7 +3334,7 @@ pub fn dispatch(
     allocator: std.mem.Allocator,
     s: *state_mod.State,
     manager: *manager_mod.Manager,
-    mutex: *std.Thread.Mutex,
+    mutex: *std_compat.sync.Mutex,
     paths: paths_mod.Paths,
     method: []const u8,
     target: []const u8,
@@ -2834,9 +3346,76 @@ pub fn dispatch(
         return methodNotAllowed();
     }
 
+    if (parseCronPath(target)) |parsed_cron| {
+        return switch (parsed_cron.action) {
+            .collection => if (std.mem.eql(u8, method, "GET"))
+                handleCronList(allocator, s, paths, parsed_cron.component, parsed_cron.name)
+            else if (std.mem.eql(u8, method, "POST"))
+                handleCronCreate(allocator, s, paths, parsed_cron.component, parsed_cron.name, body, false)
+            else
+                methodNotAllowed(),
+            .once => if (std.mem.eql(u8, method, "POST"))
+                handleCronCreate(allocator, s, paths, parsed_cron.component, parsed_cron.name, body, true)
+            else
+                methodNotAllowed(),
+            .update_or_delete => if (std.mem.eql(u8, method, "PATCH"))
+                handleCronUpdate(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?, body)
+            else if (std.mem.eql(u8, method, "DELETE"))
+                handleCronDelete(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?)
+            else
+                methodNotAllowed(),
+            .run => if (std.mem.eql(u8, method, "POST"))
+                handleCronCommandWithJob(
+                    allocator,
+                    s,
+                    paths,
+                    parsed_cron.component,
+                    parsed_cron.name,
+                    parsed_cron.job_id.?,
+                    &.{ "cron", "run", parsed_cron.job_id.? },
+                    "ran",
+                    "cron_run_failed",
+                )
+            else
+                methodNotAllowed(),
+            .pause => if (std.mem.eql(u8, method, "POST"))
+                handleCronCommandWithJob(
+                    allocator,
+                    s,
+                    paths,
+                    parsed_cron.component,
+                    parsed_cron.name,
+                    parsed_cron.job_id.?,
+                    &.{ "cron", "pause", parsed_cron.job_id.? },
+                    "paused",
+                    "cron_pause_failed",
+                )
+            else
+                methodNotAllowed(),
+            .resume_job => if (std.mem.eql(u8, method, "POST"))
+                handleCronCommandWithJob(
+                    allocator,
+                    s,
+                    paths,
+                    parsed_cron.component,
+                    parsed_cron.name,
+                    parsed_cron.job_id.?,
+                    &.{ "cron", "resume", parsed_cron.job_id.? },
+                    "resumed",
+                    "cron_resume_failed",
+                )
+            else
+                methodNotAllowed(),
+        };
+    }
+
     const parsed = parsePath(target) orelse return null;
 
     if (parsed.action) |action| {
+        if (std.mem.eql(u8, action, "models")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleModels(allocator, s, paths, parsed.component, parsed.name);
+        }
         if (std.mem.eql(u8, action, "provider-health")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleProviderHealth(allocator, s, manager, paths, parsed.component, parsed.name);
@@ -2896,7 +3475,7 @@ pub fn dispatch(
 
 const TestManagerCtx = struct {
     manager: manager_mod.Manager,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std_compat.sync.Mutex = .{},
     paths: paths_mod.Paths,
 
     fn init(allocator: std.mem.Allocator) TestManagerCtx {
@@ -2928,7 +3507,7 @@ fn writeTestInstanceConfig(
 
     const config_path = try paths.instanceConfig(allocator, component, name);
     defer allocator.free(config_path);
-    const file = try std.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(json);
     try file.writeAll("\n");
@@ -2966,7 +3545,7 @@ fn writeTestTrackerWorkflow(
     });
     defer allocator.free(rendered);
 
-    const file = try std.fs.createFileAbsolute(workflow_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(workflow_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(rendered);
     try file.writeAll("\n");
@@ -2983,12 +3562,32 @@ fn writeTestBinary(
     const bin_path = try paths.binary(allocator, component, version);
     defer allocator.free(bin_path);
 
-    const file = try std.fs.createFileAbsolute(bin_path, .{ .truncate = true });
+    const file = try std_compat.fs.createFileAbsolute(bin_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(script);
-    if (comptime std.fs.has_executable_bit) {
+    if (comptime std_compat.fs.has_executable_bit) {
         try file.chmod(0o755);
     }
+}
+
+fn writeTestCronStore(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    json: []const u8,
+) !void {
+    const inst_dir = try paths.instanceDir(allocator, component, name);
+    defer allocator.free(inst_dir);
+    try ensurePath(inst_dir);
+
+    const cron_path = try std.fs.path.join(allocator, &.{ inst_dir, "cron.json" });
+    defer allocator.free(cron_path);
+
+    const file = try std_compat.fs.createFileAbsolute(cron_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(json);
+    try file.writeAll("\n");
 }
 
 test "parsePath: component and name" {
@@ -3026,6 +3625,23 @@ test "parsePath: onboarding action" {
     try std.testing.expectEqualStrings("onboarding", p.action.?);
 }
 
+test "parseCronPath: collection route" {
+    const p = parseCronPath("/api/instances/nullclaw/default/cron").?;
+    try std.testing.expectEqualStrings("nullclaw", p.component);
+    try std.testing.expectEqualStrings("default", p.name);
+    try std.testing.expectEqual(p.action, .collection);
+}
+
+test "parseCronPath: run route" {
+    const p = parseCronPath("/api/instances/nullclaw/default/cron/job-1/run").?;
+    try std.testing.expectEqualStrings("job-1", p.job_id.?);
+    try std.testing.expectEqual(p.action, .run);
+}
+
+test "parseCronPath: rejects unknown verb" {
+    try std.testing.expect(parseCronPath("/api/instances/nullclaw/default/cron/job-1/nope") == null);
+}
+
 test "parseUsageWindow defaults to 24h" {
     try std.testing.expectEqualStrings("24h", parseUsageWindow("/api/instances/nullclaw/default/usage"));
 }
@@ -3037,9 +3653,9 @@ test "parseUsageWindow accepts supported values" {
     try std.testing.expectEqualStrings("all", parseUsageWindow("/api/instances/nullclaw/default/usage?window=all"));
 }
 
-test "queryParamValueAlloc decodes percent-encoded and plus-separated values" {
+test "query value decoding handles percent-encoded and plus-separated values" {
     const allocator = std.testing.allocator;
-    const value = (try queryParamValueAlloc(allocator, "/api/instances/nullclaw/default/memory?query=hello+world%2Fskills", "query")).?;
+    const value = (try query_api.valueAlloc(allocator, "/api/instances/nullclaw/default/memory?query=hello+world%2Fskills", "query")).?;
     defer allocator.free(value);
     try std.testing.expectEqualStrings("hello world/skills", value);
 }
@@ -3205,6 +3821,45 @@ test "handleStart returns 500 when binary does not exist" {
     try std.testing.expectEqualStrings("500 Internal Server Error", resp.status);
 }
 
+test "handleStart keeps gateway instances on their HTTP health port" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-start-gateway.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .launch_mode = "gateway" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":43123}}");
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "--export-manifest" ]; then
+        \\  printf '%s\n' '{"launch":{"command":"gateway","args":[]},"health":{"endpoint":"/health","port_from_config":"gateway.port"},"ports":[{"name":"gateway","config_key":"gateway.port","default":3000,"protocol":"http"}]}'
+        \\  exit 0
+        \\fi
+        \\sleep 60
+        ,
+    );
+
+    const resp = handleStart(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent", "");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const status = mctx.manager.getStatus("nullclaw", "my-agent").?;
+    try std.testing.expectEqual(manager_mod.Status.starting, status.status);
+    try std.testing.expectEqual(@as(u16, 43123), status.port);
+
+    mctx.manager.stopInstance("nullclaw", "my-agent") catch {};
+}
+
 test "handleStop returns 200 for existing instance" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -3257,8 +3912,8 @@ test "handleDelete removes instance directory from active path" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
@@ -3269,7 +3924,7 @@ test "handleDelete removes instance directory from active path" {
     const resp = handleDelete(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
     try std.testing.expectEqualStrings("200 OK", resp.status);
 
-    std.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
+    std_compat.fs.accessAbsolute(inst_dir, .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
@@ -3279,8 +3934,8 @@ test "handleDelete removes instance directory from active path" {
 test "handleDelete restores instance when state save fails" {
     const allocator = std.testing.allocator;
     const bad_state_root = "/tmp/nullhub-test-instances-api-delete-rollback";
-    std.fs.deleteTreeAbsolute(bad_state_root) catch {};
-    defer std.fs.deleteTreeAbsolute(bad_state_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(bad_state_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(bad_state_root) catch {};
 
     const bad_state_path = try std.fmt.allocPrint(allocator, "{s}/missing/state.json", .{bad_state_root});
     defer allocator.free(bad_state_path);
@@ -3290,8 +3945,8 @@ test "handleDelete restores instance when state save fails" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
@@ -3302,7 +3957,7 @@ test "handleDelete restores instance when state save fails" {
     const resp = handleDelete(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent");
     try std.testing.expectEqualStrings("500 Internal Server Error", resp.status);
     try std.testing.expect(s.getInstance("nullclaw", "my-agent") != null);
-    try std.fs.accessAbsolute(inst_dir, .{});
+    try std_compat.fs.accessAbsolute(inst_dir, .{});
 }
 
 test "handleDelete returns 404 for missing instance" {
@@ -3362,6 +4017,20 @@ test "handlePatch updates launch_mode" {
 
     const entry = s.getInstance("nullclaw", "my-agent").?;
     try std.testing.expectEqualStrings("agent", entry.launch_mode);
+}
+
+test "handlePatch rejects invalid launch_mode" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+
+    const resp = handlePatch(&s, "nullclaw", "my-agent", "{\"launch_mode\":\"   \"}");
+    try std.testing.expectEqualStrings("400 Bad Request", resp.status);
+
+    const entry = s.getInstance("nullclaw", "my-agent").?;
+    try std.testing.expectEqualStrings("gateway", entry.launch_mode);
 }
 
 test "handlePatch updates verbose startup flag" {
@@ -3454,6 +4123,132 @@ test "dispatch routes GET provider-health action" {
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
 }
 
+test "dispatch routes GET models action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestInstanceConfig(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "{\"default_provider\":\"openrouter\",\"agents\":{\"defaults\":{\"model\":{\"primary\":\"openrouter/anthropic/claude-sonnet-4\"}}},\"models\":{\"providers\":{\"openrouter\":{\"api_key\":\"sk-test\"},\"ollama\":{}}}}",
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_provider\":\"openrouter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_model\":\"openrouter/anthropic/claude-sonnet-4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"ollama\",\"has_key\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"openrouter\",\"has_key\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "sk-test") == null);
+}
+
+test "dispatch routes GET models action infers provider from current config shape" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-current.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestInstanceConfig(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "{\"agents\":{\"defaults\":{\"model\":{\"primary\":\"custom:https://gateway.example.com/api/qianfan/custom-model\"}}},\"models\":{\"providers\":{\"custom:https://gateway.example.com/api\":{\"api_key\":\"sk-test\"}}}}",
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/models", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_provider\":\"custom:https://gateway.example.com/api\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"default_model\":\"custom:https://gateway.example.com/api/qianfan/custom-model\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"custom:https://gateway.example.com/api\",\"has_key\":true") != null);
+}
+
+test "dispatch routes GET cron action" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestCronStore(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "[{\"id\":\"job-1\",\"expression\":\"*/5 * * * *\",\"command\":\"echo hello\",\"paused\":false,\"one_shot\":false}]",
+    );
+
+    const resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "GET", "/api/instances/nullclaw/my-agent/cron", "").?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"jobs\":[") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\":\"job-1\"") != null);
+}
+
+test "dispatch routes POST cron create action" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-create.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullclaw",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "cron" ] && [ "$2" = "add" ]; then
+        \\  home="${NULLCLAW_HOME:?}"
+        \\  cat > "${home}/cron.json" <<EOF
+        \\[{"id":"job-1","expression":"$3","command":"$4","paused":false,"one_shot":false}]
+        \\EOF
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        ,
+    );
+
+    const resp = dispatch(
+        allocator,
+        &s,
+        &mctx.manager,
+        &mctx.mutex,
+        mctx.paths,
+        "POST",
+        "/api/instances/nullclaw/my-agent/cron",
+        "{\"expression\":\"*/5 * * * *\",\"command\":\"echo hello\"}",
+    ).?;
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"job\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\":\"job-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"command\":\"echo hello\"") != null);
+}
+
 test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -3461,7 +4256,7 @@ test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -3473,7 +4268,7 @@ test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
 
     const bootstrap_path = try std.fs.path.join(allocator, &.{ workspace_dir, "BOOTSTRAP.md" });
     defer allocator.free(bootstrap_path);
-    const bootstrap_file = try std.fs.createFileAbsolute(bootstrap_path, .{ .truncate = true });
+    const bootstrap_file = try std_compat.fs.createFileAbsolute(bootstrap_path, .{ .truncate = true });
     defer bootstrap_file.close();
     try bootstrap_file.writeAll("# bootstrap\n");
 
@@ -3492,7 +4287,7 @@ test "handleOnboarding reports pending bootstrap from workspace state without di
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -3505,7 +4300,7 @@ test "handleOnboarding reports pending bootstrap from workspace state without di
     const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
     defer allocator.free(state_path);
     try ensurePath(std.fs.path.dirname(state_path).?);
-    const state_file = try std.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    const state_file = try std_compat.fs.createFileAbsolute(state_path, .{ .truncate = true });
     defer state_file.close();
     try state_file.writeAll(
         "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\"\n}\n",
@@ -3528,8 +4323,8 @@ test "handleOnboarding falls back to CLI bootstrap memory for legacy sqlite work
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "legacy-agent", .{ .version = "1.0.3" });
     const script =
@@ -3571,8 +4366,8 @@ test "handleOnboarding stays idle when legacy sqlite bootstrap memory is absent"
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "empty-agent", .{ .version = "1.0.4" });
     const script =
@@ -3610,7 +4405,7 @@ test "dispatch routes GET onboarding action" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -3623,7 +4418,7 @@ test "dispatch routes GET onboarding action" {
     const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
     defer allocator.free(state_path);
     try ensurePath(std.fs.path.dirname(state_path).?);
-    const state_file = try std.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    const state_file = try std_compat.fs.createFileAbsolute(state_path, .{ .truncate = true });
     defer state_file.close();
     try state_file.writeAll(
         "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\",\n  \"onboarding_completed_at\": \"2026-03-13T01:30:41Z\"\n}\n",
@@ -3643,7 +4438,7 @@ test "dispatch routes GET integration action for linked nullboiler" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -3686,7 +4481,7 @@ test "dispatch routes POST integration action for nullboiler" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -3708,7 +4503,7 @@ test "dispatch routes POST integration action for nullboiler" {
 
     const config_path = try mctx.paths.instanceConfig(allocator, "nullboiler", "boiler-a");
     defer allocator.free(config_path);
-    const file = try std.fs.openFileAbsolute(config_path, .{});
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
     defer file.close();
     const config_bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(config_bytes);
@@ -3728,7 +4523,7 @@ test "dispatch routes POST integration action for nullboiler" {
 
     const workflow_path = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullboiler", "boiler-a", "workflows", integration_mod.managed_workflow_file_name });
     defer allocator.free(workflow_path);
-    const workflow_file = try std.fs.openFileAbsolute(workflow_path, .{});
+    const workflow_file = try std_compat.fs.openFileAbsolute(workflow_path, .{});
     defer workflow_file.close();
     const workflow = try workflow_file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(workflow);
@@ -3738,7 +4533,7 @@ test "dispatch routes POST integration action for nullboiler" {
 
     const legacy_workflow_path = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullboiler", "boiler-a", "tracker-workflow.json" });
     defer allocator.free(legacy_workflow_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(legacy_workflow_path, .{}));
+    try std.testing.expectError(error.FileNotFound, std_compat.fs.openFileAbsolute(legacy_workflow_path, .{}));
 }
 
 test "dispatch integration relink preserves advanced tracker config and custom workflows" {
@@ -3748,7 +4543,7 @@ test "dispatch integration relink preserves advanced tracker config and custom w
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -3771,7 +4566,7 @@ test "dispatch integration relink preserves advanced tracker config and custom w
     const custom_workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, "manual.json" });
     defer allocator.free(custom_workflow_path);
     {
-        const file = try std.fs.createFileAbsolute(custom_workflow_path, .{ .truncate = true });
+        const file = try std_compat.fs.createFileAbsolute(custom_workflow_path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(
             \\{
@@ -3804,7 +4599,7 @@ test "dispatch integration relink preserves advanced tracker config and custom w
         });
         defer allocator.free(rendered);
 
-        const file = try std.fs.createFileAbsolute(generated_workflow_path, .{ .truncate = true });
+        const file = try std_compat.fs.createFileAbsolute(generated_workflow_path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(rendered);
         try file.writeAll("\n");
@@ -3824,7 +4619,7 @@ test "dispatch integration relink preserves advanced tracker config and custom w
 
     const config_path = try mctx.paths.instanceConfig(allocator, "nullboiler", "boiler-a");
     defer allocator.free(config_path);
-    const file = try std.fs.openFileAbsolute(config_path, .{});
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
     defer file.close();
     const config_bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(config_bytes);
@@ -3852,13 +4647,13 @@ test "dispatch integration relink preserves advanced tracker config and custom w
 
     const managed_workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, integration_mod.managed_workflow_file_name });
     defer allocator.free(managed_workflow_path);
-    const managed_file = try std.fs.openFileAbsolute(managed_workflow_path, .{});
+    const managed_file = try std_compat.fs.openFileAbsolute(managed_workflow_path, .{});
     managed_file.close();
 
-    const custom_file = try std.fs.openFileAbsolute(custom_workflow_path, .{});
+    const custom_file = try std_compat.fs.openFileAbsolute(custom_workflow_path, .{});
     custom_file.close();
 
-    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(generated_workflow_path, .{}));
+    try std.testing.expectError(error.FileNotFound, std_compat.fs.openFileAbsolute(generated_workflow_path, .{}));
 }
 
 test "dispatch provider-health rejects POST" {
@@ -3886,20 +4681,20 @@ test "handleUsage aggregates provider/model rows" {
     try mctx.paths.ensureDirs();
     const comp_dir = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw" });
     defer allocator.free(comp_dir);
-    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
     const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "usage-agent");
     defer allocator.free(inst_dir);
-    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
     const ledger_path = try std.fs.path.join(allocator, &.{ inst_dir, "llm_usage.jsonl" });
     defer allocator.free(ledger_path);
-    var ledger = try std.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
+    var ledger = try std_compat.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
     defer ledger.close();
     var writer_buf: [512]u8 = undefined;
     var fw = ledger.writer(&writer_buf);
@@ -3929,20 +4724,20 @@ test "handleUsage refreshes cache immediately when ledger changes" {
     try mctx.paths.ensureDirs();
     const comp_dir = try std.fs.path.join(allocator, &.{ mctx.paths.root, "instances", "nullclaw" });
     defer allocator.free(comp_dir);
-    std.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
     const inst_dir = try mctx.paths.instanceDir(allocator, "nullclaw", "usage-agent-cache");
     defer allocator.free(inst_dir);
-    std.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
     const ledger_path = try std.fs.path.join(allocator, &.{ inst_dir, TOKEN_USAGE_LEDGER_FILENAME });
     defer allocator.free(ledger_path);
-    var ledger = try std.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
+    var ledger = try std_compat.fs.createFileAbsolute(ledger_path, .{ .truncate = true });
     defer ledger.close();
     var writer_buf: [512]u8 = undefined;
     var fw = ledger.writer(&writer_buf);
@@ -3990,8 +4785,8 @@ test "handleHistory returns CLI JSON and passes instance home" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     const script =
@@ -4033,8 +4828,8 @@ test "handleMemory wraps legacy CLI failures as JSON errors" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1" });
     const script =
@@ -4059,8 +4854,8 @@ test "dispatch routes GET skills action" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     const script =
@@ -4104,8 +4899,8 @@ test "dispatch routes POST bundled skill install" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"autonomy\":{\"level\":\"supervised\"}}");
@@ -4147,8 +4942,8 @@ test "dispatch routes DELETE skills action" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.3" });
     const script =
@@ -4176,8 +4971,8 @@ test "dispatch routes POST source install returns conflict on CLI failure" {
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
-    std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.4" });
     const script =

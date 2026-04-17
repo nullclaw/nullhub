@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const paths_mod = @import("paths.zig");
 const state_mod = @import("state.zig");
 
@@ -72,7 +73,7 @@ pub fn loadNullTicketsConfig(allocator: std.mem.Allocator, paths: paths_mod.Path
     const config_path = paths.instanceConfig(allocator, "nulltickets", name) catch return null;
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
     defer file.close();
 
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
@@ -94,7 +95,7 @@ pub fn loadNullBoilerConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths
     const config_path = paths.instanceConfig(allocator, "nullboiler", name) catch return null;
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
     defer file.close();
 
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
@@ -199,12 +200,12 @@ fn isLocalHost(host: []const u8) bool {
 }
 
 fn loadPrimaryWorkflowConfig(allocator: std.mem.Allocator, workflows_dir: []const u8) !?NullBoilerWorkflowConfig {
-    var dir = std.fs.openDirAbsolute(workflows_dir, .{ .iterate = true }) catch return null;
+    var dir = std_compat.fs.openDirAbsolute(workflows_dir, .{ .iterate = true }) catch return null;
     defer dir.close();
 
     const managed_path = try std.fs.path.join(allocator, &.{ workflows_dir, managed_workflow_file_name });
     defer allocator.free(managed_path);
-    if (std.fs.openFileAbsolute(managed_path, .{})) |managed_file| {
+    if (std_compat.fs.openFileAbsolute(managed_path, .{})) |managed_file| {
         managed_file.close();
         return loadWorkflowConfigFromFile(allocator, workflows_dir, managed_workflow_file_name);
     } else |_| {}
@@ -229,7 +230,7 @@ fn loadPrimaryWorkflowConfig(allocator: std.mem.Allocator, workflows_dir: []cons
 fn loadWorkflowConfigFromFile(allocator: std.mem.Allocator, workflows_dir: []const u8, file_name: []const u8) !?NullBoilerWorkflowConfig {
     const workflow_path = try std.fs.path.join(allocator, &.{ workflows_dir, file_name });
     defer allocator.free(workflow_path);
-    const file = std.fs.openFileAbsolute(workflow_path, .{}) catch return null;
+    const file = std_compat.fs.openFileAbsolute(workflow_path, .{}) catch return null;
     defer file.close();
 
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);

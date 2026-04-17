@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const state_mod = @import("../core/state.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
@@ -346,10 +347,10 @@ fn probeChannel(
     const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-channel-validate", "") catch
         return .{ .live_ok = false, .reason = "tmp_dir_failed" };
     defer {
-        std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+        std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
         allocator.free(tmp_dir);
     }
-    std.fs.makeDirAbsolute(tmp_dir) catch return .{ .live_ok = false, .reason = "tmp_dir_failed" };
+    std_compat.fs.makeDirAbsolute(tmp_dir) catch return .{ .live_ok = false, .reason = "tmp_dir_failed" };
 
     // Write config as {"channels":{"{type}":{"{account}":{config}}}}
     writeChannelConfig(allocator, tmp_dir, channel_type, account, config_json) catch
@@ -405,7 +406,7 @@ fn writeChannelConfig(
     }
     try buf.appendSlice("}}}");
 
-    const file = try std.fs.createFileAbsolute(config_path, .{});
+    const file = try std_compat.fs.createFileAbsolute(config_path, .{});
     defer file.close();
     try file.writeAll(buf.items);
 }
@@ -587,9 +588,9 @@ test "handleList reveals secrets when requested" {
 test "handleDelete removes channel" {
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-channel-test-delete";
-    std.fs.deleteTreeAbsolute(tmp) catch {};
-    std.fs.makeDirAbsolute(tmp) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
 
     const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
     defer allocator.free(path);
@@ -638,9 +639,9 @@ test "handleCreate rejects non-object config" {
 test "handleUpdate rejects non-object config" {
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-channel-test-update-invalid";
-    std.fs.deleteTreeAbsolute(tmp) catch {};
-    try std.fs.makeDirAbsolute(tmp);
-    defer std.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp);
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
 
     const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
     defer allocator.free(path);
@@ -670,15 +671,15 @@ test "handleUpdate rejects non-object config" {
 test "writeChannelConfig escapes channel type and account" {
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-channel-test-config-escape";
-    std.fs.deleteTreeAbsolute(tmp) catch {};
-    try std.fs.makeDirAbsolute(tmp);
-    defer std.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp);
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
 
     try writeChannelConfig(allocator, tmp, "telegram", "acct\"name\\slash", "{\"token\":\"abc\"}");
 
     const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp});
     defer allocator.free(config_path);
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, config_path, 4096);
+    const bytes = try std_compat.fs.cwd().readFileAlloc(allocator, config_path, 4096);
     defer allocator.free(bytes);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{

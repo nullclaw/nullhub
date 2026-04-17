@@ -1,6 +1,8 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const process = @import("process.zig");
 const health = @import("health.zig");
+const runtime_state = @import("runtime_state.zig");
 const paths_mod = @import("../core/paths.zig");
 const component_cli = @import("../core/component_cli.zig");
 
@@ -18,8 +20,8 @@ pub const ManagedInstance = struct {
     name: []const u8,
     owns_memory: bool = false,
     status: Status = .stopped,
-    pid: ?std.process.Child.Id = null,
-    child: ?std.process.Child = null,
+    pid: ?std_compat.process.Child.Id = null,
+    child: ?std_compat.process.Child = null,
     port: u16 = 0,
     health_endpoint: []const u8 = "/health",
 
@@ -28,9 +30,7 @@ pub const ManagedInstance = struct {
     working_dir: []const u8 = "",
     config_path: []const u8 = "",
     launch_command: []const u8 = "",
-    // NOTE: Arguments containing spaces won't round-trip correctly through
-    // this space-separated representation. Prefer arguments without spaces.
-    launch_args_str: []const u8 = "", // space-separated additional args
+    launch_args: []const []const u8 = &.{},
 
     // Timing
     started_at: ?i64 = null,
@@ -53,7 +53,7 @@ pub const InstanceStatus = struct {
     component: []const u8,
     name: []const u8,
     status: Status,
-    pid: ?std.process.Child.Id,
+    pid: ?std_compat.process.Child.Id,
     port: u16,
     uptime_seconds: ?u64,
     memory_rss_bytes: ?u64,
@@ -94,12 +94,130 @@ pub const Manager = struct {
         if (inst.working_dir.len > 0) self.allocator.free(inst.working_dir);
         if (inst.config_path.len > 0) self.allocator.free(inst.config_path);
         if (inst.launch_command.len > 0) self.allocator.free(inst.launch_command);
-        if (inst.launch_args_str.len > 0) self.allocator.free(inst.launch_args_str);
+        self.freeLaunchArgs(inst.launch_args);
         inst.owns_memory = false;
     }
 
-    fn pidToU64(pid: std.process.Child.Id) u64 {
-        return switch (@typeInfo(std.process.Child.Id)) {
+    fn freeLaunchArgs(self: *Manager, args: []const []const u8) void {
+        if (args.len == 0) return;
+        for (args) |arg| self.allocator.free(arg);
+        self.allocator.free(args);
+    }
+
+    const OwnedInstanceFields = struct {
+        component: []const u8,
+        name: []const u8,
+        health_endpoint: []const u8,
+        binary_path: []const u8,
+        working_dir: []const u8,
+        config_path: []const u8,
+        launch_command: []const u8,
+        launch_args: []const []const u8,
+
+        fn deinit(self: *OwnedInstanceFields, allocator: std.mem.Allocator) void {
+            allocator.free(self.component);
+            allocator.free(self.name);
+            allocator.free(self.health_endpoint);
+            allocator.free(self.binary_path);
+            if (self.working_dir.len > 0) allocator.free(self.working_dir);
+            if (self.config_path.len > 0) allocator.free(self.config_path);
+            if (self.launch_command.len > 0) allocator.free(self.launch_command);
+            if (self.launch_args.len > 0) {
+                for (self.launch_args) |arg| allocator.free(arg);
+                allocator.free(self.launch_args);
+            }
+            self.* = undefined;
+        }
+    };
+
+    fn ownInstanceFields(
+        self: *Manager,
+        component: []const u8,
+        name: []const u8,
+        health_endpoint: []const u8,
+        binary_path: []const u8,
+        working_dir: []const u8,
+        config_path: []const u8,
+        launch_command: []const u8,
+        launch_args: []const []const u8,
+    ) !OwnedInstanceFields {
+        var owned = OwnedInstanceFields{
+            .component = try self.allocator.dupe(u8, component),
+            .name = "",
+            .health_endpoint = "",
+            .binary_path = "",
+            .working_dir = "",
+            .config_path = "",
+            .launch_command = "",
+            .launch_args = &.{},
+        };
+        errdefer owned.deinit(self.allocator);
+
+        owned.name = try self.allocator.dupe(u8, name);
+        owned.health_endpoint = try self.allocator.dupe(u8, health_endpoint);
+        owned.binary_path = try self.allocator.dupe(u8, binary_path);
+        owned.working_dir = if (working_dir.len > 0) try self.allocator.dupe(u8, working_dir) else "";
+        owned.config_path = if (config_path.len > 0) try self.allocator.dupe(u8, config_path) else "";
+        owned.launch_command = if (launch_command.len > 0) try self.allocator.dupe(u8, launch_command) else "";
+        owned.launch_args = try self.cloneLaunchArgs(launch_args);
+        return owned;
+    }
+
+    fn cloneLaunchArgs(self: *Manager, args: []const []const u8) ![]const []const u8 {
+        if (args.len == 0) return &.{};
+
+        const owned = try self.allocator.alloc([]const u8, args.len);
+        errdefer self.allocator.free(owned);
+
+        var cloned: usize = 0;
+        errdefer {
+            for (owned[0..cloned]) |arg| self.allocator.free(arg);
+        }
+
+        for (args, 0..) |arg, idx| {
+            owned[idx] = try self.allocator.dupe(u8, arg);
+            cloned += 1;
+        }
+        return owned;
+    }
+
+    fn clearRuntimeState(self: *Manager, component: []const u8, name: []const u8) void {
+        runtime_state.delete(self.allocator, self.p, component, name);
+    }
+
+    fn clearPid(self: *Manager, inst: *ManagedInstance) void {
+        if (inst.pid) |pid| {
+            if (inst.child == null) process.releasePidHandle(pid);
+            inst.pid = null;
+        }
+        self.clearRuntimeState(inst.component, inst.name);
+    }
+
+    fn persistRuntimeState(self: *Manager, inst: *const ManagedInstance) void {
+        const pid = inst.pid orelse return;
+        const persisted_pid = process.persistedPidValue(pid) orelse {
+            self.logSupervisor(inst.component, inst.name, "failed to persist runtime state: unresolved pid", .{});
+            return;
+        };
+
+        runtime_state.write(self.allocator, self.p, inst.component, inst.name, .{
+            .pid = persisted_pid,
+            .port = inst.port,
+            .health_endpoint = inst.health_endpoint,
+            .binary_path = inst.binary_path,
+            .working_dir = inst.working_dir,
+            .config_path = inst.config_path,
+            .launch_command = inst.launch_command,
+            .launch_args = inst.launch_args,
+            .started_at = inst.started_at,
+            .starting_since = inst.starting_since,
+        }) catch |err| {
+            self.logSupervisor(inst.component, inst.name, "failed to persist runtime state: {s}", .{@errorName(err)});
+        };
+    }
+
+    fn pidToU64(pid: std_compat.process.Child.Id) u64 {
+        return switch (@typeInfo(std_compat.process.Child.Id)) {
             .pointer => @as(u64, @intCast(@intFromPtr(pid))),
             else => @as(u64, @intCast(pid)),
         };
@@ -114,7 +232,7 @@ pub const Manager = struct {
     ) void {
         const logs_dir = self.p.instanceLogs(self.allocator, component, name) catch return;
         defer self.allocator.free(logs_dir);
-        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return,
         };
@@ -122,7 +240,7 @@ pub const Manager = struct {
         const nullhub_log = std.fs.path.join(self.allocator, &.{ logs_dir, "nullhub.log" }) catch return;
         defer self.allocator.free(nullhub_log);
 
-        var file = std.fs.createFileAbsolute(nullhub_log, .{ .truncate = false }) catch return;
+        var file = std_compat.fs.createFileAbsolute(nullhub_log, .{ .truncate = false }) catch return;
         defer file.close();
         file.seekFromEnd(0) catch return;
 
@@ -132,7 +250,7 @@ pub const Manager = struct {
         const line = std.fmt.allocPrint(
             self.allocator,
             "[nullhub/supervisor][{d}] {s}\n",
-            .{ std.time.milliTimestamp(), msg },
+            .{ std_compat.time.milliTimestamp(), msg },
         ) catch return;
         defer self.allocator.free(line);
 
@@ -172,10 +290,21 @@ pub const Manager = struct {
         );
     }
 
+    fn scheduleRestart(self: *Manager, inst: *ManagedInstance, now: i64, reason: []const u8) void {
+        inst.status = .restarting;
+        inst.last_restart_attempt = now;
+        inst.health_consecutive_failures = 0;
+        self.logSupervisor(inst.component, inst.name, "{s}; scheduling restart attempt {d}/{d}", .{
+            reason,
+            inst.restart_count + 1,
+            inst.max_restarts,
+        });
+    }
+
     fn waitChildAndLog(
         self: *Manager,
         inst: *ManagedInstance,
-        child: *std.process.Child,
+        child: *std_compat.process.Child,
         context: []const u8,
     ) void {
         const term = child.wait() catch |err| {
@@ -183,10 +312,10 @@ pub const Manager = struct {
             return;
         };
         switch (term) {
-            .Exited => |code| self.logSupervisor(inst.component, inst.name, "{s}: exited with code {d}", .{ context, code }),
-            .Signal => |signal| self.logSupervisor(inst.component, inst.name, "{s}: terminated by signal {d}", .{ context, signal }),
-            .Stopped => |signal| self.logSupervisor(inst.component, inst.name, "{s}: stopped by signal {d}", .{ context, signal }),
-            .Unknown => |value| self.logSupervisor(inst.component, inst.name, "{s}: unknown termination value {d}", .{ context, value }),
+            .exited => |code| self.logSupervisor(inst.component, inst.name, "{s}: exited with code {d}", .{ context, code }),
+            .signal => |signal| self.logSupervisor(inst.component, inst.name, "{s}: terminated by signal {d}", .{ context, signal }),
+            .stopped => |signal| self.logSupervisor(inst.component, inst.name, "{s}: stopped by signal {d}", .{ context, signal }),
+            .unknown => |value| self.logSupervisor(inst.component, inst.name, "{s}: unknown termination value {d}", .{ context, value }),
         }
     }
 
@@ -203,7 +332,7 @@ pub const Manager = struct {
             inst.child = null;
         }
         inst.status = .stopped;
-        inst.pid = null;
+        self.clearPid(inst);
     }
 
     /// Start an instance. binary_path is the path to the component binary.
@@ -222,38 +351,22 @@ pub const Manager = struct {
         const key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ component, name });
         errdefer self.allocator.free(key);
 
-        const component_owned = try self.allocator.dupe(u8, component);
-        errdefer self.allocator.free(component_owned);
-        const name_owned = try self.allocator.dupe(u8, name);
-        errdefer self.allocator.free(name_owned);
-        const health_endpoint_owned = try self.allocator.dupe(u8, health_endpoint);
-        errdefer self.allocator.free(health_endpoint_owned);
-        const binary_path_owned = try self.allocator.dupe(u8, binary_path);
-        errdefer self.allocator.free(binary_path_owned);
-        const working_dir_owned = if (working_dir.len > 0) try self.allocator.dupe(u8, working_dir) else "";
-        errdefer if (working_dir_owned.len > 0) self.allocator.free(working_dir_owned);
-        const config_path_owned = if (config_path.len > 0) try self.allocator.dupe(u8, config_path) else "";
-        errdefer if (config_path_owned.len > 0) self.allocator.free(config_path_owned);
-        const launch_command_owned = if (launch_command.len > 0) try self.allocator.dupe(u8, launch_command) else "";
-        errdefer if (launch_command_owned.len > 0) self.allocator.free(launch_command_owned);
-
-        // Build space-separated args string for restart.
-        var launch_args_str: []const u8 = "";
-        if (launch_args.len > 0) {
-            var args_buf = std.array_list.Managed(u8).init(self.allocator);
-            defer args_buf.deinit();
-            for (launch_args, 0..) |arg, i| {
-                if (i > 0) try args_buf.append(' ');
-                try args_buf.appendSlice(arg);
-            }
-            launch_args_str = try args_buf.toOwnedSlice();
-        }
-        errdefer if (launch_args_str.len > 0) self.allocator.free(launch_args_str);
+        var owned = try self.ownInstanceFields(
+            component,
+            name,
+            health_endpoint,
+            binary_path,
+            working_dir,
+            config_path,
+            launch_command,
+            launch_args,
+        );
+        errdefer owned.deinit(self.allocator);
 
         // Ensure logs directory exists and compute log file path
         const logs_dir = try self.p.instanceLogs(self.allocator, component, name);
         defer self.allocator.free(logs_dir);
-        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
@@ -295,29 +408,110 @@ pub const Manager = struct {
             if (old_value.child) |*child| {
                 self.waitChildAndLog(&old_value, child, "replace: previous process exit");
             }
+            self.clearPid(&old_value);
             self.freeInstanceOwned(&old_value);
             self.allocator.free(old_entry.key);
         }
 
-        const now = std.time.milliTimestamp();
+        const now = std_compat.time.milliTimestamp();
         try self.instances.put(key, .{
-            .component = component_owned,
-            .name = name_owned,
+            .component = owned.component,
+            .name = owned.name,
             .owns_memory = true,
             .status = .starting,
             .pid = result.pid,
             .child = result.child,
             .port = port,
-            .health_endpoint = health_endpoint_owned,
-            .binary_path = binary_path_owned,
-            .working_dir = working_dir_owned,
-            .config_path = config_path_owned,
-            .launch_command = launch_command_owned,
-            .launch_args_str = launch_args_str,
+            .health_endpoint = owned.health_endpoint,
+            .binary_path = owned.binary_path,
+            .working_dir = owned.working_dir,
+            .config_path = owned.config_path,
+            .launch_command = owned.launch_command,
+            .launch_args = owned.launch_args,
             .started_at = now,
             .starting_since = now,
         });
-        self.logSupervisor(component_owned, name_owned, "spawned pid={d}; status=starting; port={d}", .{ pidToU64(result.pid), port });
+        const inst = self.instances.getPtr(key).?;
+        self.persistRuntimeState(inst);
+        self.logSupervisor(inst.component, inst.name, "spawned pid={d}; status=starting; port={d}", .{ pidToU64(result.pid), port });
+    }
+
+    pub fn adoptInstance(
+        self: *Manager,
+        component: []const u8,
+        name: []const u8,
+        runtime: runtime_state.PersistedRuntime,
+    ) !bool {
+        const pid = process.reopenPersistedPid(runtime.pid) orelse return false;
+        errdefer process.releasePidHandle(pid);
+
+        if (!process.isAlive(pid)) return false;
+
+        const key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ component, name });
+        errdefer self.allocator.free(key);
+
+        var owned = try self.ownInstanceFields(
+            component,
+            name,
+            runtime.health_endpoint,
+            runtime.binary_path,
+            runtime.working_dir,
+            runtime.config_path,
+            runtime.launch_command,
+            runtime.launch_args,
+        );
+        errdefer owned.deinit(self.allocator);
+
+        const now = std_compat.time.milliTimestamp();
+        const probe = if (runtime.port > 0)
+            health.check(self.allocator, "127.0.0.1", runtime.port, runtime.health_endpoint)
+        else
+            health.HealthCheckResult{ .ok = true };
+
+        const status: Status = if (runtime.port == 0 or probe.ok) .running else .starting;
+        const starting_since = if (status == .starting)
+            runtime.starting_since orelse runtime.started_at orelse now
+        else
+            null;
+        const last_health_ok = if (status == .running) now else null;
+        const last_health_check = if (runtime.port > 0 and probe.ok) now else null;
+
+        if (self.instances.fetchRemove(key)) |old_entry| {
+            var old_value = old_entry.value;
+            self.shutdownInstance(&old_value, "adopt replace");
+            self.freeInstanceOwned(&old_value);
+            self.allocator.free(old_entry.key);
+        }
+
+        try self.instances.put(key, .{
+            .component = owned.component,
+            .name = owned.name,
+            .owns_memory = true,
+            .status = status,
+            .pid = pid,
+            .child = null,
+            .port = runtime.port,
+            .health_endpoint = owned.health_endpoint,
+            .binary_path = owned.binary_path,
+            .working_dir = owned.working_dir,
+            .config_path = owned.config_path,
+            .launch_command = owned.launch_command,
+            .launch_args = owned.launch_args,
+            .started_at = runtime.started_at orelse now,
+            .starting_since = starting_since,
+            .last_health_ok = last_health_ok,
+            .last_health_check = last_health_check,
+        });
+
+        const inst = self.instances.getPtr(key).?;
+        self.persistRuntimeState(inst);
+        self.logSupervisor(
+            inst.component,
+            inst.name,
+            "adopted existing pid={d}; status={s}; port={d}",
+            .{ pidToU64(pid), @tagName(status), runtime.port },
+        );
+        return true;
     }
 
     /// Stop an instance gracefully (SIGTERM, wait, SIGKILL if needed).
@@ -332,6 +526,7 @@ pub const Manager = struct {
                 self.logSupervisor(inst.component, inst.name, "instance stopped", .{});
             } else {
                 inst.status = .stopped;
+                self.clearRuntimeState(inst.component, inst.name);
                 self.logSupervisor(inst.component, inst.name, "stop requested while pid is null; marking stopped", .{});
             }
         }
@@ -343,7 +538,7 @@ pub const Manager = struct {
         defer self.allocator.free(key_buf);
 
         const inst = self.instances.get(key_buf) orelse return null;
-        const now = std.time.milliTimestamp();
+        const now = std_compat.time.milliTimestamp();
         const uptime: ?u64 = if (inst.started_at) |s| blk: {
             const diff = now - s;
             break :blk if (diff >= 0) @intCast(@divFloor(diff, 1000)) else null;
@@ -370,7 +565,7 @@ pub const Manager = struct {
         var it = self.instances.iterator();
         while (it.next()) |entry| {
             const inst = entry.value_ptr.*;
-            const now = std.time.milliTimestamp();
+            const now = std_compat.time.milliTimestamp();
             const uptime: ?u64 = if (inst.started_at) |s| blk: {
                 const diff = now - s;
                 break :blk if (diff >= 0) @intCast(@divFloor(diff, 1000)) else null;
@@ -394,7 +589,7 @@ pub const Manager = struct {
     /// Called periodically (every ~1 second) to manage instance lifecycle.
     /// Checks health, handles restarts, detects crashes.
     pub fn tick(self: *Manager) void {
-        const now = std.time.milliTimestamp();
+        const now = std_compat.time.milliTimestamp();
         var it = self.instances.iterator();
         while (it.next()) |entry| {
             const inst = entry.value_ptr;
@@ -416,13 +611,13 @@ pub const Manager = struct {
                     self.waitChildAndLog(inst, child, "startup: process exited before ready");
                     inst.child = null;
                 }
-                inst.pid = null;
-                inst.status = .failed;
+                self.clearPid(inst);
+                self.scheduleRestart(inst, now, "startup failed before readiness");
                 return;
             }
         } else {
             self.logSupervisor(inst.component, inst.name, "startup failed: missing pid in starting state", .{});
-            inst.status = .failed;
+            self.scheduleRestart(inst, now, "startup state lost pid before readiness");
             return;
         }
 
@@ -462,8 +657,8 @@ pub const Manager = struct {
                     self.waitChildAndLog(inst, child, "startup timeout");
                     inst.child = null;
                 }
-                inst.pid = null;
-                inst.status = .failed;
+                self.clearPid(inst);
+                self.scheduleRestart(inst, now, "startup timed out waiting for health");
             }
         }
     }
@@ -482,7 +677,7 @@ pub const Manager = struct {
                     self.waitChildAndLog(inst, child, "running: process exit detected");
                     inst.child = null;
                 }
-                inst.pid = null;
+                self.clearPid(inst);
                 inst.status = .restarting;
                 inst.last_restart_attempt = now;
                 return;
@@ -525,9 +720,8 @@ pub const Manager = struct {
                     self.waitChildAndLog(inst, child, "health failure threshold");
                     inst.child = null;
                 }
-                inst.pid = null;
-                inst.status = .failed;
-                self.logSupervisor(inst.component, inst.name, "instance marked failed after {d} consecutive health failures", .{inst.health_consecutive_failures});
+                self.clearPid(inst);
+                self.scheduleRestart(inst, now, "health failure threshold reached");
             }
         }
     }
@@ -565,23 +759,6 @@ pub const Manager = struct {
             return;
         }
 
-        // Build argv from launch_args_str
-        var argv_list = std.array_list.Managed([]const u8).init(self.allocator);
-        defer argv_list.deinit();
-
-        if (inst.launch_args_str.len > 0) {
-            var it = std.mem.splitScalar(u8, inst.launch_args_str, ' ');
-            while (it.next()) |arg| {
-                if (arg.len > 0) {
-                    argv_list.append(arg) catch |err| {
-                        self.logSupervisor(inst.component, inst.name, "restart failed: argv allocation error: {s}", .{@errorName(err)});
-                        inst.status = .failed;
-                        return;
-                    };
-                }
-            }
-        }
-
         // Compute log file path for output redirect
         const logs_dir = self.p.instanceLogs(self.allocator, inst.component, inst.name) catch |err| {
             self.logSupervisor(inst.component, inst.name, "restart failed: cannot resolve logs dir: {s}", .{@errorName(err)});
@@ -589,7 +766,7 @@ pub const Manager = struct {
             return;
         };
         defer self.allocator.free(logs_dir);
-        std.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(logs_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
                 self.logSupervisor(inst.component, inst.name, "restart failed: cannot create logs dir: {s}", .{@errorName(err)});
@@ -615,7 +792,7 @@ pub const Manager = struct {
             &.{};
         const result = process.spawn(self.allocator, .{
             .binary = inst.binary_path,
-            .argv = argv_list.items,
+            .argv = inst.launch_args,
             .cwd = cwd,
             .stdout_path = stdout_log,
             .extra_env = extra_env,
@@ -631,6 +808,7 @@ pub const Manager = struct {
         inst.started_at = now;
         inst.starting_since = now;
         inst.health_consecutive_failures = 0;
+        self.persistRuntimeState(inst);
         self.logSupervisor(inst.component, inst.name, "restart spawned pid={d}; status=starting", .{pidToU64(result.pid)});
     }
 };
@@ -689,8 +867,8 @@ test "getStatus returns null for unknown instance" {
 test "logSupervisor appends diagnostics to nullhub.log" {
     const allocator = std.testing.allocator;
     const tmp_root = "/tmp/test-nullhub-mgr-log-supervisor";
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try paths_mod.Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
@@ -706,7 +884,7 @@ test "logSupervisor appends diagnostics to nullhub.log" {
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
     defer allocator.free(log_path);
 
-    var file = try std.fs.openFileAbsolute(log_path, .{});
+    var file = try std_compat.fs.openFileAbsolute(log_path, .{});
     defer file.close();
 
     const contents = try file.readToEndAlloc(allocator, 16 * 1024);
@@ -733,10 +911,10 @@ test "status reporting for manually-added instance" {
         .pid = null,
         .port = 8080,
         .health_endpoint = "/health",
-        .started_at = std.time.milliTimestamp() - 5000, // started 5s ago
+        .started_at = std_compat.time.milliTimestamp() - 5000, // started 5s ago
         .restart_count = 2,
         .health_consecutive_failures = 1,
-        .last_health_ok = std.time.milliTimestamp() - 1000,
+        .last_health_ok = std_compat.time.milliTimestamp() - 1000,
     });
 
     const st = mgr.getStatus("mycomp", "myinst");
@@ -750,6 +928,72 @@ test "status reporting for manually-added instance" {
     try std.testing.expect(s.uptime_seconds.? >= 4); // at least 4s
     try std.testing.expectEqual(@as(u32, 2), s.restart_count);
     try std.testing.expectEqual(@as(u32, 1), s.health_consecutive_failures);
+}
+
+test "restart preserves launch args with spaces" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/test-nullhub-mgr-restart-argv";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_root);
+
+    const script_path = try std.fs.path.join(allocator, &.{ tmp_root, "capture-arg.sh" });
+    defer allocator.free(script_path);
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "captured.txt" });
+    defer allocator.free(output_path);
+
+    const script =
+        \\printf '%s\n' "$1" >> "$2"
+        \\sleep 1
+        \\
+    ;
+    const script_file = try std_compat.fs.createFileAbsolute(script_path, .{ .truncate = true });
+    defer script_file.close();
+    try script_file.writeAll(script);
+
+    var p = try paths_mod.Paths.init(allocator, tmp_root);
+    defer p.deinit(allocator);
+
+    var mgr = Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    const launch_args = [_][]const u8{ script_path, "hello world", output_path };
+    try mgr.startInstance("nullclaw", "argv", "/bin/sh", &launch_args, 0, "/health", "", "", "gateway");
+
+    std.time.sleep(100 * std.time.ns_per_ms);
+    mgr.tick();
+
+    std.time.sleep(1200 * std.time.ns_per_ms);
+    mgr.tick();
+    mgr.tick();
+
+    var attempts: usize = 0;
+    var found = false;
+    while (attempts < 20 and !found) : (attempts += 1) {
+        const file = std_compat.fs.openFileAbsolute(output_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.time.sleep(50 * std.time.ns_per_ms);
+                continue;
+            },
+            else => return err,
+        };
+        defer file.close();
+
+        const contents = try file.readToEndAlloc(allocator, 1024);
+        defer allocator.free(contents);
+
+        if (std.mem.eql(u8, contents, "hello world\nhello world\n")) {
+            found = true;
+            break;
+        }
+
+        std.time.sleep(50 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(found);
 }
 
 test "getAllStatuses returns correct list" {
@@ -815,7 +1059,7 @@ test "tick: restarting with max_restarts exceeded transitions to failed" {
         .status = .restarting,
         .restart_count = 5, // already at max
         .max_restarts = 5,
-        .last_restart_attempt = std.time.milliTimestamp(),
+        .last_restart_attempt = std_compat.time.milliTimestamp(),
     });
 
     mgr.tick();
@@ -839,7 +1083,7 @@ test "tick: restarting with restarts remaining transitions to failed (no binary)
         .status = .restarting,
         .restart_count = 0,
         .max_restarts = 5,
-        .last_restart_attempt = std.time.milliTimestamp() - 10_000, // well past any backoff
+        .last_restart_attempt = std_compat.time.milliTimestamp() - 10_000, // well past any backoff
     });
 
     mgr.tick();
@@ -883,7 +1127,7 @@ test "tick: stopped and failed instances are not modified" {
     try std.testing.expectEqual(@as(u32, 3), failed.restart_count);
 }
 
-test "tick: starting instance without pid transitions to failed" {
+test "tick: starting instance without pid transitions to restarting" {
     const allocator = std.testing.allocator;
     var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
     defer p.deinit(allocator);
@@ -898,13 +1142,93 @@ test "tick: starting instance without pid transitions to failed" {
         .name = "dead-start",
         .status = .starting,
         .pid = 99999999, // non-existent
-        .starting_since = std.time.milliTimestamp(),
+        .starting_since = std_compat.time.milliTimestamp(),
     });
 
     mgr.tick();
 
     const inst = mgr.instances.get("comp/dead-start").?;
-    try std.testing.expectEqual(Status.failed, inst.status);
+    try std.testing.expectEqual(Status.restarting, inst.status);
+}
+
+test "tick: startup timeout transitions to restarting" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-start-timeout");
+    defer p.deinit(allocator);
+
+    var mgr = Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    const spawned = try process.spawn(allocator, .{
+        .binary = "/bin/sleep",
+        .argv = &.{"60"},
+    });
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "slow-start" });
+    try mgr.instances.put(key, .{
+        .component = "comp",
+        .name = "slow-start",
+        .status = .starting,
+        .pid = spawned.pid,
+        .child = spawned.child,
+        .port = 6553,
+        .health_endpoint = "/health",
+        .binary_path = "/bin/sleep",
+        .launch_args = &.{"60"},
+        .starting_since = std_compat.time.milliTimestamp() - 60_000,
+        .start_timeout_ms = 100,
+        .max_restarts = 5,
+    });
+
+    mgr.tick();
+
+    const inst = mgr.instances.get("comp/slow-start").?;
+    try std.testing.expectEqual(Status.restarting, inst.status);
+    try std.testing.expectEqual(@as(?std_compat.process.Child.Id, null), inst.pid);
+}
+
+test "tick: health failure threshold transitions to restarting" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-health-restart");
+    defer p.deinit(allocator);
+
+    var mgr = Manager.init(allocator, p);
+    defer mgr.deinit();
+
+    const spawned = try process.spawn(allocator, .{
+        .binary = "/bin/sleep",
+        .argv = &.{"60"},
+    });
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "hung-http" });
+    try mgr.instances.put(key, .{
+        .component = "comp",
+        .name = "hung-http",
+        .status = .running,
+        .pid = spawned.pid,
+        .child = spawned.child,
+        .port = 6554,
+        .health_endpoint = "/health",
+        .binary_path = "/bin/sleep",
+        .launch_args = &.{"60"},
+        .started_at = std_compat.time.milliTimestamp() - 60_000,
+        .last_health_check = std_compat.time.milliTimestamp() - 60_000,
+        .health_consecutive_failures = 2,
+        .max_restarts = 5,
+    });
+
+    mgr.tick();
+
+    const inst = mgr.instances.get("comp/hung-http").?;
+    try std.testing.expectEqual(Status.restarting, inst.status);
+    try std.testing.expectEqual(@as(?std_compat.process.Child.Id, null), inst.pid);
+    try std.testing.expectEqual(@as(u32, 0), inst.health_consecutive_failures);
 }
 
 test "tick: restarting with binary_path spawns new process" {
@@ -926,8 +1250,8 @@ test "tick: restarting with binary_path spawns new process" {
         .restart_count = 0,
         .max_restarts = 5,
         .binary_path = "/bin/sleep",
-        .launch_args_str = "60",
-        .last_restart_attempt = std.time.milliTimestamp() - 10_000,
+        .launch_args = &.{"60"},
+        .last_restart_attempt = std_compat.time.milliTimestamp() - 10_000,
     });
 
     mgr.tick();
@@ -960,8 +1284,8 @@ test "tick: running instance with dead pid transitions to restarting" {
         .name = "crashed",
         .status = .running,
         .pid = 99999999, // non-existent
-        .started_at = std.time.milliTimestamp() - 60_000,
-        .last_health_check = std.time.milliTimestamp(),
+        .started_at = std_compat.time.milliTimestamp() - 60_000,
+        .last_health_check = std_compat.time.milliTimestamp(),
     });
 
     mgr.tick();

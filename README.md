@@ -132,7 +132,7 @@ End-to-end:
 
 ## Tech Stack
 
-- Zig 0.15.2
+- Zig 0.16.0
 - Svelte 5 + SvelteKit (static adapter)
 - JSON over HTTP/1.1
 - SSE for instance log streaming

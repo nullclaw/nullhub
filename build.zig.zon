@@ -2,7 +2,7 @@
     .name = .nullhub,
     .version = "2026.3.21",
     .fingerprint = 0x8708b11cb233b548,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",

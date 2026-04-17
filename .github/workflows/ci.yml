@@ -30,10 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -49,26 +49,24 @@ jobs:
           key: zig-${{ matrix.target }}-${{ hashFiles('src/**/*.zig', 'build.zig') }}
           restore-keys: zig-${{ matrix.target }}-
 
+      - name: Build embedded UI assets
+        run: |
+          npm --prefix ui ci --no-audit --no-fund
+          npm --prefix ui run build
+
       - name: Run unit tests
-        run: zig build test --summary all 2>&1 | tee test-output.txt
+        run: zig build test -Dbuild-ui=false --summary all 2>&1 | tee test-output.txt
 
       - name: Run E2E tests
         if: runner.os == 'Linux'
         run: bash tests/test_e2e.sh
 
       - name: Build ReleaseSmall
-        run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSmall
+        run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSmall -Dbuild-ui=false
 
       - name: Cross-compile linux-aarch64 (Termux/ARM)
         if: runner.os == 'Linux'
-        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
-
-      - name: Build UI
-        if: runner.os == 'Linux'
-        run: |
-          cd ui
-          npm ci
-          npm run build
+        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall -Dbuild-ui=false
 
       - name: Job summary
         if: always()

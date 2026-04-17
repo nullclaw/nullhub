@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const builtin = @import("builtin");
 
 /// Directory resolution for all paths under `~/.nullhub/`.
@@ -136,10 +137,10 @@ pub const Paths = struct {
 };
 
 fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+    return std_compat.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => {
             if (builtin.os.tag == .windows) {
-                return std.process.getEnvVarOwned(allocator, "USERPROFILE") catch error.HomeNotSet;
+                return std_compat.process.getEnvVarOwned(allocator, "USERPROFILE") catch error.HomeNotSet;
             }
             return error.HomeNotSet;
         },
@@ -148,7 +149,7 @@ fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn getNormalizedEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ?[]u8 {
-    const value = std.process.getEnvVarOwned(allocator, key) catch return null;
+    const value = std_compat.process.getEnvVarOwned(allocator, key) catch return null;
     errdefer allocator.free(value);
 
     const trimmed = std.mem.trim(u8, value, " \r\n\t");
@@ -191,8 +192,8 @@ pub fn uniqueTempPathAlloc(
 
     const leaf = try std.fmt.allocPrint(allocator, "{s}-{d}-{x}{s}", .{
         prefix,
-        @abs(std.time.milliTimestamp()),
-        std.crypto.random.int(u64),
+        @abs(std_compat.time.milliTimestamp()),
+        std_compat.crypto.random.int(u64),
         suffix,
     });
     defer allocator.free(leaf);
@@ -203,19 +204,16 @@ pub fn uniqueTempPathAlloc(
 /// Helper: create `{base}/{sub}` as an absolute directory tree.
 fn makeAbsSubpath(base: []const u8, sub: []const u8) !void {
     // Open the root directory (create it first if needed).
-    var root_dir = std.fs.openDirAbsolute(base, .{}) catch |err| switch (err) {
+    var root_dir = std_compat.fs.openDirAbsolute(base, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             // Root doesn't exist — create it then retry.
-            try std.fs.makeDirAbsolute(base);
+            try std_compat.fs.makeDirAbsolute(base);
             return makeAbsSubpath(base, sub);
         },
         else => return err,
     };
     defer root_dir.close();
-    root_dir.makePath(sub) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try root_dir.makePath(sub);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -277,7 +275,7 @@ test "ensureDirs creates all subdirectories" {
     const tmp_root = "/tmp/test-nullhub-ensure-dirs";
 
     // Clean up from any previous run.
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 
     var p = try Paths.init(allocator, tmp_root);
     defer p.deinit(allocator);
@@ -294,12 +292,12 @@ test "ensureDirs creates all subdirectories" {
         "/tmp/test-nullhub-ensure-dirs/cache/usage",
     };
     for (expected) |dir| {
-        var d = try std.fs.openDirAbsolute(dir, .{});
+        var d = try std_compat.fs.openDirAbsolute(dir, .{});
         d.close();
     }
 
     // Clean up.
-    std.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
 }
 
 test "init without custom root reads HOME" {

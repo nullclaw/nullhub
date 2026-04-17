@@ -1,9 +1,10 @@
 const std = @import("std");
+const std_compat = @import("compat");
 
 /// Best-effort discovery of a locally built component binary in nearby
 /// workspaces. Useful for development when GitHub releases are unavailable.
 pub fn find(allocator: std.mem.Allocator, component: []const u8) ?[]const u8 {
-    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch return null;
+    const cwd = std_compat.fs.cwd().realpathAlloc(allocator, ".") catch return null;
     defer allocator.free(cwd);
 
     const candidates = [_][]const []const u8{
@@ -14,7 +15,7 @@ pub fn find(allocator: std.mem.Allocator, component: []const u8) ?[]const u8 {
 
     for (candidates) |parts| {
         const path = std.fs.path.join(allocator, parts) catch continue;
-        if (std.fs.openFileAbsolute(path, .{})) |f| {
+        if (std_compat.fs.openFileAbsolute(path, .{})) |f| {
             f.close();
             return path;
         } else |_| {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 
 // ─── Schema types ────────────────────────────────────────────────────────────
 
@@ -116,7 +117,7 @@ pub fn parseManifest(allocator: std.mem.Allocator, json_bytes: []const u8) !std.
 }
 
 pub fn parseManifestFile(allocator: std.mem.Allocator, path: []const u8) !std.json.Parsed(Manifest) {
-    const file = try std.fs.openFileAbsolute(path, .{});
+    const file = try std_compat.fs.openFileAbsolute(path, .{});
     defer file.close();
     const bytes = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(bytes);

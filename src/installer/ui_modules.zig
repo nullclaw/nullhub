@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
 const prereqs = @import("prereqs.zig");
@@ -38,13 +39,13 @@ pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest
     prereqs.ensureTool(allocator, "tar") catch return error.ExtractionFailed;
 
     // Create dest_dir if it doesn't exist.
-    std.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.FileNotFound => {
             // Parent directory missing — create the full path.
             if (std.fs.path.dirnamePosix(dest_dir)) |parent| {
-                try std.fs.makeDirAbsolute(parent);
-                try std.fs.makeDirAbsolute(dest_dir);
+                try std_compat.fs.makeDirAbsolute(parent);
+                try std_compat.fs.makeDirAbsolute(dest_dir);
             } else {
                 return err;
             }
@@ -52,7 +53,7 @@ pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest
         else => return err,
     };
 
-    const result = std.process.Child.run(.{
+    const result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "tar", "-xzf", archive_path, "-C", dest_dir },
     }) catch return error.ExtractionFailed;
@@ -60,7 +61,7 @@ pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.ExtractionFailed;
         },
         else => return error.ExtractionFailed,
@@ -73,7 +74,7 @@ pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest
 ///
 /// Returns `true` if `dest_dir` exists and is accessible as a directory.
 pub fn isModuleInstalled(dest_dir: []const u8) bool {
-    var dir = std.fs.openDirAbsolute(dest_dir, .{}) catch return false;
+    var dir = std_compat.fs.openDirAbsolute(dest_dir, .{}) catch return false;
     dir.close();
     return true;
 }
@@ -97,12 +98,12 @@ pub fn downloadUiModule(
     defer allocator.free(url);
 
     // Ensure dest_dir exists before downloading into it.
-    std.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
+    std_compat.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.FileNotFound => {
             if (std.fs.path.dirnamePosix(dest_dir)) |parent| {
-                try std.fs.makeDirAbsolute(parent);
-                try std.fs.makeDirAbsolute(dest_dir);
+                try std_compat.fs.makeDirAbsolute(parent);
+                try std_compat.fs.makeDirAbsolute(dest_dir);
             } else {
                 return err;
             }
@@ -114,7 +115,7 @@ pub fn downloadUiModule(
     defer allocator.free(archive_path);
 
     try downloader.download(allocator, url, archive_path);
-    defer std.fs.deleteFileAbsolute(archive_path) catch {};
+    defer std_compat.fs.deleteFileAbsolute(archive_path) catch {};
 
     try extractTarGz(allocator, archive_path, dest_dir);
 }
@@ -145,19 +146,19 @@ test "extractTarGz creates dest_dir and extracts contents" {
     const allocator = std.testing.allocator;
 
     const tmp_dir = "/tmp/test-nullhub-ui-extract";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     // Create a test file to put in the tarball.
     const src_dir = try std.fmt.allocPrint(allocator, "{s}/src", .{tmp_dir});
     defer allocator.free(src_dir);
-    try std.fs.makeDirAbsolute(src_dir);
+    try std_compat.fs.makeDirAbsolute(src_dir);
 
     const test_file = try std.fmt.allocPrint(allocator, "{s}/index.html", .{src_dir});
     defer allocator.free(test_file);
     {
-        var file = try std.fs.createFileAbsolute(test_file, .{});
+        var file = try std_compat.fs.createFileAbsolute(test_file, .{});
         defer file.close();
         try file.writeAll("<html><body>Hello</body></html>");
     }
@@ -166,7 +167,7 @@ test "extractTarGz creates dest_dir and extracts contents" {
     const archive_path = try std.fmt.allocPrint(allocator, "{s}/test-bundle.tar.gz", .{tmp_dir});
     defer allocator.free(archive_path);
 
-    const tar_result = std.process.Child.run(.{
+    const tar_result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "tar", "-czf", archive_path, "-C", src_dir, "." },
     }) catch return;
@@ -183,7 +184,7 @@ test "extractTarGz creates dest_dir and extracts contents" {
     const extracted_file = try std.fmt.allocPrint(allocator, "{s}/index.html", .{dest_dir});
     defer allocator.free(extracted_file);
 
-    var file = try std.fs.openFileAbsolute(extracted_file, .{});
+    var file = try std_compat.fs.openFileAbsolute(extracted_file, .{});
     defer file.close();
     var buf: [256]u8 = undefined;
     const n = try file.readAll(&buf);
@@ -192,9 +193,9 @@ test "extractTarGz creates dest_dir and extracts contents" {
 
 test "isModuleInstalled returns true for existing directory" {
     const tmp_dir = "/tmp/test-nullhub-ui-installed";
-    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std.fs.makeDirAbsolute(tmp_dir);
-    defer std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
     try std.testing.expect(isModuleInstalled(tmp_dir));
 }
