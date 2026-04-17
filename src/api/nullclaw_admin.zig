@@ -212,6 +212,7 @@ const ChannelAccountSummary = struct {
 const ChannelAccountDetail = struct {
     account_id: []const u8,
     configured: bool = true,
+    status: []const u8 = "unknown",
 };
 
 const ChannelTypeDetail = struct {
@@ -274,6 +275,7 @@ fn buildChannelDetailJson(
             for (account_ids) |account_id| {
                 try accounts.append(allocator, .{
                     .account_id = account_id,
+                    .status = "unknown",
                 });
             }
 
@@ -521,6 +523,20 @@ test "buildChannelsJsonFromConfig returns detail for known type with empty accou
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"discord\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\":[]") != null);
+}
+
+test "buildChannelsJsonFromConfig includes unknown account status in detail fallback" {
+    const allocator = std.testing.allocator;
+    const config_bytes =
+        \\{"channels":{"telegram":{"accounts":{"main":{"bot_token":"secret"}}}}}
+    ;
+
+    const json = try buildChannelsJsonFromConfig(allocator, config_bytes, "telegram");
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"account_id\":\"main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"status\":\"unknown\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "secret") == null);
 }
 
 test "buildChannelsJsonFromConfig rejects unknown type" {
