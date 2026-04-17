@@ -34,6 +34,18 @@ pub fn runWithComponentHome(
     cwd: ?[]const u8,
     component_home: ?[]const u8,
 ) !RunResult {
+    return runWithComponentHomeLimited(allocator, component_name, binary_path, args, cwd, component_home, 50 * 1024);
+}
+
+pub fn runWithComponentHomeLimited(
+    allocator: std.mem.Allocator,
+    component_name: []const u8,
+    binary_path: []const u8,
+    args: []const []const u8,
+    cwd: ?[]const u8,
+    component_home: ?[]const u8,
+    max_output_bytes: usize,
+) !RunResult {
     // Build argv: binary + args
     var argv = std.array_list.Managed([]const u8).init(allocator);
     defer argv.deinit();
@@ -58,6 +70,7 @@ pub fn runWithComponentHome(
         .argv = argv.items,
         .cwd = cwd,
         .env_map = if (env_map_opt) |*env_map| env_map else null,
+        .max_output_bytes = max_output_bytes,
     }) catch return error.CommandFailed;
 
     return .{

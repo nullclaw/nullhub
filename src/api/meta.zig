@@ -174,6 +174,13 @@ const memory_limit_query = ParamSpec{
     .description = "Maximum number of memory results.",
 };
 
+const memory_offset_query = ParamSpec{
+    .name = "offset",
+    .location = "query",
+    .required = false,
+    .description = "Pagination offset for memory listing.",
+};
+
 const memory_include_internal_query = ParamSpec{
     .name = "include_internal",
     .location = "query",
@@ -248,7 +255,7 @@ const usage_query_params = [_]ParamSpec{window_query};
 const reveal_query_params = [_]ParamSpec{reveal_query};
 const logs_query_params = [_]ParamSpec{ lines_query, log_source_query };
 const history_query_params = [_]ParamSpec{ history_session_query, history_limit_query, history_offset_query };
-const memory_query_params = [_]ParamSpec{ memory_stats_query, memory_key_query, memory_query_query, memory_q_query, memory_category_query, memory_limit_query, memory_include_internal_query, memory_session_query };
+const memory_query_params = [_]ParamSpec{ memory_stats_query, memory_key_query, memory_query_query, memory_q_query, memory_category_query, memory_limit_query, memory_offset_query, memory_include_internal_query, memory_session_query };
 const skills_query_params = [_]ParamSpec{ skill_name_query, skill_catalog_query };
 const config_query_params = [_]ParamSpec{config_path_query};
 const named_query_params = [_]ParamSpec{named_query};

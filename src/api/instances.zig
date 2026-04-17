@@ -2372,7 +2372,7 @@ pub fn handleOnboarding(
 /// GET /api/instances/{component}/{name}/memory?key=...
 /// GET /api/instances/{component}/{name}/memory?q=...&limit=N
 /// GET /api/instances/{component}/{name}/memory?query=...&limit=N
-/// GET /api/instances/{component}/{name}/memory?category=...&limit=N&include_internal=1
+/// GET /api/instances/{component}/{name}/memory?category=...&limit=N&offset=N&include_internal=1
 pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
     const key = query_api.valueAlloc(allocator, target, "key") catch return helpers.serverError();
     defer if (key) |value| allocator.free(value);
@@ -2389,9 +2389,12 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
 
     const default_limit: usize = if (effective_query != null) 6 else 20;
     const limit = query_api.usizeValue(target, "limit", default_limit);
+    const offset = query_api.usizeValue(target, "offset", 0);
 
     var limit_buf: [32]u8 = undefined;
     const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
+    var offset_buf: [32]u8 = undefined;
+    const offset_str = std.fmt.bufPrint(&offset_buf, "{d}", .{offset}) catch return helpers.serverError();
 
     var args: std.ArrayListUnmanaged([]const u8) = .empty;
     defer args.deinit(allocator);
@@ -2452,6 +2455,10 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     }
     args.append(allocator, "--limit") catch return helpers.serverError();
     args.append(allocator, limit_str) catch return helpers.serverError();
+    if (offset > 0) {
+        args.append(allocator, "--offset") catch return helpers.serverError();
+        args.append(allocator, offset_str) catch return helpers.serverError();
+    }
     args.append(allocator, "--json") catch return helpers.serverError();
     return managed_cli.runJson(allocator, s, paths, component, name, args.items);
 }
@@ -5409,6 +5416,10 @@ test "handleMemory forwards q alias session_id and include_internal" {
         \\  printf '%s\n' '[]'
         \\  exit 0
         \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "list" ] && [ "$3" = "--category" ] && [ "$4" = "core" ] && [ "$5" = "--limit" ] && [ "$6" = "2" ] && [ "$7" = "--offset" ] && [ "$8" = "5" ] && [ "$9" = "--json" ]; then
+        \\  printf '%s\n' '[]'
+        \\  exit 0
+        \\fi
         \\echo "unexpected args: $*" >&2
         \\exit 1
         \\
@@ -5424,6 +5435,11 @@ test "handleMemory forwards q alias session_id and include_internal" {
     defer allocator.free(list_resp.body);
     try std.testing.expectEqualStrings("200 OK", list_resp.status);
     try std.testing.expectEqualStrings("[]", list_resp.body);
+
+    const paged_resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?category=core&limit=2&offset=5");
+    defer allocator.free(paged_resp.body);
+    try std.testing.expectEqualStrings("200 OK", paged_resp.status);
+    try std.testing.expectEqualStrings("[]", paged_resp.body);
 }
 
 test "handleMemory get returns 404 when CLI reports null" {

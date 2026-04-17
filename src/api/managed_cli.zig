@@ -6,6 +6,7 @@ const state_mod = @import("../core/state.zig");
 const helpers = @import("helpers.zig");
 
 pub const ApiResponse = helpers.ApiResponse;
+const admin_max_output_bytes = 2 * 1024 * 1024;
 
 pub const JsonOptions = struct {
     null_is_not_found: bool = false,
@@ -51,13 +52,14 @@ pub fn capture(
     const inst_dir = paths.instanceDir(allocator, component, name) catch return .{ .response = helpers.serverError() };
     defer allocator.free(inst_dir);
 
-    const result = component_cli.runWithComponentHome(
+    const result = component_cli.runWithComponentHomeLimited(
         allocator,
         component,
         bin_path,
         args,
         null,
         inst_dir,
+        admin_max_output_bytes,
     ) catch {
         return .{ .response = jsonError(
             allocator,
