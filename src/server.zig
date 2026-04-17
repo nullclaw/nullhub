@@ -1538,6 +1538,18 @@ test "route GET /api/meta/routes returns route catalog" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "/api/instances/{component}/{name}") != null);
 }
 
+test "route GET /api/spec returns route catalog alias" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api/spec", "");
+    defer std.testing.allocator.free(resp.body);
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"id\": \"meta.spec.get\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"path_template\": \"/api/spec\"") != null);
+}
+
 test "route unknown non-API path attempts static file serving" {
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

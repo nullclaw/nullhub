@@ -1354,6 +1354,34 @@ fn runInstanceCliJson(
     name: []const u8,
     args: []const []const u8,
 ) ApiResponse {
+    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args, .{});
+}
+
+const CliJsonOptions = struct {
+    null_is_not_found: bool = false,
+    not_found_error_code: ?[]const u8 = null,
+};
+
+fn cliJsonErrorMatches(payload: []const u8, expected_code: []const u8) bool {
+    const parsed = std.json.parseFromSlice(struct {
+        @"error": ?[]const u8 = null,
+    }, std.heap.page_allocator, payload, .{
+        .allocate = .alloc_if_needed,
+        .ignore_unknown_fields = true,
+    }) catch return false;
+    defer parsed.deinit();
+    return if (parsed.value.@"error") |value| std.mem.eql(u8, value, expected_code) else false;
+}
+
+fn runInstanceCliJsonAdvanced(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    args: []const []const u8,
+    options: CliJsonOptions,
+) ApiResponse {
     const captured = runInstanceCliCaptured(allocator, s, paths, component, name, args);
     const result = switch (captured) {
         .response => |resp| return resp,
@@ -1362,10 +1390,27 @@ fn runInstanceCliJson(
     defer allocator.free(result.stderr);
 
     if (result.success and isLikelyJsonPayload(result.stdout)) {
+        if (options.null_is_not_found and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \t\r\n"), "null")) {
+            allocator.free(result.stdout);
+            return notFound();
+        }
         return jsonOk(result.stdout);
     }
     if (!result.success and isLikelyJsonPayload(result.stdout)) {
-        return jsonOk(result.stdout);
+        if (options.not_found_error_code) |code| {
+            if (cliJsonErrorMatches(result.stdout, code)) {
+                return .{
+                    .status = "404 Not Found",
+                    .content_type = "application/json",
+                    .body = result.stdout,
+                };
+            }
+        }
+        return .{
+            .status = "400 Bad Request",
+            .content_type = "application/json",
+            .body = result.stdout,
+        };
     }
 
     defer allocator.free(result.stdout);
@@ -1423,6 +1468,7 @@ const ParsedCronPath = struct {
         collection,
         once,
         update_or_delete,
+        runs,
         run,
         pause,
         resume_job,
@@ -1490,6 +1536,8 @@ fn parseCronPath(target: []const u8) ?ParsedCronPath {
         .pause
     else if (std.mem.eql(u8, verb, "resume"))
         .resume_job
+    else if (std.mem.eql(u8, verb, "runs"))
+        .runs
     else
         return null;
 
@@ -1711,6 +1759,59 @@ fn handleCronList(allocator: std.mem.Allocator, s: *state_mod.State, paths: path
 
     const body = std.fmt.allocPrint(allocator, "{{\"jobs\":{s}}}", .{jobs_json}) catch return helpers.serverError();
     return jsonOk(body);
+}
+
+fn handleCronGet(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    job_id: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const cli_json = tryRunInstanceCliJsonSuccess(
+        allocator,
+        s,
+        paths,
+        component,
+        name,
+        &.{ "cron", "get", job_id, "--json" },
+    );
+    if (cli_json) |body| return jsonOk(body);
+
+    var store = loadCronStore(allocator, paths, component, name) catch return helpers.serverError();
+    defer store.deinit();
+    const job_json = (findCronJobJson(allocator, &store, job_id) catch return helpers.serverError()) orelse return notFound();
+    return jsonOk(job_json);
+}
+
+fn handleCronRuns(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    job_id: []const u8,
+    target: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return instanceCronUnsupported();
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const limit = query_api.usizeValue(target, "limit", 10);
+    var limit_buf: [32]u8 = undefined;
+    const limit_str = std.fmt.bufPrint(&limit_buf, "{d}", .{limit}) catch return helpers.serverError();
+
+    return runInstanceCliJson(
+        allocator,
+        s,
+        paths,
+        component,
+        name,
+        &.{ "cron", "runs", job_id, "--limit", limit_str, "--json" },
+    );
 }
 
 fn handleCronCreate(
@@ -2604,17 +2705,24 @@ pub fn handleOnboarding(
 
 /// GET /api/instances/{component}/{name}/memory?stats=1
 /// GET /api/instances/{component}/{name}/memory?key=...
+/// GET /api/instances/{component}/{name}/memory?q=...&limit=N
 /// GET /api/instances/{component}/{name}/memory?query=...&limit=N
-/// GET /api/instances/{component}/{name}/memory?category=...&limit=N
+/// GET /api/instances/{component}/{name}/memory?category=...&limit=N&include_internal=1
 pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
     const key = query_api.valueAlloc(allocator, target, "key") catch return helpers.serverError();
     defer if (key) |value| allocator.free(value);
+    const search_query_q = query_api.valueAlloc(allocator, target, "q") catch return helpers.serverError();
+    defer if (search_query_q) |value| allocator.free(value);
     const search_query = query_api.valueAlloc(allocator, target, "query") catch return helpers.serverError();
     defer if (search_query) |value| allocator.free(value);
     const category = query_api.valueAlloc(allocator, target, "category") catch return helpers.serverError();
     defer if (category) |value| allocator.free(value);
+    const session_id = query_api.valueAlloc(allocator, target, "session_id") catch return helpers.serverError();
+    defer if (session_id) |value| allocator.free(value);
+    const effective_query = if (search_query_q) |value| value else search_query;
+    const include_internal = query_api.boolValue(target, "include_internal");
 
-    const default_limit: usize = if (search_query != null) 6 else 20;
+    const default_limit: usize = if (effective_query != null) 6 else 20;
     const limit = query_api.usizeValue(target, "limit", default_limit);
 
     var limit_buf: [32]u8 = undefined;
@@ -2632,18 +2740,32 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
 
     if (key) |value| {
         if (value.len == 0) return badRequest("{\"error\":\"key is required\"}");
+        if (session_id) |session| {
+            if (session.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+        }
         args.append(allocator, "get") catch return helpers.serverError();
         args.append(allocator, value) catch return helpers.serverError();
+        if (session_id) |session| {
+            args.append(allocator, "--session") catch return helpers.serverError();
+            args.append(allocator, session) catch return helpers.serverError();
+        }
         args.append(allocator, "--json") catch return helpers.serverError();
-        return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+        return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+            .null_is_not_found = true,
+        });
     }
 
-    if (search_query) |value| {
+    if (effective_query) |value| {
         if (value.len == 0) return badRequest("{\"error\":\"query is required\"}");
         args.append(allocator, "search") catch return helpers.serverError();
         args.append(allocator, value) catch return helpers.serverError();
         args.append(allocator, "--limit") catch return helpers.serverError();
         args.append(allocator, limit_str) catch return helpers.serverError();
+        if (session_id) |session| {
+            if (session.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+            args.append(allocator, "--session") catch return helpers.serverError();
+            args.append(allocator, session) catch return helpers.serverError();
+        }
         args.append(allocator, "--json") catch return helpers.serverError();
         return runInstanceCliJson(allocator, s, paths, component, name, args.items);
     }
@@ -2655,10 +2777,339 @@ pub fn handleMemory(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
             args.append(allocator, value) catch return helpers.serverError();
         }
     }
+    if (session_id) |session| {
+        if (session.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+        args.append(allocator, "--session") catch return helpers.serverError();
+        args.append(allocator, session) catch return helpers.serverError();
+    }
+    if (include_internal) {
+        args.append(allocator, "--include-internal") catch return helpers.serverError();
+    }
     args.append(allocator, "--limit") catch return helpers.serverError();
     args.append(allocator, limit_str) catch return helpers.serverError();
     args.append(allocator, "--json") catch return helpers.serverError();
     return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+}
+
+fn handleMemoryWrite(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    method: []const u8,
+    target: []const u8,
+    body: []const u8,
+) ApiResponse {
+    _ = s.getInstance(component, name) orelse return notFound();
+
+    const parsed = std.json.parseFromSlice(struct {
+        key: ?[]const u8 = null,
+        content: ?[]const u8 = null,
+        category: ?[]const u8 = null,
+        session_id: ?[]const u8 = null,
+    }, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const key_query = query_api.valueAlloc(allocator, target, "key") catch return helpers.serverError();
+    defer if (key_query) |value| allocator.free(value);
+    const session_query = query_api.valueAlloc(allocator, target, "session_id") catch return helpers.serverError();
+    defer if (session_query) |value| allocator.free(value);
+
+    const key = if (key_query) |value| if (value.len > 0) value else null else if (parsed.value.key) |value| if (value.len > 0) value else null else null;
+    if (key == null) return badRequest("{\"error\":\"key is required\"}");
+
+    const session_id = if (session_query) |value| if (value.len > 0) value else null else if (parsed.value.session_id) |value| if (value.len > 0) value else null else null;
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "memory") catch return helpers.serverError();
+
+    if (std.mem.eql(u8, method, "POST")) {
+        if (parsed.value.content == null) return badRequest("{\"error\":\"content is required\"}");
+        args.append(allocator, "store") catch return helpers.serverError();
+        args.append(allocator, key.?) catch return helpers.serverError();
+        args.append(allocator, parsed.value.content.?) catch return helpers.serverError();
+    } else if (std.mem.eql(u8, method, "PATCH")) {
+        if (parsed.value.content == null) return badRequest("{\"error\":\"content is required\"}");
+        args.append(allocator, "update") catch return helpers.serverError();
+        args.append(allocator, key.?) catch return helpers.serverError();
+        args.append(allocator, parsed.value.content.?) catch return helpers.serverError();
+    } else if (std.mem.eql(u8, method, "DELETE")) {
+        args.append(allocator, "delete") catch return helpers.serverError();
+        args.append(allocator, key.?) catch return helpers.serverError();
+    } else {
+        return methodNotAllowed();
+    }
+
+    if (parsed.value.category) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--category") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    if (session_id) |value| {
+        args.append(allocator, "--session") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+    }
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_code = if (std.mem.eql(u8, method, "PATCH")) "memory_not_found" else null,
+    });
+}
+
+fn handleMemoryMaintenance(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    subcommand: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"memory maintenance is only supported for nullclaw instances\"}");
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "memory", subcommand, "--json" });
+}
+
+fn handleDoctor(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"doctor is only supported for nullclaw instances\"}");
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "doctor", "--json" });
+}
+
+fn handleCapabilities(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"capabilities are only supported for nullclaw instances\"}");
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "capabilities", "--json" });
+}
+
+fn handleMcp(allocator: std.mem.Allocator, s: *state_mod.State, paths: paths_mod.Paths, component: []const u8, name: []const u8, target: []const u8) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"mcp inspection is only supported for nullclaw instances\"}");
+    const server_name = query_api.valueAlloc(allocator, target, "name") catch return helpers.serverError();
+    defer if (server_name) |value| allocator.free(value);
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "mcp") catch return helpers.serverError();
+    if (server_name) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"name is required\"}");
+        args.append(allocator, "info") catch return helpers.serverError();
+        args.append(allocator, value) catch return helpers.serverError();
+    } else {
+        args.append(allocator, "list") catch return helpers.serverError();
+    }
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_code = if (server_name != null) "mcp_not_found" else null,
+    });
+}
+
+fn handleModelsAction(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    method: []const u8,
+    target: []const u8,
+) ApiResponse {
+    if (!std.mem.eql(u8, method, "GET") and !std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+    if (!nullclaw_admin.supports(component)) return instanceModelsUnsupported();
+
+    if (std.mem.eql(u8, method, "POST")) {
+        return .{
+            .status = "501 Not Implemented",
+            .content_type = "application/json",
+            .body = "{\"error\":\"models refresh remains CLI-only for managed instances\"}",
+        };
+    }
+
+    const model_name = query_api.valueAlloc(allocator, target, "name") catch return helpers.serverError();
+    defer if (model_name) |value| allocator.free(value);
+    if (model_name) |value| {
+        if (value.len == 0) return badRequest("{\"error\":\"name is required\"}");
+        return runInstanceCliJson(allocator, s, paths, component, name, &.{ "models", "info", value, "--json" });
+    }
+    return handleModels(allocator, s, paths, component, name);
+}
+
+fn handleAgentInvoke(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"agent route is only supported for nullclaw instances\"}");
+
+    const parsed = std.json.parseFromSlice(struct {
+        message: ?[]const u8 = null,
+        session_key: ?[]const u8 = null,
+        provider: ?[]const u8 = null,
+        model: ?[]const u8 = null,
+        temperature: ?[]const u8 = null,
+        agent: ?[]const u8 = null,
+    }, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const message = parsed.value.message orelse return badRequest("{\"error\":\"message is required\"}");
+    if (message.len == 0) return badRequest("{\"error\":\"message is required\"}");
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "agent") catch return helpers.serverError();
+    args.append(allocator, "invoke") catch return helpers.serverError();
+    args.append(allocator, "--message") catch return helpers.serverError();
+    args.append(allocator, message) catch return helpers.serverError();
+    if (parsed.value.session_key) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--session") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    if (parsed.value.provider) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--provider") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    if (parsed.value.model) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--model") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    if (parsed.value.temperature) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--temperature") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    if (parsed.value.agent) |value| {
+        if (value.len > 0) {
+            args.append(allocator, "--agent") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        }
+    }
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+}
+
+fn handleAgentSessions(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    method: []const u8,
+    target: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"agent sessions are only supported for nullclaw instances\"}");
+    const session_id = query_api.valueAlloc(allocator, target, "session_id") catch return helpers.serverError();
+    defer if (session_id) |value| allocator.free(value);
+
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(allocator);
+    args.append(allocator, "agent") catch return helpers.serverError();
+    args.append(allocator, "sessions") catch return helpers.serverError();
+
+    if (std.mem.eql(u8, method, "GET")) {
+        if (session_id) |value| {
+            if (value.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+            args.append(allocator, "get") catch return helpers.serverError();
+            args.append(allocator, value) catch return helpers.serverError();
+        } else {
+            args.append(allocator, "list") catch return helpers.serverError();
+        }
+    } else if (std.mem.eql(u8, method, "DELETE")) {
+        if (session_id == null or session_id.?.len == 0) return badRequest("{\"error\":\"session_id is required\"}");
+        args.append(allocator, "terminate") catch return helpers.serverError();
+        args.append(allocator, session_id.?) catch return helpers.serverError();
+    } else {
+        return methodNotAllowed();
+    }
+
+    args.append(allocator, "--json") catch return helpers.serverError();
+    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .not_found_error_code = if (session_id != null) "session_not_found" else null,
+    });
+}
+
+fn handleConfigSet(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
+
+    const parsed = std.json.parseFromSlice(struct {
+        path: ?[]const u8 = null,
+        value: ?std.json.Value = null,
+    }, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const path_value = parsed.value.path orelse return badRequest("{\"error\":\"path is required\"}");
+    const raw_value = parsed.value.value orelse return badRequest("{\"error\":\"value is required\"}");
+    const raw_json = std.json.Stringify.valueAlloc(allocator, raw_value, .{}) catch return helpers.serverError();
+    defer allocator.free(raw_json);
+
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "set", path_value, raw_json, "--json" });
+}
+
+fn handleConfigUnset(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config mutation is only supported for nullclaw instances\"}");
+
+    const parsed = std.json.parseFromSlice(struct {
+        path: ?[]const u8 = null,
+    }, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return badRequest("{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    const path_value = parsed.value.path orelse return badRequest("{\"error\":\"path is required\"}");
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "unset", path_value, "--json" });
+}
+
+fn handleConfigReload(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config reload is only supported for nullclaw instances\"}");
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "reload", "--json" });
+}
+
+fn handleConfigValidate(
+    allocator: std.mem.Allocator,
+    s: *state_mod.State,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    body: []const u8,
+) ApiResponse {
+    if (!nullclaw_admin.supports(component)) return badRequest("{\"error\":\"config validate is only supported for nullclaw instances\"}");
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    if (trimmed.len == 0) {
+        return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "validate", "--json" });
+    }
+    return runInstanceCliJson(allocator, s, paths, component, name, &.{ "config", "validate", body, "--json" });
 }
 
 fn instanceWorkspaceDir(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8) ![]u8 {
@@ -2960,7 +3411,9 @@ pub fn handleSkills(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
         args.append(allocator, "list") catch return helpers.serverError();
     }
     args.append(allocator, "--json") catch return helpers.serverError();
-    return runInstanceCliJson(allocator, s, paths, component, name, args.items);
+    return runInstanceCliJsonAdvanced(allocator, s, paths, component, name, args.items, .{
+        .null_is_not_found = skill_name != null,
+    });
 }
 
 /// DELETE /api/instances/{component}/{name}
@@ -3541,6 +3994,12 @@ pub fn dispatch(
                 handleCronUpdate(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?, body)
             else if (std.mem.eql(u8, method, "DELETE"))
                 handleCronDelete(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?)
+            else if (std.mem.eql(u8, method, "GET"))
+                handleCronGet(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?)
+            else
+                methodNotAllowed(),
+            .runs => if (std.mem.eql(u8, method, "GET"))
+                handleCronRuns(allocator, s, paths, parsed_cron.component, parsed_cron.name, parsed_cron.job_id.?, target)
             else
                 methodNotAllowed(),
             .run => if (std.mem.eql(u8, method, "POST"))
@@ -3600,9 +4059,20 @@ pub fn dispatch(
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
             return handleInstanceStatus(allocator, s, manager, paths, parsed.component, parsed.name);
         }
-        if (std.mem.eql(u8, action, "models")) {
+        if (std.mem.eql(u8, action, "doctor")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
-            return handleModels(allocator, s, paths, parsed.component, parsed.name);
+            return handleDoctor(allocator, s, paths, parsed.component, parsed.name);
+        }
+        if (std.mem.eql(u8, action, "capabilities")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleCapabilities(allocator, s, paths, parsed.component, parsed.name);
+        }
+        if (std.mem.eql(u8, action, "mcp")) {
+            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
+            return handleMcp(allocator, s, paths, parsed.component, parsed.name, target);
+        }
+        if (std.mem.eql(u8, action, "models")) {
+            return handleModelsAction(allocator, s, paths, parsed.component, parsed.name, method, target);
         }
         if (std.mem.eql(u8, action, "provider-health")) {
             if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
@@ -3621,14 +4091,56 @@ pub fn dispatch(
             return handleOnboarding(allocator, s, paths, parsed.component, parsed.name);
         }
         if (std.mem.eql(u8, action, "memory")) {
-            if (!std.mem.eql(u8, method, "GET")) return methodNotAllowed();
-            return handleMemory(allocator, s, paths, parsed.component, parsed.name, target);
+            if (std.mem.eql(u8, method, "GET")) return handleMemory(allocator, s, paths, parsed.component, parsed.name, target);
+            if (std.mem.eql(u8, method, "POST") or std.mem.eql(u8, method, "PATCH") or std.mem.eql(u8, method, "DELETE")) {
+                return handleMemoryWrite(allocator, s, paths, parsed.component, parsed.name, method, target, body);
+            }
+            return methodNotAllowed();
+        }
+        if (std.mem.eql(u8, action, "memory-reindex")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleMemoryMaintenance(allocator, s, paths, parsed.component, parsed.name, "reindex");
+        }
+        if (std.mem.eql(u8, action, "memory-drain-outbox")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleMemoryMaintenance(allocator, s, paths, parsed.component, parsed.name, "drain-outbox");
+        }
+        if (std.mem.eql(u8, action, "agent")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleAgentInvoke(allocator, s, paths, parsed.component, parsed.name, body);
+        }
+        if (std.mem.eql(u8, action, "agent-stream")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return .{
+                .status = "501 Not Implemented",
+                .content_type = "application/json",
+                .body = "{\"error\":\"streaming agent sessions are not supported; use POST /agent\"}",
+            };
+        }
+        if (std.mem.eql(u8, action, "agent-sessions")) {
+            return handleAgentSessions(allocator, s, paths, parsed.component, parsed.name, method, target);
         }
         if (std.mem.eql(u8, action, "skills")) {
             if (std.mem.eql(u8, method, "GET")) return handleSkills(allocator, s, paths, parsed.component, parsed.name, target);
             if (std.mem.eql(u8, method, "POST")) return handleSkillsInstall(allocator, s, paths, parsed.component, parsed.name, body);
             if (std.mem.eql(u8, method, "DELETE")) return handleSkillsRemove(allocator, s, paths, parsed.component, parsed.name, target);
             return methodNotAllowed();
+        }
+        if (std.mem.eql(u8, action, "config-set")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleConfigSet(allocator, s, paths, parsed.component, parsed.name, body);
+        }
+        if (std.mem.eql(u8, action, "config-unset")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleConfigUnset(allocator, s, paths, parsed.component, parsed.name, body);
+        }
+        if (std.mem.eql(u8, action, "config-reload")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleConfigReload(allocator, s, paths, parsed.component, parsed.name);
+        }
+        if (std.mem.eql(u8, action, "config-validate")) {
+            if (!std.mem.eql(u8, method, "POST")) return methodNotAllowed();
+            return handleConfigValidate(allocator, s, paths, parsed.component, parsed.name, body);
         }
         if (std.mem.eql(u8, action, "integration")) {
             if (std.mem.eql(u8, method, "GET")) return handleIntegrationGet(allocator, s, manager, mutex, paths, parsed.component, parsed.name);
@@ -5180,6 +5692,147 @@ test "handleMemory wraps legacy CLI failures as JSON errors" {
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "Unknown memory command") != null);
 }
 
+test "handleMemory forwards q alias session_id and include_internal" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-q" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "memory" ] && [ "$2" = "search" ] && [ "$3" = "hello" ] && [ "$4" = "--limit" ] && [ "$5" = "3" ] && [ "$6" = "--session" ] && [ "$7" = "s-1" ] && [ "$8" = "--json" ]; then
+        \\  printf '%s\n' '[]'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "list" ] && [ "$3" = "--category" ] && [ "$4" = "core" ] && [ "$5" = "--session" ] && [ "$6" = "s-2" ] && [ "$7" = "--include-internal" ] && [ "$8" = "--limit" ] && [ "$9" = "2" ] && [ "${10}" = "--json" ]; then
+        \\  printf '%s\n' '[]'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args: $*" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-q", script);
+
+    const search_resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?q=hello&limit=3&session_id=s-1");
+    defer allocator.free(search_resp.body);
+    try std.testing.expectEqualStrings("200 OK", search_resp.status);
+    try std.testing.expectEqualStrings("[]", search_resp.body);
+
+    const list_resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?category=core&limit=2&include_internal=1&session_id=s-2");
+    defer allocator.free(list_resp.body);
+    try std.testing.expectEqualStrings("200 OK", list_resp.status);
+    try std.testing.expectEqualStrings("[]", list_resp.body);
+}
+
+test "handleMemory get returns 404 when CLI reports null" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-null" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "memory" ] && [ "$2" = "get" ] && [ "$3" = "missing" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' 'null'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-null", script);
+
+    const resp = handleMemory(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/memory?key=missing");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+}
+
+test "handleMemoryWrite maps missing update to 404" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-patch" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "memory" ] && [ "$2" = "update" ]; then
+        \\  printf '%s\n' '{"error":"memory_not_found","message":"Memory entry not found"}'
+        \\  exit 1
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-patch", script);
+
+    const resp = handleMemoryWrite(
+        allocator,
+        &s,
+        mctx.paths,
+        "nullclaw",
+        "my-agent",
+        "PATCH",
+        "/api/instances/nullclaw/my-agent/memory",
+        "{\"key\":\"missing\",\"content\":\"updated\"}",
+    );
+    defer allocator.free(resp.body);
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"error\":\"memory_not_found\"") != null);
+}
+
+test "dispatch routes memory maintenance actions" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-maint" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "memory" ] && [ "$2" = "reindex" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '{"reindexed":2,"skipped":false}'
+        \\  exit 0
+        \\fi
+        \\if [ "$1" = "memory" ] && [ "$2" = "drain-outbox" ] && [ "$3" = "--json" ]; then
+        \\  printf '%s\n' '{"drained":4}'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-maint", script);
+
+    const reindex_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/memory-reindex", "").?;
+    defer allocator.free(reindex_resp.body);
+    try std.testing.expectEqualStrings("200 OK", reindex_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, reindex_resp.body, "\"reindexed\":2") != null);
+
+    const drain_resp = dispatch(allocator, &s, &mctx.manager, &mctx.mutex, mctx.paths, "POST", "/api/instances/nullclaw/my-agent/memory-drain-outbox", "").?;
+    defer allocator.free(drain_resp.body);
+    try std.testing.expectEqualStrings("200 OK", drain_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, drain_resp.body, "\"drained\":4") != null);
+}
+
 test "dispatch routes GET skills action" {
     const allocator = std.testing.allocator;
     var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
@@ -5207,6 +5860,33 @@ test "dispatch routes GET skills action" {
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"name\":\"checks\"") != null);
+}
+
+test "handleSkills returns 404 when CLI detail returns null" {
+    const allocator = std.testing.allocator;
+    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
+
+    try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-skill-null" });
+    const script =
+        \\#!/bin/sh
+        \\if [ "$1" = "skills" ] && [ "$2" = "info" ] && [ "$3" = "missing" ] && [ "$4" = "--json" ]; then
+        \\  printf '%s\n' 'null'
+        \\  exit 0
+        \\fi
+        \\echo "unexpected args" >&2
+        \\exit 1
+        \\
+    ;
+    try writeTestBinary(allocator, mctx.paths, "nullclaw", "1.0.2-skill-null", script);
+
+    const resp = handleSkills(allocator, &s, mctx.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/skills?name=missing");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
 }
 
 test "dispatch routes GET channels action" {

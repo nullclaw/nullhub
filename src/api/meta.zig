@@ -153,6 +153,13 @@ const memory_query_query = ParamSpec{
     .description = "Keyword search query for instance memory.",
 };
 
+const memory_q_query = ParamSpec{
+    .name = "q",
+    .location = "query",
+    .required = false,
+    .description = "Short alias for the instance memory search query.",
+};
+
 const memory_category_query = ParamSpec{
     .name = "category",
     .location = "query",
@@ -165,6 +172,34 @@ const memory_limit_query = ParamSpec{
     .location = "query",
     .required = false,
     .description = "Maximum number of memory results.",
+};
+
+const memory_include_internal_query = ParamSpec{
+    .name = "include_internal",
+    .location = "query",
+    .required = false,
+    .description = "When true, include internal/bootstrap memory keys in list responses.",
+};
+
+const memory_session_query = ParamSpec{
+    .name = "session_id",
+    .location = "query",
+    .required = false,
+    .description = "Optional nullclaw session identifier to scope memory reads or writes.",
+};
+
+const named_query = ParamSpec{
+    .name = "name",
+    .location = "query",
+    .required = false,
+    .description = "Optional name selector for detail routes implemented as query parameters.",
+};
+
+const session_query = ParamSpec{
+    .name = "session_id",
+    .location = "query",
+    .required = false,
+    .description = "Session identifier for detail or termination routes implemented as query parameters.",
 };
 
 const skill_name_query = ParamSpec{
@@ -213,9 +248,12 @@ const usage_query_params = [_]ParamSpec{window_query};
 const reveal_query_params = [_]ParamSpec{reveal_query};
 const logs_query_params = [_]ParamSpec{ lines_query, log_source_query };
 const history_query_params = [_]ParamSpec{ history_session_query, history_limit_query, history_offset_query };
-const memory_query_params = [_]ParamSpec{ memory_stats_query, memory_key_query, memory_query_query, memory_category_query, memory_limit_query };
+const memory_query_params = [_]ParamSpec{ memory_stats_query, memory_key_query, memory_query_query, memory_q_query, memory_category_query, memory_limit_query, memory_include_internal_query, memory_session_query };
 const skills_query_params = [_]ParamSpec{ skill_name_query, skill_catalog_query };
 const config_query_params = [_]ParamSpec{config_path_query};
+const named_query_params = [_]ParamSpec{named_query};
+const session_query_params = [_]ParamSpec{session_query};
+const limit_query_params = [_]ParamSpec{history_limit_query};
 const cron_job_id_params = [_]ParamSpec{ component_param, instance_name_param, cron_job_id_param };
 
 const route_examples_status = [_]ExampleSpec{
@@ -333,6 +371,15 @@ const routes = [_]RouteSpec{
         .auth_mode = "optional_bearer",
         .response = "JSON document with route ids, methods, paths, parameters, and examples.",
         .examples = route_examples_meta[0..],
+    },
+    .{
+        .id = "meta.spec.get",
+        .method = "GET",
+        .path_template = "/api/spec",
+        .category = "meta",
+        .summary = "Alias for the machine-readable nullhub route catalog.",
+        .auth_mode = "optional_bearer",
+        .response = "JSON document with route ids, methods, paths, parameters, and examples.",
     },
     .{
         .id = "components.list",
@@ -762,6 +809,58 @@ const routes = [_]RouteSpec{
         .response = "Instance-scoped default provider/model and provider has_key summary.",
     },
     .{
+        .id = "instances.models.info",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/models?name=...",
+        .category = "instances",
+        .summary = "Inspect a single model/provider entry for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = named_query_params[0..],
+        .response = "Model detail payload with provider and canonical name.",
+    },
+    .{
+        .id = "instances.models.refresh",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/models",
+        .category = "instances",
+        .summary = "Request model catalog refresh for a managed instance. Currently returns 501 because refresh remains CLI-only.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Not implemented payload.",
+    },
+    .{
+        .id = "instances.doctor",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/doctor",
+        .category = "instances",
+        .summary = "Read deep runtime health diagnostics for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Per-component diagnostic JSON with uptime, restart counts, and last error metadata.",
+    },
+    .{
+        .id = "instances.capabilities",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/capabilities",
+        .category = "instances",
+        .summary = "Read the runtime capabilities manifest for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Runtime manifest with tools, channels, memory engines, and active backend.",
+    },
+    .{
+        .id = "instances.mcp",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/mcp",
+        .category = "instances",
+        .summary = "List configured MCP servers or inspect one server detail via the name query parameter.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = named_query_params[0..],
+        .response = "MCP server array or one server detail with redacted env keys and optional tool_count.",
+    },
+    .{
         .id = "instances.usage",
         .method = "GET",
         .path_template = "/api/instances/{component}/{name}/usage",
@@ -784,6 +883,50 @@ const routes = [_]RouteSpec{
         .response = "Paginated history payload.",
     },
     .{
+        .id = "instances.agent.invoke",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/agent",
+        .category = "instances",
+        .summary = "Invoke a stateful managed nullclaw agent turn.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with message plus optional session_key, provider, model, temperature, or agent.",
+        .response = "Agent turn response payload.",
+    },
+    .{
+        .id = "instances.agent.stream",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/agent-stream",
+        .category = "instances",
+        .summary = "Streaming agent turns are not supported through nullhub; this route returns 501.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Not implemented payload.",
+    },
+    .{
+        .id = "instances.agent.sessions",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/agent-sessions",
+        .category = "instances",
+        .summary = "List agent sessions or fetch one session detail via the session_id query parameter.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = session_query_params[0..],
+        .response = "Agent session list or single session metadata payload.",
+    },
+    .{
+        .id = "instances.agent.sessions.delete",
+        .method = "DELETE",
+        .path_template = "/api/instances/{component}/{name}/agent-sessions",
+        .category = "instances",
+        .summary = "Terminate a managed nullclaw agent session selected by session_id.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = session_query_params[0..],
+        .destructive = true,
+        .response = "Session termination payload.",
+    },
+    .{
         .id = "instances.onboarding",
         .method = "GET",
         .path_template = "/api/instances/{component}/{name}/onboarding",
@@ -803,6 +946,38 @@ const routes = [_]RouteSpec{
         .path_params = common_instance_params[0..],
         .query_params = memory_query_params[0..],
         .response = "Memory stats or memory entry list depending on query mode.",
+    },
+    .{
+        .id = "instances.memory.write",
+        .method = "POST|PATCH|DELETE",
+        .path_template = "/api/instances/{component}/{name}/memory",
+        .category = "instances",
+        .summary = "Create, update, or delete a managed nullclaw memory entry.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .query_params = memory_query_params[0..],
+        .body = "POST/PATCH body with key, content, optional category, and optional session_id. DELETE may use query parameters.",
+        .response = "Memory mutation payload.",
+    },
+    .{
+        .id = "instances.memory.reindex",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/memory-reindex",
+        .category = "instances",
+        .summary = "Trigger vector reindex for a managed nullclaw memory backend.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Memory reindex result payload.",
+    },
+    .{
+        .id = "instances.memory.drain_outbox",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/memory-drain-outbox",
+        .category = "instances",
+        .summary = "Drain the durable memory outbox queue for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Outbox drain result payload.",
     },
     .{
         .id = "instances.channels",
@@ -950,6 +1125,49 @@ const routes = [_]RouteSpec{
         .response = "Save status payload.",
     },
     .{
+        .id = "instances.config.set",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/config-set",
+        .category = "instances",
+        .summary = "Set a single dotted config value through the managed nullclaw CLI boundary.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with path and value.",
+        .response = "Config mutation payload.",
+    },
+    .{
+        .id = "instances.config.unset",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/config-unset",
+        .category = "instances",
+        .summary = "Unset or reset a single dotted config value through the managed nullclaw CLI boundary.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "JSON body with path.",
+        .response = "Config mutation payload.",
+    },
+    .{
+        .id = "instances.config.reload",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/config-reload",
+        .category = "instances",
+        .summary = "Validate and re-read config.json from disk for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .response = "Reload status payload.",
+    },
+    .{
+        .id = "instances.config.validate",
+        .method = "POST",
+        .path_template = "/api/instances/{component}/{name}/config-validate",
+        .category = "instances",
+        .summary = "Validate current or proposed config JSON for a managed nullclaw instance.",
+        .auth_mode = "optional_bearer",
+        .path_params = common_instance_params[0..],
+        .body = "Optional raw JSON config proposal.",
+        .response = "Validation result payload.",
+    },
+    .{
         .id = "instances.cron.list",
         .method = "GET",
         .path_template = "/api/instances/{component}/{name}/cron",
@@ -980,6 +1198,27 @@ const routes = [_]RouteSpec{
         .path_params = common_instance_params[0..],
         .body = "JSON body with delay plus either command or prompt; optional model/session_target for agent jobs.",
         .response = "Created cron job payload.",
+    },
+    .{
+        .id = "instances.cron.get",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}",
+        .category = "instances",
+        .summary = "Fetch one managed cron job by identifier.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .response = "Cron job payload or 404.",
+    },
+    .{
+        .id = "instances.cron.runs",
+        .method = "GET",
+        .path_template = "/api/instances/{component}/{name}/cron/{id}/runs",
+        .category = "instances",
+        .summary = "Read paginated run history for one managed cron job.",
+        .auth_mode = "optional_bearer",
+        .path_params = cron_job_id_params[0..],
+        .query_params = limit_query_params[0..],
+        .response = "Cron run history payload.",
     },
     .{
         .id = "instances.cron.run",
@@ -1094,7 +1333,10 @@ pub fn allRoutes() []const RouteSpec {
 }
 
 pub fn isRoutesPath(target: []const u8) bool {
-    return std.mem.eql(u8, target, "/api/meta/routes") or std.mem.startsWith(u8, target, "/api/meta/routes?");
+    return std.mem.eql(u8, target, "/api/meta/routes") or
+        std.mem.startsWith(u8, target, "/api/meta/routes?") or
+        std.mem.eql(u8, target, "/api/spec") or
+        std.mem.startsWith(u8, target, "/api/spec?");
 }
 
 pub fn jsonAlloc(allocator: std.mem.Allocator) ![]u8 {
@@ -1159,10 +1401,13 @@ test "textAlloc renders grouped route list" {
 
     try std.testing.expect(std.mem.indexOf(u8, text, "[meta]") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "GET /api/meta/routes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "GET /api/spec") != null);
 }
 
 test "isRoutesPath matches meta routes endpoint" {
     try std.testing.expect(isRoutesPath("/api/meta/routes"));
     try std.testing.expect(isRoutesPath("/api/meta/routes?format=json"));
+    try std.testing.expect(isRoutesPath("/api/spec"));
+    try std.testing.expect(isRoutesPath("/api/spec?format=json"));
     try std.testing.expect(!isRoutesPath("/api/status"));
 }
