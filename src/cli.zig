@@ -10,6 +10,10 @@ pub const ServeOptions = struct {
     port: u16 = access.default_port,
     host: []const u8 = access.default_bind_host,
     no_open: bool = false,
+    /// Additional origins accepted by the API CORS/origin guard, in addition
+    /// to the bind host and built-in local aliases. Each entry is an origin
+    /// of the form `scheme://host[:port]` with no trailing slash.
+    extra_allowed_origins: []const []const u8 = &.{},
 };
 
 pub const InstanceRef = struct {
@@ -133,12 +137,14 @@ pub fn parseInstanceRef(arg: []const u8) ?InstanceRef {
 }
 
 /// Parse CLI arguments into a Command. Expects `args` to have already
-/// consumed the program name (argv[0]).
-pub fn parse(args: *ArgIterator) Command {
+/// consumed the program name (argv[0]). The allocator is used only for
+/// subcommands that collect repeatable flags (e.g. `serve --allowed-origin`);
+/// any allocations live for the remainder of the process.
+pub fn parse(allocator: std.mem.Allocator, args: *ArgIterator) Command {
     const cmd = args.next() orelse return .{ .serve = .{} };
 
     if (std.mem.eql(u8, cmd, "serve")) {
-        return parseServe(args);
+        return parseServe(allocator, args);
     }
     if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
         return .version;
@@ -209,8 +215,9 @@ pub fn parse(args: *ArgIterator) Command {
 
 // ─── Sub-parsers ─────────────────────────────────────────────────────────────
 
-fn parseServe(args: *ArgIterator) Command {
+fn parseServe(allocator: std.mem.Allocator, args: *ArgIterator) Command {
     var opts = ServeOptions{};
+    var origins: std.ArrayListUnmanaged([]const u8) = .empty;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--port")) {
             if (args.next()) |val| {
@@ -222,9 +229,81 @@ fn parseServe(args: *ArgIterator) Command {
             }
         } else if (std.mem.eql(u8, arg, "--no-open")) {
             opts.no_open = true;
+        } else if (std.mem.eql(u8, arg, "--allowed-origin")) {
+            if (args.next()) |val| {
+                if (!appendOriginIfValid(allocator, &origins, val)) {
+                    std.debug.print(
+                        "nullhub: ignoring invalid --allowed-origin value: {s}\n",
+                        .{val},
+                    );
+                }
+            }
         }
     }
+    if (origins.items.len > 0) {
+        opts.extra_allowed_origins = origins.toOwnedSlice(allocator) catch blk: {
+            for (origins.items) |origin| allocator.free(origin);
+            origins.deinit(allocator);
+            std.debug.print("nullhub: dropped --allowed-origin list (out of memory)\n", .{});
+            break :blk &.{};
+        };
+    }
     return .{ .serve = opts };
+}
+
+/// Append a validated, allocator-owned copy of `raw` to `list`. Returns
+/// `true` if the value was accepted, `false` if it was rejected (invalid
+/// input or OOM). The caller is responsible for freeing each appended
+/// string (callers that feed origin lists typically reuse a single
+/// allocator and free the entire list at shutdown).
+fn appendOriginIfValid(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged([]const u8),
+    raw: []const u8,
+) bool {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (!isValidOrigin(trimmed)) return false;
+    const owned = allocator.dupe(u8, trimmed) catch return false;
+    list.append(allocator, owned) catch {
+        allocator.free(owned);
+        return false;
+    };
+    return true;
+}
+
+fn isValidOrigin(origin: []const u8) bool {
+    const parsed = std.Uri.parse(origin) catch return false;
+    if (!std.ascii.eqlIgnoreCase(parsed.scheme, "http") and !std.ascii.eqlIgnoreCase(parsed.scheme, "https")) {
+        return false;
+    }
+
+    const host = parsed.host orelse return false;
+    if (host.isEmpty()) return false;
+    if (parsed.user != null or parsed.password != null) return false;
+    if (!parsed.path.isEmpty()) return false;
+    if (parsed.query != null or parsed.fragment != null) return false;
+
+    return true;
+}
+
+/// Parse a comma-separated list of origins (e.g. from an environment
+/// variable) and append any valid entries to `list`. Each accepted entry is
+/// copied into `allocator` so the caller may free `csv` afterwards. Returns
+/// the number of non-empty entries that were rejected as invalid so the
+/// caller can surface a diagnostic.
+pub fn appendOriginsFromCsv(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged([]const u8),
+    csv: []const u8,
+) usize {
+    var skipped: usize = 0;
+    var it = std.mem.splitScalar(u8, csv, ',');
+    while (it.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        if (!appendOriginIfValid(allocator, list, trimmed)) skipped += 1;
+    }
+    return skipped;
 }
 
 fn parseStatus(args: *ArgIterator) Command {
@@ -414,7 +493,14 @@ pub fn printUsage() void {
         \\Usage: nullhub [command]
         \\
         \\Commands:
-        \\  serve                     Start web UI server (default)
+        \\  serve [--host H] [--port N] [--no-open]
+        \\        [--allowed-origin ORIGIN ...]
+        \\                            Start web UI server (default). Repeat
+        \\                            --allowed-origin to authorize extra
+        \\                            origins (e.g. a Tailscale domain) to
+        \\                            call the API. Origins may also come
+        \\                            from NULLHUB_ALLOWED_ORIGINS as a
+        \\                            comma-separated list.
         \\  install <component>       Install a component
         \\  start <component/name>    Start an instance
         \\  stop <component/name>     Stop an instance
@@ -498,6 +584,51 @@ test "ServeOptions defaults" {
     try std.testing.expectEqual(access.default_port, opts.port);
     try std.testing.expectEqualStrings(access.default_bind_host, opts.host);
     try std.testing.expect(!opts.no_open);
+    try std.testing.expectEqual(@as(usize, 0), opts.extra_allowed_origins.len);
+}
+
+test "isValidOrigin accepts scheme+host, rejects malformed" {
+    try std.testing.expect(isValidOrigin("http://nullhub.local:19800"));
+    try std.testing.expect(isValidOrigin("https://hub.tailnet.ts.net"));
+    try std.testing.expect(isValidOrigin("http://[::1]:19800"));
+    try std.testing.expect(!isValidOrigin(""));
+    try std.testing.expect(!isValidOrigin("hub.tailnet.ts.net"));
+    try std.testing.expect(!isValidOrigin("ftp://example.com"));
+    try std.testing.expect(!isValidOrigin("https://"));
+    try std.testing.expect(!isValidOrigin("https://hub.example/"));
+    try std.testing.expect(!isValidOrigin("https://hub.example/path"));
+    try std.testing.expect(!isValidOrigin("https://hub.example?x=1"));
+    try std.testing.expect(!isValidOrigin("https://user@hub.example"));
+}
+
+test "appendOriginsFromCsv skips blanks and invalid entries" {
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer {
+        for (list.items) |item| std.testing.allocator.free(item);
+        list.deinit(std.testing.allocator);
+    }
+    const skipped = appendOriginsFromCsv(
+        std.testing.allocator,
+        &list,
+        "https://hub.tailnet.ts.net, ,not-a-url,http://10.0.0.1:19800",
+    );
+    try std.testing.expectEqual(@as(usize, 1), skipped);
+    try std.testing.expectEqual(@as(usize, 2), list.items.len);
+    try std.testing.expectEqualStrings("https://hub.tailnet.ts.net", list.items[0]);
+    try std.testing.expectEqualStrings("http://10.0.0.1:19800", list.items[1]);
+}
+
+test "appendOriginsFromCsv copies entries so the source can be freed" {
+    const csv = try std.testing.allocator.dupe(u8, "https://hub.tailnet.ts.net");
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer {
+        for (list.items) |item| std.testing.allocator.free(item);
+        list.deinit(std.testing.allocator);
+    }
+    _ = appendOriginsFromCsv(std.testing.allocator, &list, csv);
+    std.testing.allocator.free(csv);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expectEqualStrings("https://hub.tailnet.ts.net", list.items[0]);
 }
 
 test "InstallOptions defaults" {

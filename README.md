@@ -62,7 +62,13 @@ via available system package managers (`apt`, `dnf`, `yum`, `pacman`, `zypper`,
 
 ```
 nullhub                          # Start server + open browser
-nullhub serve [--port N]         # Start server without browser
+nullhub serve [--host H] [--port N]
+               [--allowed-origin ORIGIN] ...
+                                 # Start server. Repeat --allowed-origin to
+                                 # authorize extra CORS origins (e.g. a
+                                 # Tailscale domain). Origins may also come
+                                 # from NULLHUB_ALLOWED_ORIGINS as a
+                                 # comma-separated list.
 nullhub version | -v | --version # Print version
 
 nullhub install <component>      # Terminal wizard
