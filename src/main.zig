@@ -190,7 +190,7 @@ fn resolveAllowedOrigins(
     allocator: std.mem.Allocator,
     from_cli: []const []const u8,
 ) ![]const []const u8 {
-    var list: std.ArrayListUnmanaged([]const u8) = .{};
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer {
         for (list.items) |item| allocator.free(item);
         list.deinit(allocator);

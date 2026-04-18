@@ -217,7 +217,7 @@ pub fn parse(allocator: std.mem.Allocator, args: *ArgIterator) Command {
 
 fn parseServe(allocator: std.mem.Allocator, args: *ArgIterator) Command {
     var opts = ServeOptions{};
-    var origins: std.ArrayListUnmanaged([]const u8) = .{};
+    var origins: std.ArrayListUnmanaged([]const u8) = .empty;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--port")) {
             if (args.next()) |val| {
@@ -242,6 +242,8 @@ fn parseServe(allocator: std.mem.Allocator, args: *ArgIterator) Command {
     }
     if (origins.items.len > 0) {
         opts.extra_allowed_origins = origins.toOwnedSlice(allocator) catch blk: {
+            for (origins.items) |origin| allocator.free(origin);
+            origins.deinit(allocator);
             std.debug.print("nullhub: dropped --allowed-origin list (out of memory)\n", .{});
             break :blk &.{};
         };
@@ -270,15 +272,18 @@ fn appendOriginIfValid(
 }
 
 fn isValidOrigin(origin: []const u8) bool {
-    if (origin.len == 0) return false;
-    if (origin[origin.len - 1] == '/') return false;
-    if (std.mem.startsWith(u8, origin, "http://")) {
-        return origin.len > "http://".len;
+    const parsed = std.Uri.parse(origin) catch return false;
+    if (!std.ascii.eqlIgnoreCase(parsed.scheme, "http") and !std.ascii.eqlIgnoreCase(parsed.scheme, "https")) {
+        return false;
     }
-    if (std.mem.startsWith(u8, origin, "https://")) {
-        return origin.len > "https://".len;
-    }
-    return false;
+
+    const host = parsed.host orelse return false;
+    if (host.isEmpty()) return false;
+    if (parsed.user != null or parsed.password != null) return false;
+    if (!parsed.path.isEmpty()) return false;
+    if (parsed.query != null or parsed.fragment != null) return false;
+
+    return true;
 }
 
 /// Parse a comma-separated list of origins (e.g. from an environment
@@ -585,15 +590,19 @@ test "ServeOptions defaults" {
 test "isValidOrigin accepts scheme+host, rejects malformed" {
     try std.testing.expect(isValidOrigin("http://nullhub.local:19800"));
     try std.testing.expect(isValidOrigin("https://hub.tailnet.ts.net"));
+    try std.testing.expect(isValidOrigin("http://[::1]:19800"));
     try std.testing.expect(!isValidOrigin(""));
     try std.testing.expect(!isValidOrigin("hub.tailnet.ts.net"));
     try std.testing.expect(!isValidOrigin("ftp://example.com"));
     try std.testing.expect(!isValidOrigin("https://"));
     try std.testing.expect(!isValidOrigin("https://hub.example/"));
+    try std.testing.expect(!isValidOrigin("https://hub.example/path"));
+    try std.testing.expect(!isValidOrigin("https://hub.example?x=1"));
+    try std.testing.expect(!isValidOrigin("https://user@hub.example"));
 }
 
 test "appendOriginsFromCsv skips blanks and invalid entries" {
-    var list: std.ArrayListUnmanaged([]const u8) = .{};
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (list.items) |item| std.testing.allocator.free(item);
         list.deinit(std.testing.allocator);
@@ -611,7 +620,7 @@ test "appendOriginsFromCsv skips blanks and invalid entries" {
 
 test "appendOriginsFromCsv copies entries so the source can be freed" {
     const csv = try std.testing.allocator.dupe(u8, "https://hub.tailnet.ts.net");
-    var list: std.ArrayListUnmanaged([]const u8) = .{};
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (list.items) |item| std.testing.allocator.free(item);
         list.deinit(std.testing.allocator);
