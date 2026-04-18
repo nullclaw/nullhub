@@ -1680,6 +1680,17 @@ test "isAllowedCorsOrigin ignores empty extra entries" {
     try std.testing.expect(isAllowedCorsOrigin("https://hub.tailnet.ts.net", "127.0.0.1", 19800, extras));
 }
 
+test "isAllowedCorsOrigin allows extras alongside local aliases when bound to 0.0.0.0" {
+    // Binding to 0.0.0.0 is treated as a local bind (see access.isLocalBindHost),
+    // so local aliases are still accepted — matching how buildAccessUrls
+    // advertises the service locally — and extras layer on top for
+    // external hostnames (Tailscale, custom DNS, etc.).
+    const extras = &[_][]const u8{"https://hub.tailnet.ts.net"};
+    try std.testing.expect(isAllowedCorsOrigin("http://127.0.0.1:19800", "0.0.0.0", 19800, extras));
+    try std.testing.expect(isAllowedCorsOrigin("https://hub.tailnet.ts.net", "0.0.0.0", 19800, extras));
+    try std.testing.expect(!isAllowedCorsOrigin("http://evil.example:19800", "0.0.0.0", 19800, extras));
+}
+
 test "requestOriginAllowed rejects foreign API origins" {
     const evil_raw =
         "GET /api/status HTTP/1.1\r\n" ++

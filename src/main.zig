@@ -42,7 +42,10 @@ pub fn main(init: std.process.Init) !void {
             var mutex: std_compat.sync.Mutex = .{};
 
             const allowed_origins = try resolveAllowedOrigins(allocator, opts.extra_allowed_origins);
-            defer allocator.free(allowed_origins);
+            // `resolveAllowedOrigins` takes ownership of each item in
+            // `opts.extra_allowed_origins`; only the outer slice remains.
+            if (opts.extra_allowed_origins.len > 0) allocator.free(opts.extra_allowed_origins);
+            defer freeResolvedOrigins(allocator, allowed_origins);
 
             var srv = try server.Server.init(allocator, opts.host, opts.port, &mgr, &mutex);
             defer srv.deinit();
@@ -179,29 +182,42 @@ fn printStdout(text: []const u8) !void {
 const allowed_origins_env_var = "NULLHUB_ALLOWED_ORIGINS";
 
 /// Combine CLI-provided `--allowed-origin` entries with any origins supplied
-/// via the `NULLHUB_ALLOWED_ORIGINS` environment variable. The returned
-/// slice is caller-owned and must be freed, but the origin strings it
-/// points at live for the duration of the process and must not be freed
-/// individually.
+/// via the `NULLHUB_ALLOWED_ORIGINS` environment variable. `from_cli`
+/// entries are already allocator-owned and ownership transfers into the
+/// returned slice; entries parsed from the env var are copied in. The
+/// caller must release the result with `freeResolvedOrigins`.
 fn resolveAllowedOrigins(
     allocator: std.mem.Allocator,
     from_cli: []const []const u8,
 ) ![]const []const u8 {
     var list: std.ArrayListUnmanaged([]const u8) = .{};
-    errdefer list.deinit(allocator);
+    errdefer {
+        for (list.items) |item| allocator.free(item);
+        list.deinit(allocator);
+    }
 
     for (from_cli) |origin| try list.append(allocator, origin);
 
     if (std_compat.process.getEnvVarOwned(allocator, allowed_origins_env_var)) |csv| {
-        // Origin strings reference slices of `csv`, so leak it for the
-        // process lifetime — it's freed implicitly at exit.
-        cli.appendOriginsFromCsv(allocator, &list, csv);
+        defer allocator.free(csv);
+        const skipped = cli.appendOriginsFromCsv(allocator, &list, csv);
+        if (skipped > 0) {
+            std.debug.print(
+                "nullhub: {d} invalid entr{s} in {s} ignored\n",
+                .{ skipped, if (skipped == 1) "y" else "ies", allowed_origins_env_var },
+            );
+        }
     } else |err| switch (err) {
         error.EnvironmentVariableNotFound => {},
         else => return err,
     }
 
     return list.toOwnedSlice(allocator);
+}
+
+fn freeResolvedOrigins(allocator: std.mem.Allocator, origins: []const []const u8) void {
+    for (origins) |origin| allocator.free(origin);
+    allocator.free(origins);
 }
 
 fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) void {

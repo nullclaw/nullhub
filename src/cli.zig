@@ -231,24 +231,42 @@ fn parseServe(allocator: std.mem.Allocator, args: *ArgIterator) Command {
             opts.no_open = true;
         } else if (std.mem.eql(u8, arg, "--allowed-origin")) {
             if (args.next()) |val| {
-                appendOriginIfValid(allocator, &origins, val);
+                if (!appendOriginIfValid(allocator, &origins, val)) {
+                    std.debug.print(
+                        "nullhub: ignoring invalid --allowed-origin value: {s}\n",
+                        .{val},
+                    );
+                }
             }
         }
     }
     if (origins.items.len > 0) {
-        opts.extra_allowed_origins = origins.toOwnedSlice(allocator) catch &.{};
+        opts.extra_allowed_origins = origins.toOwnedSlice(allocator) catch blk: {
+            std.debug.print("nullhub: dropped --allowed-origin list (out of memory)\n", .{});
+            break :blk &.{};
+        };
     }
     return .{ .serve = opts };
 }
 
+/// Append a validated, allocator-owned copy of `raw` to `list`. Returns
+/// `true` if the value was accepted, `false` if it was rejected (invalid
+/// input or OOM). The caller is responsible for freeing each appended
+/// string (callers that feed origin lists typically reuse a single
+/// allocator and free the entire list at shutdown).
 fn appendOriginIfValid(
     allocator: std.mem.Allocator,
     list: *std.ArrayListUnmanaged([]const u8),
     raw: []const u8,
-) void {
+) bool {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (!isValidOrigin(trimmed)) return;
-    list.append(allocator, trimmed) catch return;
+    if (!isValidOrigin(trimmed)) return false;
+    const owned = allocator.dupe(u8, trimmed) catch return false;
+    list.append(allocator, owned) catch {
+        allocator.free(owned);
+        return false;
+    };
+    return true;
 }
 
 fn isValidOrigin(origin: []const u8) bool {
@@ -264,17 +282,23 @@ fn isValidOrigin(origin: []const u8) bool {
 }
 
 /// Parse a comma-separated list of origins (e.g. from an environment
-/// variable) and append any valid entries to `list`. Invalid entries are
-/// silently skipped so a bad value cannot prevent nullhub from starting.
+/// variable) and append any valid entries to `list`. Each accepted entry is
+/// copied into `allocator` so the caller may free `csv` afterwards. Returns
+/// the number of non-empty entries that were rejected as invalid so the
+/// caller can surface a diagnostic.
 pub fn appendOriginsFromCsv(
     allocator: std.mem.Allocator,
     list: *std.ArrayListUnmanaged([]const u8),
     csv: []const u8,
-) void {
+) usize {
+    var skipped: usize = 0;
     var it = std.mem.splitScalar(u8, csv, ',');
     while (it.next()) |part| {
-        appendOriginIfValid(allocator, list, part);
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        if (!appendOriginIfValid(allocator, list, trimmed)) skipped += 1;
     }
+    return skipped;
 }
 
 fn parseStatus(args: *ArgIterator) Command {
@@ -570,11 +594,32 @@ test "isValidOrigin accepts scheme+host, rejects malformed" {
 
 test "appendOriginsFromCsv skips blanks and invalid entries" {
     var list: std.ArrayListUnmanaged([]const u8) = .{};
-    defer list.deinit(std.testing.allocator);
-    appendOriginsFromCsv(std.testing.allocator, &list, "https://hub.tailnet.ts.net, ,not-a-url,http://10.0.0.1:19800");
+    defer {
+        for (list.items) |item| std.testing.allocator.free(item);
+        list.deinit(std.testing.allocator);
+    }
+    const skipped = appendOriginsFromCsv(
+        std.testing.allocator,
+        &list,
+        "https://hub.tailnet.ts.net, ,not-a-url,http://10.0.0.1:19800",
+    );
+    try std.testing.expectEqual(@as(usize, 1), skipped);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
     try std.testing.expectEqualStrings("https://hub.tailnet.ts.net", list.items[0]);
     try std.testing.expectEqualStrings("http://10.0.0.1:19800", list.items[1]);
+}
+
+test "appendOriginsFromCsv copies entries so the source can be freed" {
+    const csv = try std.testing.allocator.dupe(u8, "https://hub.tailnet.ts.net");
+    var list: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (list.items) |item| std.testing.allocator.free(item);
+        list.deinit(std.testing.allocator);
+    }
+    _ = appendOriginsFromCsv(std.testing.allocator, &list, csv);
+    std.testing.allocator.free(csv);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expectEqualStrings("https://hub.tailnet.ts.net", list.items[0]);
 }
 
 test "InstallOptions defaults" {
