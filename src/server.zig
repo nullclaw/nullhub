@@ -40,6 +40,7 @@ pub const Server = struct {
     access_options: access.Options = .{},
     access_publisher: ?*const mdns_mod.Publisher = null,
     auth_token: ?[]const u8 = null,
+    extra_allowed_origins: []const []const u8 = &.{},
     state: *state_mod.State,
     paths: paths_mod.Paths,
     manager: *manager_mod.Manager,
@@ -98,6 +99,14 @@ pub const Server = struct {
 
     pub fn setAccessPublisher(self: *Server, publisher: *const mdns_mod.Publisher) void {
         self.access_publisher = publisher;
+    }
+
+    /// Configure additional origins (e.g. a Tailscale domain) allowed to call
+    /// the nullhub API in addition to the bind host and the built-in local
+    /// aliases. Each origin must be a scheme+host(+port) string with no
+    /// trailing slash, e.g. `https://hub.tailnet.ts.net`.
+    pub fn setExtraAllowedOrigins(self: *Server, origins: []const []const u8) void {
+        self.extra_allowed_origins = origins;
     }
 
     fn currentAccessOptions(self: *const Server) access.Options {
@@ -425,20 +434,22 @@ pub const Server = struct {
         const method = parts.next() orelse return;
         const target = parts.next() orelse return;
 
+        const extra_origins = self.extra_allowed_origins;
+
         if (std.mem.eql(u8, method, "GET") or std.mem.eql(u8, method, "HEAD")) {
             if (try self.redirectLocationForAliasHost(alloc, raw, target)) |location| {
                 defer alloc.free(location);
-                try sendRedirect(conn.stream, location, raw, self.host, self.port);
+                try sendRedirect(conn.stream, location, raw, self.host, self.port, extra_origins);
                 return;
             }
         }
 
-        if (!requestOriginAllowed(raw, target, self.host, self.port)) {
+        if (!requestOriginAllowed(raw, target, self.host, self.port, extra_origins)) {
             try sendResponse(conn.stream, .{
                 .status = "403 Forbidden",
                 .content_type = "application/json",
                 .body = "{\"error\":\"forbidden origin\"}",
-            }, raw, self.host, self.port);
+            }, raw, self.host, self.port, extra_origins);
             return;
         }
 
@@ -451,7 +462,7 @@ pub const Server = struct {
                 .status = "204 No Content",
                 .content_type = "text/plain",
                 .body = "",
-            }, raw, self.host, self.port);
+            }, raw, self.host, self.port, extra_origins);
             return;
         }
 
@@ -462,7 +473,7 @@ pub const Server = struct {
                     .status = "401 Unauthorized",
                     .content_type = "application/json",
                     .body = "{\"error\":\"unauthorized\"}",
-                }, raw, self.host, self.port);
+                }, raw, self.host, self.port, extra_origins);
                 return;
             }
         }
@@ -475,7 +486,7 @@ pub const Server = struct {
             defer self.mutex.unlock();
             break :blk self.route(alloc, method, target, body);
         };
-        try sendResponse(conn.stream, response, raw, self.host, self.port);
+        try sendResponse(conn.stream, response, raw, self.host, self.port, extra_origins);
     }
 
     fn redirectLocationForAliasHost(self: *const Server, allocator: std.mem.Allocator, raw: []const u8, target: []const u8) !?[]u8 {
@@ -1150,14 +1161,14 @@ fn readBody(raw: []const u8, n: usize, stream: std_compat.net.Stream, alloc: std
     return extractBody(raw);
 }
 
-fn sendResponse(stream: std_compat.net.Stream, response: Response, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
+fn sendResponse(stream: std_compat.net.Stream, response: Response, raw_request: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) !void {
     var buf: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.print("HTTP/1.1 {s}\r\n", .{response.status});
     try writer.print("Content-Type: {s}\r\n", .{response.content_type});
     try writer.print("Content-Length: {d}\r\n", .{response.body.len});
-    try appendCorsHeaders(&writer, raw_request, bind_host, port);
+    try appendCorsHeaders(&writer, raw_request, bind_host, port, extra_origins);
     try writer.writeAll("Connection: close\r\n\r\n");
 
     try net_compat.streamWriteAll(stream, writer.buffered());
@@ -1166,14 +1177,14 @@ fn sendResponse(stream: std_compat.net.Stream, response: Response, raw_request: 
     }
 }
 
-fn sendRedirect(stream: std_compat.net.Stream, location: []const u8, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
+fn sendRedirect(stream: std_compat.net.Stream, location: []const u8, raw_request: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) !void {
     var buf: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.writeAll("HTTP/1.1 308 Permanent Redirect\r\n");
     try writer.print("Location: {s}\r\n", .{location});
     try writer.writeAll("Content-Length: 0\r\n");
-    try appendCorsHeaders(&writer, raw_request, bind_host, port);
+    try appendCorsHeaders(&writer, raw_request, bind_host, port, extra_origins);
     try writer.writeAll("Connection: close\r\n\r\n");
 
     try net_compat.streamWriteAll(stream, writer.buffered());
@@ -1206,38 +1217,44 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn requestOriginAllowed(raw_request: []const u8, target: []const u8, bind_host: []const u8, port: u16) bool {
+fn requestOriginAllowed(raw_request: []const u8, target: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) bool {
     if (!std.mem.startsWith(u8, target, "/api/")) return true;
     const origin = extractHeader(raw_request, "Origin") orelse return true;
-    return isAllowedCorsOrigin(origin, bind_host, port);
+    return isAllowedCorsOrigin(origin, bind_host, port, extra_origins);
 }
 
-fn appendCorsHeaders(writer: anytype, raw_request: []const u8, bind_host: []const u8, port: u16) !void {
-    const origin = allowedCorsOrigin(raw_request, bind_host, port) orelse return;
+fn appendCorsHeaders(writer: anytype, raw_request: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) !void {
+    const origin = allowedCorsOrigin(raw_request, bind_host, port, extra_origins) orelse return;
     try writer.print("Access-Control-Allow-Origin: {s}\r\n", .{origin});
     try writer.writeAll("Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS\r\n");
     try writer.writeAll("Access-Control-Allow-Headers: Content-Type, Authorization\r\n");
     try writer.writeAll("Vary: Origin\r\n");
 }
 
-fn allowedCorsOrigin(raw_request: []const u8, bind_host: []const u8, port: u16) ?[]const u8 {
+fn allowedCorsOrigin(raw_request: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) ?[]const u8 {
     const origin = extractHeader(raw_request, "Origin") orelse return null;
-    if (!isAllowedCorsOrigin(origin, bind_host, port)) return null;
+    if (!isAllowedCorsOrigin(origin, bind_host, port, extra_origins)) return null;
     return origin;
 }
 
-fn isAllowedCorsOrigin(origin: []const u8, bind_host: []const u8, port: u16) bool {
+fn isAllowedCorsOrigin(origin: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) bool {
     if (originMatchesHost(origin, bind_host, port)) return true;
-    if (!access.isLocalBindHost(bind_host)) return false;
 
-    inline for (&[_][]const u8{
-        "127.0.0.1",
-        "localhost",
-        "[::1]",
-        access.canonical_local_host,
-        access.public_alias_host,
-    }) |host| {
-        if (originMatchesHost(origin, host, port)) return true;
+    if (access.isLocalBindHost(bind_host)) {
+        inline for (&[_][]const u8{
+            "127.0.0.1",
+            "localhost",
+            "[::1]",
+            access.canonical_local_host,
+            access.public_alias_host,
+        }) |host| {
+            if (originMatchesHost(origin, host, port)) return true;
+        }
+    }
+
+    for (extra_origins) |allowed| {
+        if (allowed.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(origin, allowed)) return true;
     }
     return false;
 }
@@ -1636,14 +1653,31 @@ test "hostMatchesAliasHost matches bare host and host with port" {
 }
 
 test "isAllowedCorsOrigin allows local aliases for loopback binds" {
-    try std.testing.expect(isAllowedCorsOrigin("http://127.0.0.1:19800", "127.0.0.1", 19800));
-    try std.testing.expect(isAllowedCorsOrigin("http://nullhub.localhost:19800", "127.0.0.1", 19800));
-    try std.testing.expect(isAllowedCorsOrigin("http://nullhub.local:19800", "127.0.0.1", 19800));
+    try std.testing.expect(isAllowedCorsOrigin("http://127.0.0.1:19800", "127.0.0.1", 19800, &.{}));
+    try std.testing.expect(isAllowedCorsOrigin("http://nullhub.localhost:19800", "127.0.0.1", 19800, &.{}));
+    try std.testing.expect(isAllowedCorsOrigin("http://nullhub.local:19800", "127.0.0.1", 19800, &.{}));
 }
 
 test "isAllowedCorsOrigin rejects foreign or mismatched origins" {
-    try std.testing.expect(!isAllowedCorsOrigin("http://evil.example:19800", "127.0.0.1", 19800));
-    try std.testing.expect(!isAllowedCorsOrigin("http://127.0.0.1:19801", "127.0.0.1", 19800));
+    try std.testing.expect(!isAllowedCorsOrigin("http://evil.example:19800", "127.0.0.1", 19800, &.{}));
+    try std.testing.expect(!isAllowedCorsOrigin("http://127.0.0.1:19801", "127.0.0.1", 19800, &.{}));
+}
+
+test "isAllowedCorsOrigin admits configured extra origins for any bind" {
+    const extras = &[_][]const u8{
+        "https://hub.tailnet.ts.net",
+        "http://100.64.0.5:19800",
+    };
+    try std.testing.expect(isAllowedCorsOrigin("https://hub.tailnet.ts.net", "127.0.0.1", 19800, extras));
+    try std.testing.expect(isAllowedCorsOrigin("HTTPS://HUB.TAILNET.TS.NET", "127.0.0.1", 19800, extras));
+    try std.testing.expect(isAllowedCorsOrigin("http://100.64.0.5:19800", "192.168.1.50", 22000, extras));
+    try std.testing.expect(!isAllowedCorsOrigin("http://evil.example", "192.168.1.50", 22000, extras));
+}
+
+test "isAllowedCorsOrigin ignores empty extra entries" {
+    const extras = &[_][]const u8{ "", "https://hub.tailnet.ts.net" };
+    try std.testing.expect(!isAllowedCorsOrigin("", "127.0.0.1", 19800, extras));
+    try std.testing.expect(isAllowedCorsOrigin("https://hub.tailnet.ts.net", "127.0.0.1", 19800, extras));
 }
 
 test "requestOriginAllowed rejects foreign API origins" {
@@ -1651,13 +1685,28 @@ test "requestOriginAllowed rejects foreign API origins" {
         "GET /api/status HTTP/1.1\r\n" ++
         "Host: 127.0.0.1:19800\r\n" ++
         "Origin: http://evil.example:19800\r\n\r\n";
-    try std.testing.expect(!requestOriginAllowed(evil_raw, "/api/status", "127.0.0.1", 19800));
+    try std.testing.expect(!requestOriginAllowed(evil_raw, "/api/status", "127.0.0.1", 19800, &.{}));
 
     const local_raw =
         "GET /api/status HTTP/1.1\r\n" ++
         "Host: 127.0.0.1:19800\r\n" ++
         "Origin: http://nullhub.localhost:19800\r\n\r\n";
-    try std.testing.expect(requestOriginAllowed(local_raw, "/api/status", "127.0.0.1", 19800));
+    try std.testing.expect(requestOriginAllowed(local_raw, "/api/status", "127.0.0.1", 19800, &.{}));
+}
+
+test "requestOriginAllowed honors configured extra origins" {
+    const extras = &[_][]const u8{"https://hub.tailnet.ts.net"};
+    const tailscale_raw =
+        "GET /api/status HTTP/1.1\r\n" ++
+        "Host: hub.tailnet.ts.net\r\n" ++
+        "Origin: https://hub.tailnet.ts.net\r\n\r\n";
+    try std.testing.expect(requestOriginAllowed(tailscale_raw, "/api/status", "127.0.0.1", 19800, extras));
+
+    const foreign_raw =
+        "GET /api/status HTTP/1.1\r\n" ++
+        "Host: hub.tailnet.ts.net\r\n" ++
+        "Origin: https://evil.example\r\n\r\n";
+    try std.testing.expect(!requestOriginAllowed(foreign_raw, "/api/status", "127.0.0.1", 19800, extras));
 }
 
 test "routeWithoutServerMutex keeps orchestration proxy requests off global lock" {

@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
     defer args.deinit();
     _ = args.next(); // skip program name
 
-    const command = cli.parse(&args);
+    const command = cli.parse(allocator, &args);
 
     switch (command) {
         .version => try printVersionLine(),
@@ -41,6 +41,9 @@ pub fn main(init: std.process.Init) !void {
             defer mgr.deinit();
             var mutex: std_compat.sync.Mutex = .{};
 
+            const allowed_origins = try resolveAllowedOrigins(allocator, opts.extra_allowed_origins);
+            defer allocator.free(allowed_origins);
+
             var srv = try server.Server.init(allocator, opts.host, opts.port, &mgr, &mutex);
             defer srv.deinit();
             var mdns = try mdns_mod.Publisher.init(allocator, paths, opts.host, opts.port);
@@ -48,6 +51,7 @@ pub fn main(init: std.process.Init) !void {
             mdns.start(opts.port);
             srv.setAccessOptions(mdns.accessOptions());
             srv.setAccessPublisher(&mdns);
+            srv.setExtraAllowedOrigins(allowed_origins);
 
             const sup_thread = try std.Thread.spawn(.{}, supervisorLoop, .{ &mgr, &mutex });
             sup_thread.detach();
@@ -170,6 +174,34 @@ fn printStdout(text: []const u8) !void {
     const w = &bw.interface;
     try w.writeAll(text);
     try w.flush();
+}
+
+const allowed_origins_env_var = "NULLHUB_ALLOWED_ORIGINS";
+
+/// Combine CLI-provided `--allowed-origin` entries with any origins supplied
+/// via the `NULLHUB_ALLOWED_ORIGINS` environment variable. The returned
+/// slice is caller-owned and must be freed, but the origin strings it
+/// points at live for the duration of the process and must not be freed
+/// individually.
+fn resolveAllowedOrigins(
+    allocator: std.mem.Allocator,
+    from_cli: []const []const u8,
+) ![]const []const u8 {
+    var list: std.ArrayListUnmanaged([]const u8) = .{};
+    errdefer list.deinit(allocator);
+
+    for (from_cli) |origin| try list.append(allocator, origin);
+
+    if (std_compat.process.getEnvVarOwned(allocator, allowed_origins_env_var)) |csv| {
+        // Origin strings reference slices of `csv`, so leak it for the
+        // process lifetime — it's freed implicitly at exit.
+        cli.appendOriginsFromCsv(allocator, &list, csv);
+    } else |err| switch (err) {
+        error.EnvironmentVariableNotFound => {},
+        else => return err,
+    }
+
+    return list.toOwnedSlice(allocator);
 }
 
 fn supervisorLoop(manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) void {
