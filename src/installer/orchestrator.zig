@@ -211,12 +211,9 @@ pub fn install(
     // before passing to the binary — the binary only knows standard provider names.  We will
     // inject the custom provider credentials into the generated config afterwards.
     const custom_provider_result = extractCustomProvider(allocator, opts.answers_json) catch |err| blk: {
-        std.debug.print("[orchestrator] extractCustomProvider error: {s}\n", .{@errorName(err)});
+        std.log.warn("extractCustomProvider failed: {s}", .{@errorName(err)});
         break :blk null;
     };
-    if (custom_provider_result == null) {
-        std.debug.print("[orchestrator] no custom provider detected in answers\n", .{});
-    }
     defer if (custom_provider_result) |cp| {
         allocator.free(cp.custom.provider);
         allocator.free(cp.custom.api_key);
@@ -260,7 +257,7 @@ pub fn install(
         defer if (config_path) |path| allocator.free(path);
         if (config_path) |path| {
             patchProviderIntoConfig(allocator, path, cp.custom.provider, cp.custom.api_key, cp.custom.base_url, cp.custom.model) catch |err| {
-                std.debug.print("warning: failed to inject custom provider into config: {s}\n", .{@errorName(err)});
+                std.log.warn("failed to inject custom provider into config: {s}", .{@errorName(err)});
             };
         }
     }
@@ -658,7 +655,6 @@ fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struc
     }
 
     const stripped = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
-    std.debug.print("[orchestrator] custom provider '{s}' detected; stripped answers: {s}\n", .{ cp.provider, stripped });
     return .{ .custom = cp, .stripped_json = stripped };
 }
 

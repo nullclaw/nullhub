@@ -297,7 +297,7 @@
           let parsed = JSON.parse(_providers);
           // Transform openai-compatible entries: use provider_name as the actual provider
           parsed = parsed.map((entry: any) => {
-            if (entry.provider === "openai-compatible") {
+            if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
               const { provider_name, ...rest } = entry;
               return { ...rest, provider: provider_name || entry.provider };
             }
