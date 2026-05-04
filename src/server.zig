@@ -919,6 +919,18 @@ pub const Server = struct {
                 }
                 return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
             }
+            // GET /api/providers/probe-models — probe a custom endpoint before saving
+            if (providers_api.isProbeModelsPath(target)) {
+                if (std.mem.eql(u8, method, "GET")) {
+                    if (providers_api.handleProbeModels(allocator, target)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "400 Bad Request" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+            }
             // Routes with ID: /api/providers/{id} and /api/providers/{id}/validate
             if (providers_api.extractProviderId(target)) |id| {
                 if (providers_api.isValidatePath(target)) {

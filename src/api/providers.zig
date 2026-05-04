@@ -4,6 +4,7 @@ const state_mod = @import("../core/state.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
 const wizard_api = @import("wizard.zig");
+const query_mod = @import("query.zig");
 
 const appendEscaped = helpers.appendEscaped;
 
@@ -39,6 +40,12 @@ pub fn isValidatePath(target: []const u8) bool {
 pub fn hasRevealParam(target: []const u8) bool {
     const query_start = std.mem.indexOfScalar(u8, target, '?') orelse return false;
     return std.mem.indexOf(u8, target[query_start..], "reveal=true") != null;
+}
+
+/// Check if path matches /api/providers/probe-models
+pub fn isProbeModelsPath(target: []const u8) bool {
+    return std.mem.eql(u8, target, "/api/providers/probe-models") or
+        std.mem.startsWith(u8, target, "/api/providers/probe-models?");
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -109,6 +116,14 @@ pub fn handleCreate(
         }
         validated_ok = true;
         validated_with_buf = try allocator.dupe(u8, component_name);
+    } else {
+        // Custom provider: probe the /models endpoint; always save regardless of result.
+        var models_probe = probeModels(allocator, parsed.value.base_url, parsed.value.api_key);
+        defer models_probe.deinit(allocator);
+        validated_ok = models_probe.live_ok;
+        if (validated_ok) {
+            validated_with_buf = try allocator.dupe(u8, "models-probe");
+        }
     }
 
     const validated_with = validated_with_buf orelse "";
@@ -121,16 +136,23 @@ pub fn handleCreate(
         .validated_with = validated_with,
     });
 
-    // Record validation attempt if we validated
+    // Record validation result
+    const providers_list = state.savedProviders();
+    const new_id = providers_list[providers_list.len - 1].id;
     if (validated_ok) {
-        const providers = state.savedProviders();
-        const new_id = providers[providers.len - 1].id;
         try persistValidationAttempt(allocator, state, new_id, validated_with, true);
+    } else if (is_custom) {
+        // Custom probe ran but failed — record the attempt so the UI shows status
+        const now = try nowIso8601(allocator);
+        defer allocator.free(now);
+        _ = try state.updateSavedProvider(new_id, .{
+            .last_validation_at = now,
+            .last_validation_ok = false,
+        });
+        try state.save();
     }
 
     // Return the saved provider
-    const providers = state.savedProviders();
-    const new_id = providers[providers.len - 1].id;
     const sp = state.getSavedProvider(new_id).?;
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
@@ -212,12 +234,20 @@ pub fn handleUpdate(
                 .last_validation_ok = true,
             });
         } else {
-            // Custom provider: update fields directly without probe
+            // Custom provider: probe /models endpoint; always update regardless of result.
+            var models_probe = probeModels(allocator, effective_base_url, effective_key);
+            defer models_probe.deinit(allocator);
+            const now = try nowIso8601(allocator);
+            defer allocator.free(now);
             _ = try state.updateSavedProvider(id, .{
                 .name = parsed.value.name,
                 .api_key = parsed.value.api_key,
                 .model = parsed.value.model,
                 .base_url = parsed.value.base_url,
+                .validated_at = if (models_probe.live_ok) now else null,
+                .validated_with = if (models_probe.live_ok) "models-probe" else null,
+                .last_validation_at = now,
+                .last_validation_ok = models_probe.live_ok,
             });
         }
     } else {
@@ -252,11 +282,21 @@ pub fn handleValidate(
 ) ![]const u8 {
     const existing = state.getSavedProvider(id) orelse return try allocator.dupe(u8, "{\"error\":\"provider not found\"}");
 
-    // Custom providers are validated via the /models endpoint (not yet implemented).
-    // Return a clear response rather than running the nullclaw probe against an
-    // arbitrary endpoint that the probe was not designed for.
+    // Custom providers: validate via the /models endpoint instead of nullclaw probe.
     if (existing.base_url.len > 0) {
-        return try allocator.dupe(u8, "{\"live_ok\":false,\"reason\":\"custom endpoint — validation via /models not yet available\"}");
+        var models_probe = probeModels(allocator, existing.base_url, existing.api_key);
+        defer models_probe.deinit(allocator);
+
+        try persistValidationAttempt(allocator, state, id, "models-probe", models_probe.live_ok);
+
+        var buf = std.array_list.Managed(u8).init(allocator);
+        errdefer buf.deinit();
+        try buf.appendSlice("{\"live_ok\":");
+        try buf.appendSlice(if (models_probe.live_ok) "true" else "false");
+        try buf.appendSlice(",\"reason\":\"");
+        try appendEscaped(&buf, models_probe.reason);
+        try buf.appendSlice("\"}");
+        return buf.toOwnedSlice();
     }
 
     const component_name = findProviderProbeComponent(allocator, state) orelse
@@ -283,6 +323,162 @@ pub fn handleValidate(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// ── /models probe ──────────────────────────────────────────────────────────
+
+/// Result of probing an OpenAI-compatible /models endpoint.
+const ModelsProbeResult = struct {
+    live_ok: bool,
+    /// Static string literal — never allocated, never freed.
+    reason: []const u8,
+    /// Owned JSON array string of model IDs, e.g. `["gpt-4","gpt-3.5-turbo"]`.
+    /// Always valid JSON; `"[]"` when the probe failed or returned no data.
+    model_ids_json: []u8,
+
+    fn deinit(self: *ModelsProbeResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.model_ids_json);
+    }
+};
+
+/// Build the models URL from a base_url (appends `/models`).
+fn buildModelsUrl(allocator: std.mem.Allocator, base_url: []const u8) ![]const u8 {
+    if (std.mem.endsWith(u8, base_url, "/")) {
+        return std.fmt.allocPrint(allocator, "{s}models", .{base_url});
+    }
+    return std.fmt.allocPrint(allocator, "{s}/models", .{base_url});
+}
+
+/// Parse `data[].id` strings from an OpenAI-compatible /models JSON response.
+/// Returns a JSON array string like `["gpt-4","llama3"]`. Caller owns the result.
+fn parseModelIdsJson(allocator: std.mem.Allocator, body: []const u8) []u8 {
+    const empty = allocator.dupe(u8, "[]") catch return @constCast("[]");
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return empty;
+    defer parsed.deinit();
+
+    const data = switch (parsed.value) {
+        .object => |obj| obj.get("data") orelse return empty,
+        else => return empty,
+    };
+    const items = switch (data) {
+        .array => |arr| arr.items,
+        else => return empty,
+    };
+
+    var out = std.array_list.Managed(u8).init(allocator);
+    out.append('[') catch return empty;
+    var first = true;
+    for (items) |item| {
+        const id_val = switch (item) {
+            .object => |obj| obj.get("id") orelse continue,
+            else => continue,
+        };
+        const id_str = switch (id_val) {
+            .string => |s| s,
+            else => continue,
+        };
+        if (!first) out.append(',') catch break;
+        first = false;
+        out.append('"') catch break;
+        appendEscaped(&out, id_str) catch break;
+        out.append('"') catch break;
+    }
+    out.append(']') catch return empty;
+    allocator.free(empty);
+    return out.toOwnedSlice() catch @constCast("[]");
+}
+
+/// Probe an OpenAI-compatible `/models` endpoint using the given key.
+fn probeModels(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    api_key: []const u8,
+) ModelsProbeResult {
+    const empty_models = allocator.dupe(u8, "[]") catch return .{
+        .live_ok = false,
+        .reason = "alloc_failed",
+        .model_ids_json = @constCast("[]"),
+    };
+
+    const url = buildModelsUrl(allocator, base_url) catch return .{
+        .live_ok = false,
+        .reason = "url_build_failed",
+        .model_ids_json = empty_models,
+    };
+    defer allocator.free(url);
+
+    var client: std.http.Client = .{ .allocator = allocator, .io = std_compat.io() };
+    defer client.deinit();
+
+    var response_body: std.Io.Writer.Allocating = .init(allocator);
+    defer response_body.deinit();
+
+    const auth_header_value = std.fmt.allocPrint(allocator, "Bearer {s}", .{api_key}) catch
+        return .{ .live_ok = false, .reason = "alloc_failed", .model_ids_json = empty_models };
+    defer allocator.free(auth_header_value);
+
+    const header_buf = [1]std.http.Header{
+        .{ .name = "Authorization", .value = auth_header_value },
+    };
+
+    const result = client.fetch(.{
+        .location = .{ .url = url },
+        .method = .GET,
+        .response_writer = &response_body.writer,
+        .extra_headers = header_buf[0..],
+    }) catch return .{ .live_ok = false, .reason = "network_error", .model_ids_json = empty_models };
+
+    const status_code = @intFromEnum(result.status);
+    if (status_code == 401 or status_code == 403) {
+        return .{ .live_ok = false, .reason = "auth_failed", .model_ids_json = empty_models };
+    }
+    if (status_code < 200 or status_code >= 300) {
+        return .{ .live_ok = false, .reason = "http_error", .model_ids_json = empty_models };
+    }
+
+    allocator.free(empty_models);
+    const bytes = response_body.toOwnedSlice() catch return .{
+        .live_ok = true,
+        .reason = "",
+        .model_ids_json = allocator.dupe(u8, "[]") catch @constCast("[]"),
+    };
+    defer allocator.free(bytes);
+
+    return .{
+        .live_ok = true,
+        .reason = "",
+        .model_ids_json = parseModelIdsJson(allocator, bytes),
+    };
+}
+
+/// GET /api/providers/probe-models?base_url=...&api_key=...
+/// Probes an OpenAI-compatible endpoint's /models endpoint and returns the
+/// list of available model IDs. Used by the frontend before saving a provider.
+pub fn handleProbeModels(allocator: std.mem.Allocator, target: []const u8) ![]const u8 {
+    const base_url = (try query_mod.valueAlloc(allocator, target, "base_url")) orelse
+        return try allocator.dupe(u8, "{\"error\":\"base_url is required\"}");
+    defer allocator.free(base_url);
+
+    const api_key = (try query_mod.valueAlloc(allocator, target, "api_key")) orelse
+        return try allocator.dupe(u8, "{\"error\":\"api_key is required\"}");
+    defer allocator.free(api_key);
+
+    var probe = probeModels(allocator, base_url, api_key);
+    defer probe.deinit(allocator);
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    try buf.appendSlice("{\"live_ok\":");
+    try buf.appendSlice(if (probe.live_ok) "true" else "false");
+    try buf.appendSlice(",\"reason\":\"");
+    try appendEscaped(&buf, probe.reason);
+    try buf.appendSlice("\",\"models\":");
+    try buf.appendSlice(probe.model_ids_json);
+    try buf.append('}');
+    return buf.toOwnedSlice();
+}
 
 fn findProviderProbeComponent(allocator: std.mem.Allocator, state: *state_mod.State) ?[]const u8 {
     const names = state.instanceNames("nullclaw") catch return null;
@@ -640,7 +836,11 @@ test "handleCreate without base_url requires nullclaw instance" {
     try std.testing.expectEqual(@as(usize, 0), s.savedProviders().len);
 }
 
-test "handleValidate for custom provider returns probe-not-applicable message" {
+test "handleValidate for custom provider uses models probe (not nullclaw)" {
+    // Regression: handleValidate for a custom provider must not require a nullclaw
+    // instance — it uses the /models probe directly. The probe will fail here
+    // (no server at 5801) but the key point is we get a live_ok + reason response,
+    // NOT the old "custom endpoint — validation via /models not yet available" placeholder.
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-provider-test-validate-custom";
     std_compat.fs.deleteTreeAbsolute(tmp) catch {};
@@ -663,6 +863,114 @@ test "handleValidate for custom provider returns probe-not-applicable message" {
     const json = try handleValidate(allocator, 1, &s, paths);
     defer allocator.free(json);
 
+    // Must return a probe result (live_ok present), never the old placeholder string.
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "not yet available") == null);
+    // No nullclaw probe: no "Install a nullclaw instance" error expected.
+    try std.testing.expect(std.mem.indexOf(u8, json, "Install a nullclaw instance") == null);
+    // Probe should fail (5801 is not running in tests)
     try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "custom endpoint") != null);
+}
+
+test "buildModelsUrl appends /models with and without trailing slash" {
+    const allocator = std.testing.allocator;
+
+    const a = try buildModelsUrl(allocator, "https://api.example.com/v1");
+    defer allocator.free(a);
+    try std.testing.expectEqualStrings("https://api.example.com/v1/models", a);
+
+    const b = try buildModelsUrl(allocator, "https://api.example.com/v1/");
+    defer allocator.free(b);
+    try std.testing.expectEqualStrings("https://api.example.com/v1/models", b);
+}
+
+test "parseModelIdsJson extracts data[].id strings" {
+    const allocator = std.testing.allocator;
+    const body =
+        \\{"object":"list","data":[{"id":"gpt-4","object":"model"},{"id":"gpt-3.5-turbo","object":"model"}]}
+    ;
+    const result = parseModelIdsJson(allocator, body);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("[\"gpt-4\",\"gpt-3.5-turbo\"]", result);
+}
+
+test "parseModelIdsJson returns empty array for invalid JSON" {
+    const allocator = std.testing.allocator;
+    const result = parseModelIdsJson(allocator, "not json");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "parseModelIdsJson returns empty array for missing data field" {
+    const allocator = std.testing.allocator;
+    const result = parseModelIdsJson(allocator, "{\"object\":\"list\"}");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "isProbeModelsPath matches correct paths" {
+    try std.testing.expect(isProbeModelsPath("/api/providers/probe-models"));
+    try std.testing.expect(isProbeModelsPath("/api/providers/probe-models?base_url=x&api_key=y"));
+    try std.testing.expect(!isProbeModelsPath("/api/providers/1"));
+    try std.testing.expect(!isProbeModelsPath("/api/providers"));
+    try std.testing.expect(!isProbeModelsPath("/api/providers/probe-modelsX"));
+}
+
+test "handleProbeModels returns error when base_url missing" {
+    const allocator = std.testing.allocator;
+    const json = try handleProbeModels(allocator, "/api/providers/probe-models?api_key=sk-test");
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "base_url") != null);
+}
+
+test "handleProbeModels returns error when api_key missing" {
+    const allocator = std.testing.allocator;
+    const json = try handleProbeModels(allocator, "/api/providers/probe-models?base_url=http%3A%2F%2F127.0.0.1%3A5801%2Fv1");
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "api_key") != null);
+}
+
+test "handleProbeModels returns live_ok false for unreachable endpoint" {
+    const allocator = std.testing.allocator;
+    // Port 19999 should not be running anything in CI
+    const json = try handleProbeModels(allocator, "/api/providers/probe-models?base_url=http%3A%2F%2F127.0.0.1%3A19999%2Fv1&api_key=sk-test");
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"models\":[]") != null);
+}
+
+test "handleCreate custom provider records last_validation_at after probe attempt" {
+    // When a custom provider is created, a /models probe is attempted. Even if it
+    // fails (no server), last_validation_at must be set in the saved state.
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-custom-create-ts";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+
+    const body =
+        \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:19998/v1"}
+    ;
+    const json = try handleCreate(allocator, body, &s, paths);
+    defer allocator.free(json);
+
+    // Must save successfully (no error)
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
+    try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
+
+    // last_validation_at must be set (probe was attempted)
+    const sp = s.savedProviders()[0];
+    try std.testing.expect(sp.last_validation_at.len > 0);
+    // last_validation_ok must be false (port 19998 not running)
+    try std.testing.expect(!sp.last_validation_ok);
 }

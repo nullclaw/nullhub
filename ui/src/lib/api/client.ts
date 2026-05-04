@@ -199,6 +199,10 @@ export const api = {
     request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'DELETE' }),
   revalidateSavedProvider: (id: string) =>
     request<any>(`/providers/${id.replace('sp_', '')}/validate`, { method: 'POST' }),
+  probeProviderModels: (baseUrl: string, apiKey: string) => {
+    const params = new URLSearchParams({ base_url: baseUrl, api_key: apiKey });
+    return request<{ live_ok: boolean; reason: string; models: string[] }>(`/providers/probe-models?${params}`);
+  },
 
   // Saved channels
   getSavedChannels: (reveal = false) =>
