@@ -12,6 +12,7 @@
 
   const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
   const MODEL_RESULTS_LIMIT = 80;
+  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
   type ProviderOption = {
     value: string;
@@ -23,6 +24,8 @@
     provider: string;
     api_key: string;
     model: string;
+    base_url: string;
+    provider_name: string;
   };
 
   let savedProviders = $state<any[]>([]);
@@ -76,10 +79,13 @@
   }
 
   function useSaved(sp: any) {
+    const isCompat = sp.base_url && sp.base_url.length > 0;
     const savedEntry = {
-      provider: sp.provider,
+      provider: isCompat ? OPENAI_COMPATIBLE_VALUE : sp.provider,
       api_key: sp.api_key,
       model: sp.model || "",
+      base_url: sp.base_url || "",
+      provider_name: isCompat ? sp.provider : "",
     };
 
     if (entries.length === 1 && isPlaceholderEntry(entries[0])) {
@@ -118,7 +124,7 @@
     const defaultProvider = rec?.value || providers[0]?.value || "";
     entries = [
       ...entries,
-      { provider: defaultProvider, api_key: "", model: "" },
+      { provider: defaultProvider, api_key: "", model: "", base_url: "", provider_name: "" },
     ];
     emitChange();
   }
@@ -364,6 +370,29 @@
             value={entry.api_key}
             oninput={(e) => updateEntry(i, "api_key", e.currentTarget.value)}
             placeholder="Enter API key..."
+          />
+        </div>
+      {/if}
+
+      {#if entry.provider === OPENAI_COMPATIBLE_VALUE}
+        <div class="provider-field">
+          <label for={`provider-name-${i}`}>Provider Name</label>
+          <input
+            id={`provider-name-${i}`}
+            type="text"
+            value={entry.provider_name}
+            oninput={(e) => updateEntry(i, "provider_name", e.currentTarget.value)}
+            placeholder="e.g. infini-ai, xiaomi-mimo"
+          />
+        </div>
+        <div class="provider-field">
+          <label for={`provider-base-url-${i}`}>Base URL</label>
+          <input
+            id={`provider-base-url-${i}`}
+            type="text"
+            value={entry.base_url}
+            oninput={(e) => updateEntry(i, "base_url", e.currentTarget.value)}
+            placeholder="https://api.example.com/v1"
           />
         </div>
       {/if}

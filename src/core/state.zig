@@ -16,6 +16,7 @@ pub const SavedProvider = struct {
     provider: []const u8,
     api_key: []const u8,
     model: []const u8 = "",
+    base_url: []const u8 = "",
     validated_at: []const u8 = "",
     validated_with: []const u8 = "",
     last_validation_at: []const u8 = "",
@@ -26,6 +27,7 @@ pub const SavedProviderInput = struct {
     provider: []const u8,
     api_key: []const u8,
     model: []const u8 = "",
+    base_url: []const u8 = "",
     validated_with: []const u8 = "",
 };
 
@@ -33,6 +35,7 @@ pub const SavedProviderUpdate = struct {
     name: ?[]const u8 = null,
     api_key: ?[]const u8 = null,
     model: ?[]const u8 = null,
+    base_url: ?[]const u8 = null,
     validated_at: ?[]const u8 = null,
     validated_with: ?[]const u8 = null,
     last_validation_at: ?[]const u8 = null,
@@ -205,6 +208,7 @@ pub const State = struct {
         self.allocator.free(sp.provider);
         self.allocator.free(sp.api_key);
         if (sp.model.len > 0) self.allocator.free(sp.model);
+        if (sp.base_url.len > 0) self.allocator.free(sp.base_url);
         if (sp.validated_at.len > 0) self.allocator.free(sp.validated_at);
         if (sp.validated_with.len > 0) self.allocator.free(sp.validated_with);
         if (sp.last_validation_at.len > 0) self.allocator.free(sp.last_validation_at);
@@ -534,6 +538,8 @@ pub const State = struct {
         errdefer self.allocator.free(api_key);
         const model = if (input.model.len > 0) try self.allocator.dupe(u8, input.model) else @as([]const u8, "");
         errdefer if (model.len > 0) self.allocator.free(@constCast(model));
+        const base_url = if (input.base_url.len > 0) try self.allocator.dupe(u8, input.base_url) else @as([]const u8, "");
+        errdefer if (base_url.len > 0) self.allocator.free(@constCast(base_url));
         const validated_with = if (input.validated_with.len > 0) try self.allocator.dupe(u8, input.validated_with) else @as([]const u8, "");
         errdefer if (validated_with.len > 0) self.allocator.free(@constCast(validated_with));
 
@@ -543,6 +549,7 @@ pub const State = struct {
             .provider = provider,
             .api_key = api_key,
             .model = model,
+            .base_url = base_url,
             .validated_at = "",
             .validated_with = validated_with,
             .last_validation_at = "",
@@ -563,6 +570,11 @@ pub const State = struct {
                 else
                     null;
                 errdefer if (new_model) |m| if (m.len > 0) self.allocator.free(@constCast(m));
+                const new_base_url = if (update.base_url) |base_url|
+                    if (base_url.len > 0) try self.allocator.dupe(u8, base_url) else @as([]const u8, "")
+                else
+                    null;
+                errdefer if (new_base_url) |u| if (u.len > 0) self.allocator.free(@constCast(u));
                 const new_validated_at = if (update.validated_at) |validated_at|
                     if (validated_at.len > 0) try self.allocator.dupe(u8, validated_at) else @as([]const u8, "")
                 else
@@ -594,6 +606,11 @@ pub const State = struct {
                     const m = new_model.?;
                     if (sp.model.len > 0) self.allocator.free(sp.model);
                     sp.model = m;
+                }
+                if (update.base_url != null) {
+                    const u = new_base_url.?;
+                    if (sp.base_url.len > 0) self.allocator.free(sp.base_url);
+                    sp.base_url = u;
                 }
                 if (update.validated_at != null) {
                     const t = new_validated_at.?;
@@ -1371,6 +1388,148 @@ test "next provider id after removals" {
     try std.testing.expectEqual(@as(usize, 2), providers.len);
     try std.testing.expectEqual(@as(u32, 2), providers[0].id);
     try std.testing.expectEqual(@as(u32, 3), providers[1].id);
+}
+
+// ─── OpenAI-Compatible Provider Tests ────────────────────────────────────────
+
+test "add saved provider with base_url, save, load, verify round-trip" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    {
+        var s = State.init(allocator, path);
+        defer s.deinit();
+
+        try s.addSavedProvider(.{
+            .provider = "infini-ai",
+            .api_key = "sk-cp-test",
+            .model = "minimax-m2.7",
+            .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+        });
+
+        const providers = s.savedProviders();
+        try std.testing.expectEqual(@as(usize, 1), providers.len);
+        try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-cp-test", providers[0].api_key);
+        try std.testing.expectEqualStrings("minimax-m2.7", providers[0].model);
+        try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
+        try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
+
+        try s.save();
+    }
+
+    {
+        var s = try State.load(allocator, path);
+        defer s.deinit();
+
+        const providers = s.savedProviders();
+        try std.testing.expectEqual(@as(usize, 1), providers.len);
+        try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-cp-test", providers[0].api_key);
+        try std.testing.expectEqualStrings("minimax-m2.7", providers[0].model);
+        try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
+        try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
+    }
+}
+
+test "update saved provider base_url" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "infini-ai",
+        .api_key = "key1",
+        .base_url = "https://old.example.com/v1",
+    });
+    const updated = try s.updateSavedProvider(1, .{
+        .base_url = "https://new.example.com/v1",
+    });
+    try std.testing.expect(updated);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("https://new.example.com/v1", providers[0].base_url);
+}
+
+test "update saved provider clears base_url" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "infini-ai",
+        .api_key = "key1",
+        .base_url = "https://cloud.infini-ai.com/v1",
+    });
+    const updated = try s.updateSavedProvider(1, .{ .base_url = "" });
+    try std.testing.expect(updated);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("", providers[0].base_url);
+}
+
+test "multiple openai-compatible providers with different names" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "infini-ai",
+        .api_key = "key1",
+        .model = "minimax-m2.7",
+        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+    });
+    try s.addSavedProvider(.{
+        .provider = "infini-ai",
+        .api_key = "key1",
+        .model = "deepseek-v3",
+        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+    });
+    try s.addSavedProvider(.{
+        .provider = "xiaomi-mimo",
+        .api_key = "key2",
+        .model = "mimo-7b",
+        .base_url = "https://api.xiaomi.com/v1",
+    });
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqual(@as(usize, 3), providers.len);
+    try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
+    try std.testing.expectEqualStrings("infini-ai #2", providers[1].name);
+    try std.testing.expectEqualStrings("xiaomi-mimo #1", providers[2].name);
+    try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
+    try std.testing.expectEqualStrings("xiaomi-mimo", providers[2].provider);
+    try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
+    try std.testing.expectEqualStrings("https://api.xiaomi.com/v1", providers[2].base_url);
+}
+
+test "openai-compatible provider base_url defaults to empty" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqualStrings("", providers[0].base_url);
 }
 
 // ─── SavedChannel Tests ─────────────────────────────────────────────────────

@@ -71,47 +71,66 @@ pub fn handleCreate(
         provider: []const u8,
         api_key: []const u8 = "",
         model: []const u8 = "",
+        base_url: []const u8 = "",
     }, allocator, body, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
     }) catch return try allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}");
     defer parsed.deinit();
 
-    // Find an installed component binary
-    const component_name = findProviderProbeComponent(allocator, state) orelse
-        return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
-    defer allocator.free(component_name);
+    // Custom providers (base_url set) bypass the nullclaw probe: the probe is
+    // designed for known providers and can misclassify valid responses from
+    // arbitrary OpenAI-compatible endpoints. Credential validation for custom
+    // endpoints will be handled via the /models probe (added in a follow-up).
+    const is_custom = parsed.value.base_url.len > 0;
+    var validated_ok = false;
+    var validated_with_buf: ?[]const u8 = null;
+    defer if (validated_with_buf) |s| allocator.free(s);
 
-    const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
-        return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
-    defer allocator.free(bin_path);
+    if (!is_custom) {
+        // Standard provider: validate via nullclaw probe
+        const component_name = findProviderProbeComponent(allocator, state) orelse
+            return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
+        defer allocator.free(component_name);
 
-    // Validate via probe
-    const probe_result = probeProvider(allocator, component_name, bin_path, parsed.value.provider, parsed.value.api_key, parsed.value.model, "");
-    defer probe_result.deinit(allocator);
-    if (!probe_result.live_ok) {
-        var buf = std.array_list.Managed(u8).init(allocator);
-        errdefer buf.deinit();
-        try buf.appendSlice("{\"error\":\"Provider validation failed: ");
-        try appendEscaped(&buf, probe_result.reason);
-        try buf.appendSlice("\"}");
-        return buf.toOwnedSlice();
+        const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
+            return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
+        defer allocator.free(bin_path);
+
+        const probe_result = probeProvider(allocator, component_name, bin_path, parsed.value.provider, parsed.value.api_key, parsed.value.model, parsed.value.base_url);
+        defer probe_result.deinit(allocator);
+        if (!probe_result.live_ok) {
+            var buf = std.array_list.Managed(u8).init(allocator);
+            errdefer buf.deinit();
+            try buf.appendSlice("{\"error\":\"Provider validation failed: ");
+            try appendEscaped(&buf, probe_result.reason);
+            try buf.appendSlice("\"}");
+            return buf.toOwnedSlice();
+        }
+        validated_ok = true;
+        validated_with_buf = try allocator.dupe(u8, component_name);
     }
 
-    // Save to state
+    const validated_with = validated_with_buf orelse "";
+
     try state.addSavedProvider(.{
         .provider = parsed.value.provider,
         .api_key = parsed.value.api_key,
         .model = parsed.value.model,
-        .validated_with = component_name,
+        .base_url = parsed.value.base_url,
+        .validated_with = validated_with,
     });
 
-    // Record both the last successful validation and the latest validation attempt.
-    const providers = state.savedProviders();
-    const new_id = providers[providers.len - 1].id;
-    try persistValidationAttempt(allocator, state, new_id, component_name, true);
+    // Record validation attempt if we validated
+    if (validated_ok) {
+        const providers = state.savedProviders();
+        const new_id = providers[providers.len - 1].id;
+        try persistValidationAttempt(allocator, state, new_id, validated_with, true);
+    }
 
     // Return the saved provider
+    const providers = state.savedProviders();
+    const new_id = providers[providers.len - 1].id;
     const sp = state.getSavedProvider(new_id).?;
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
@@ -133,6 +152,7 @@ pub fn handleUpdate(
         name: ?[]const u8 = null,
         api_key: ?[]const u8 = null,
         model: ?[]const u8 = null,
+        base_url: ?[]const u8 = null,
     }, allocator, body, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
@@ -142,48 +162,64 @@ pub fn handleUpdate(
     const credentials_changed = (parsed.value.api_key != null and
         !std.mem.eql(u8, parsed.value.api_key.?, existing.api_key)) or
         (parsed.value.model != null and
-            !std.mem.eql(u8, parsed.value.model.?, existing.model));
+            !std.mem.eql(u8, parsed.value.model.?, existing.model)) or
+        (parsed.value.base_url != null and
+            !std.mem.eql(u8, parsed.value.base_url.?, existing.base_url));
 
     if (credentials_changed) {
-        // Re-validate
-        const component_name = findProviderProbeComponent(allocator, state) orelse
-            return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
-        defer allocator.free(component_name);
-
-        const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
-            return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
-        defer allocator.free(bin_path);
-
         const effective_key = parsed.value.api_key orelse existing.api_key;
         const effective_model = parsed.value.model orelse existing.model;
+        const effective_base_url = parsed.value.base_url orelse existing.base_url;
 
-        const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, effective_key, effective_model, "");
-        defer probe_result.deinit(allocator);
-        const now = try nowIso8601(allocator);
-        defer allocator.free(now);
-        if (!probe_result.live_ok) {
+        // Custom providers (base_url set) bypass the nullclaw probe — see handleCreate.
+        const is_custom = effective_base_url.len > 0;
+        if (!is_custom) {
+            // Standard provider: re-validate via nullclaw probe
+            const component_name = findProviderProbeComponent(allocator, state) orelse
+                return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
+            defer allocator.free(component_name);
+
+            const bin_path = wizard_api.findOrFetchComponentBinaryPub(allocator, component_name, paths) orelse
+                return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
+            defer allocator.free(bin_path);
+
+            const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, effective_key, effective_model, effective_base_url);
+            defer probe_result.deinit(allocator);
+            const now = try nowIso8601(allocator);
+            defer allocator.free(now);
+            if (!probe_result.live_ok) {
+                _ = try state.updateSavedProvider(id, .{
+                    .last_validation_at = now,
+                    .last_validation_ok = false,
+                });
+                try state.save();
+                var buf = std.array_list.Managed(u8).init(allocator);
+                errdefer buf.deinit();
+                try buf.appendSlice("{\"error\":\"Provider validation failed: ");
+                try appendEscaped(&buf, probe_result.reason);
+                try buf.appendSlice("\"}");
+                return buf.toOwnedSlice();
+            }
+
             _ = try state.updateSavedProvider(id, .{
+                .name = parsed.value.name,
+                .api_key = parsed.value.api_key,
+                .model = parsed.value.model,
+                .base_url = parsed.value.base_url,
+                .validated_at = now,
+                .validated_with = component_name,
                 .last_validation_at = now,
-                .last_validation_ok = false,
+                .last_validation_ok = true,
             });
-            try state.save();
-            var buf = std.array_list.Managed(u8).init(allocator);
-            errdefer buf.deinit();
-            try buf.appendSlice("{\"error\":\"Provider validation failed: ");
-            try appendEscaped(&buf, probe_result.reason);
-            try buf.appendSlice("\"}");
-            return buf.toOwnedSlice();
+        } else {
+            // Custom provider: update fields directly without probe
+            _ = try state.updateSavedProvider(id, .{
+                .name = parsed.value.name,
+                .api_key = parsed.value.api_key,
+                .model = parsed.value.model,
+                .base_url = parsed.value.base_url,
+            });
         }
-
-        _ = try state.updateSavedProvider(id, .{
-            .name = parsed.value.name,
-            .api_key = parsed.value.api_key,
-            .model = parsed.value.model,
-            .validated_at = now,
-            .validated_with = component_name,
-            .last_validation_at = now,
-            .last_validation_ok = true,
-        });
     } else {
         // Name-only update
         _ = try state.updateSavedProvider(id, .{ .name = parsed.value.name });
@@ -216,6 +252,13 @@ pub fn handleValidate(
 ) ![]const u8 {
     const existing = state.getSavedProvider(id) orelse return try allocator.dupe(u8, "{\"error\":\"provider not found\"}");
 
+    // Custom providers are validated via the /models endpoint (not yet implemented).
+    // Return a clear response rather than running the nullclaw probe against an
+    // arbitrary endpoint that the probe was not designed for.
+    if (existing.base_url.len > 0) {
+        return try allocator.dupe(u8, "{\"live_ok\":false,\"reason\":\"custom endpoint — validation via /models not yet available\"}");
+    }
+
     const component_name = findProviderProbeComponent(allocator, state) orelse
         return try allocator.dupe(u8, "{\"error\":\"Install a nullclaw instance first to validate providers\"}");
     defer allocator.free(component_name);
@@ -224,7 +267,7 @@ pub fn handleValidate(
         return try allocator.dupe(u8, "{\"error\":\"component binary not found\"}");
     defer allocator.free(bin_path);
 
-    const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, existing.api_key, existing.model, "");
+    const probe_result = probeProvider(allocator, component_name, bin_path, existing.provider, existing.api_key, existing.model, existing.base_url);
     defer probe_result.deinit(allocator);
 
     try persistValidationAttempt(allocator, state, id, component_name, probe_result.live_ok);
@@ -323,6 +366,8 @@ fn appendProviderJson(buf: *std.array_list.Managed(u8), sp: state_mod.SavedProvi
     }
     try buf.appendSlice("\",\"model\":\"");
     try appendEscaped(buf, sp.model);
+    try buf.appendSlice("\",\"base_url\":\"");
+    try appendEscaped(buf, sp.base_url);
     try buf.appendSlice("\",\"validated_at\":\"");
     try appendEscaped(buf, sp.validated_at);
     try buf.appendSlice("\",\"validated_with\":\"");
@@ -420,6 +465,38 @@ test "handleList reveals api_key when requested" {
     try std.testing.expect(std.mem.indexOf(u8, json, "sk-or-1234567890abcdef") != null);
 }
 
+test "handleList includes base_url for openai-compatible provider" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/nullhub-provider-test-baseurl.json";
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "infini-ai",
+        .api_key = "sk-cp-test",
+        .model = "minimax-m2.7",
+        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+    });
+
+    const json = try handleList(allocator, &s, true);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"https://cloud.infini-ai.com/maas/coding/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\":\"infini-ai\"") != null);
+}
+
+test "handleList includes empty base_url for standard provider" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/nullhub-provider-test-baseurl-empty.json";
+    var s = state_mod.State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "sk-or-xxx" });
+
+    const json = try handleList(allocator, &s, true);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"\"") != null);
+}
+
 test "findProviderProbeComponent prefers installed nullclaw" {
     const allocator = std.testing.allocator;
     const path = "/tmp/nullhub-provider-test-probe-component.json";
@@ -502,4 +579,90 @@ test "nowIso8601 returns valid format" {
     try std.testing.expect(ts[7] == '-');
     try std.testing.expect(ts[10] == 'T');
     try std.testing.expect(ts[19] == 'Z');
+}
+
+test "handleCreate with base_url saves without requiring nullclaw probe" {
+    // Regression: custom providers with a base_url must not block on the
+    // nullclaw probe — the probe is designed for known providers and can
+    // misclassify valid responses from arbitrary OpenAI-compatible endpoints.
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-custom-create";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    // No nullclaw instance installed — would normally block standard providers
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+
+    const body =
+        \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}
+    ;
+    const json = try handleCreate(allocator, body, &s, paths);
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"http://127.0.0.1:5801/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\":\"local-llm\"") != null);
+    try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
+}
+
+test "handleCreate without base_url requires nullclaw instance" {
+    // Standard providers (no base_url) must require an installed nullclaw
+    // instance to run the probe.
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-standard-create";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    // No nullclaw instance installed
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+
+    const body =
+        \\{"provider":"openrouter","api_key":"sk-or-test"}
+    ;
+    const json = try handleCreate(allocator, body, &s, paths);
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
+    try std.testing.expectEqual(@as(usize, 0), s.savedProviders().len);
+}
+
+test "handleValidate for custom provider returns probe-not-applicable message" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-validate-custom";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "local-llm",
+        .api_key = "sk-test",
+        .base_url = "http://127.0.0.1:5801/v1",
+    });
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    const json = try handleValidate(allocator, 1, &s, paths);
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "custom endpoint") != null);
 }

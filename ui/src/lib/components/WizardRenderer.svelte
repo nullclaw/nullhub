@@ -270,12 +270,21 @@
       };
       if (_providers) {
         try {
-          const parsed = JSON.parse(_providers);
+          let parsed = JSON.parse(_providers);
+          // Transform openai-compatible entries: use provider_name as the actual provider
+          parsed = parsed.map((entry: any) => {
+            if (entry.provider === "openai-compatible") {
+              const { provider_name, ...rest } = entry;
+              return { ...rest, provider: provider_name || entry.provider };
+            }
+            return entry;
+          });
           payload.providers = parsed;
           if (parsed.length > 0) {
             payload.provider = parsed[0].provider;
             payload.api_key = parsed[0].api_key || "";
             payload.model = parsed[0].model || "";
+            if (parsed[0].base_url) payload.base_url = parsed[0].base_url;
           }
         } catch {}
       }

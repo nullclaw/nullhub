@@ -669,6 +669,7 @@ pub fn handleValidateProviders(
                     .provider = prov.provider,
                     .api_key = prov.api_key,
                     .model = prov.model,
+                    .base_url = prov.base_url,
                     .validated_with = component_name,
                 }) catch {
                     saved_providers_warning = "validated providers could not be saved";
