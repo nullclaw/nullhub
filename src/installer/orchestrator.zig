@@ -207,8 +207,20 @@ pub fn install(
 
     // 5. Run --from-json to generate config (component owns its config generation)
     // Inject the resolved port and instance home so generated configs align with supervisor state.
-    const answers_with_port = injectPortFields(allocator, opts.answers_json, port, managed_port) catch opts.answers_json;
-    defer if (answers_with_port.ptr != opts.answers_json.ptr) allocator.free(answers_with_port);
+    // If the primary provider is openai-compatible (has a base_url), strip it from the answers
+    // before passing to the binary — the binary only knows standard provider names.  We will
+    // inject the custom provider credentials into the generated config afterwards.
+    const custom_provider_result = extractCustomProvider(allocator, opts.answers_json) catch null;
+    defer if (custom_provider_result) |cp| {
+        allocator.free(cp.custom.provider);
+        allocator.free(cp.custom.api_key);
+        allocator.free(cp.custom.base_url);
+        allocator.free(cp.stripped_json);
+    };
+    const answers_for_binary = if (custom_provider_result) |cp| cp.stripped_json else opts.answers_json;
+
+    const answers_with_port = injectPortFields(allocator, answers_for_binary, port, managed_port) catch answers_for_binary;
+    defer if (answers_with_port.ptr != answers_for_binary.ptr) allocator.free(answers_with_port);
     const answers_with_home = injectHomeField(allocator, answers_with_port, inst_dir) catch answers_with_port;
     defer if (answers_with_home.ptr != answers_with_port.ptr) allocator.free(answers_with_home);
 
@@ -232,6 +244,18 @@ pub fn install(
             setLastErrorDetail(from_json_result.stderr);
         }
         return error.ConfigGenerationFailed;
+    }
+
+    // If there was a custom (openai-compatible) provider, patch its credentials
+    // into the generated config now that the binary has written it.
+    if (custom_provider_result) |cp| {
+        const config_path = p.instanceConfig(allocator, opts.component, opts.instance_name) catch null;
+        defer if (config_path) |path| allocator.free(path);
+        if (config_path) |path| {
+            patchProviderIntoConfig(allocator, path, cp.custom.provider, cp.custom.api_key, cp.custom.base_url) catch |err| {
+                std.debug.print("warning: failed to inject custom provider into config: {s}\n", .{@errorName(err)});
+            };
+        }
     }
 
     _ = nullclaw_web_channel.ensureNullclawWebChannelConfig(
@@ -540,6 +564,139 @@ fn injectHomeField(allocator: std.mem.Allocator, json: []const u8, home: []const
     // Append everything after the opening brace
     try buf.appendSlice(json[start + 1 ..]);
     return buf.toOwnedSlice();
+}
+
+// ─── Custom provider handling ────────────────────────────────────────────────
+
+/// Extracted custom-provider fields stripped from wizard answers before they
+/// reach the component binary.  All slices are owned by the arena from the
+/// parsed JSON value; callers must not free them individually.
+const CustomProvider = struct {
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+};
+
+/// If the wizard answers contain a top-level `base_url` (indicating the user
+/// chose an OpenAI-compatible / custom endpoint), return the custom provider
+/// fields and a NEW answers JSON string with those fields cleared so the
+/// component binary does not see an unknown provider name.
+///
+/// Returns `null` when no custom provider is present (standard flow).
+fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struct {
+    custom: CustomProvider,
+    stripped_json: []const u8,
+} {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+
+    const root = &parsed.value.object;
+
+    // A non-empty top-level `base_url` means this is a custom/openai-compatible
+    // provider that the component binary will not recognise.
+    const base_url_val = root.get("base_url") orelse return null;
+    const base_url = switch (base_url_val) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (base_url.len == 0) return null;
+
+    const provider = switch (root.get("provider") orelse .null) {
+        .string => |s| s,
+        else => "",
+    };
+    const api_key = switch (root.get("api_key") orelse .null) {
+        .string => |s| s,
+        else => "",
+    };
+
+    // Duplicate the strings before parsed is deinitialized.
+    const cp = CustomProvider{
+        .provider = try allocator.dupe(u8, provider),
+        .api_key = try allocator.dupe(u8, api_key),
+        .base_url = try allocator.dupe(u8, base_url),
+    };
+
+    // Clear the provider-specific fields so the binary receives no provider.
+    try root.put(allocator, "provider", .{ .string = "" });
+    try root.put(allocator, "api_key", .{ .string = "" });
+    try root.put(allocator, "model", .{ .string = "" });
+    try root.put(allocator, "base_url", .{ .string = "" });
+
+    const stripped = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
+    return .{ .custom = cp, .stripped_json = stripped };
+}
+
+/// Patch provider credentials into an existing instance config file.
+/// Navigates/creates `models → providers → <provider>` and sets `api_key`
+/// (always) and `base_url` (when non-empty).  Best-effort: errors are returned
+/// so the caller can decide whether to surface them.
+fn patchProviderIntoConfig(
+    allocator: std.mem.Allocator,
+    config_path: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+) !void {
+    const contents = blk: {
+        const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk try allocator.dupe(u8, "{}"),
+            else => return err,
+        };
+        defer file.close();
+        break :blk try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
+    };
+    defer allocator.free(contents);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    const ja = parsed.arena.allocator();
+
+    if (parsed.value != .object) return error.InvalidConfig;
+    const root = &parsed.value.object;
+
+    const models_obj = try ensureObjectInMap(ja, root, "models");
+    const providers_obj = try ensureObjectInMap(ja, models_obj, "providers");
+    const provider_obj = try ensureObjectInMap(ja, providers_obj, provider);
+
+    try provider_obj.put(ja, "api_key", .{ .string = api_key });
+    if (base_url.len > 0) {
+        try provider_obj.put(ja, "base_url", .{ .string = base_url });
+    }
+
+    const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+    defer allocator.free(rendered);
+
+    const out = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer out.close();
+    try out.writeAll(rendered);
+    try out.writeAll("\n");
+}
+
+fn ensureObjectInMap(
+    allocator: std.mem.Allocator,
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.ObjectMap {
+    const gop = try obj.getOrPut(allocator, key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .object = .empty };
+        return &gop.value_ptr.object;
+    }
+    if (gop.value_ptr.* != .object) {
+        gop.value_ptr.* = .{ .object = .empty };
+    }
+    return &gop.value_ptr.object;
 }
 
 fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8) ?struct { version: []const u8, bin_path: []const u8 } {

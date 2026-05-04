@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, mergeWithManifestOptions } from "$lib/providers";
+  import type { ProviderOption } from "$lib/providers";
 
   let {
     providers = [],
@@ -10,15 +12,11 @@
     validationResults = [] as Array<{ provider: string; live_ok: boolean; reason: string }>,
   } = $props();
 
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
   const MODEL_RESULTS_LIMIT = 80;
-  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
-  type ProviderOption = {
-    value: string;
-    label: string;
-    recommended?: boolean;
-  };
+  // Merge the canonical list with whatever the manifest marks as recommended.
+  // This ensures openai-compatible always appears regardless of the manifest.
+  const effectiveProviders: ProviderOption[] = $derived(mergeWithManifestOptions(providers));
 
   type ProviderEntry = {
     provider: string;
@@ -120,8 +118,8 @@
 
   function addEntry() {
     // Find recommended provider or first available
-    const rec = providers.find((p: any) => p.recommended);
-    const defaultProvider = rec?.value || providers[0]?.value || "";
+    const rec = effectiveProviders.find((p: any) => p.recommended);
+    const defaultProvider = rec?.value || effectiveProviders[0]?.value || "";
     entries = [
       ...entries,
       { provider: defaultProvider, api_key: "", model: "", base_url: "", provider_name: "" },
@@ -334,7 +332,7 @@
           value={entry.provider}
           onchange={(e) => updateEntry(i, "provider", e.currentTarget.value)}
         >
-          {#each providers as opt}
+          {#each effectiveProviders as opt}
             <option value={opt.value}
               >{formatRecommendedLabel(opt.label, opt.recommended)}</option
             >

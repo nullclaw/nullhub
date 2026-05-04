@@ -1,32 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { PROVIDER_OPTIONS, OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, KNOWN_PROVIDER_VALUES } from "$lib/providers";
 
-  const PROVIDER_OPTIONS = [
-    { value: "openrouter", label: "OpenRouter (multi-provider, recommended)", recommended: true },
-    { value: "anthropic", label: "Anthropic" },
-    { value: "openai", label: "OpenAI" },
-    { value: "google", label: "Google AI" },
-    { value: "mistral", label: "Mistral" },
-    { value: "groq", label: "Groq" },
-    { value: "deepseek", label: "DeepSeek" },
-    { value: "cohere", label: "Cohere" },
-    { value: "together", label: "Together AI" },
-    { value: "fireworks", label: "Fireworks AI" },
-    { value: "perplexity", label: "Perplexity" },
-    { value: "xai", label: "xAI" },
-    { value: "ollama", label: "Ollama (local)" },
-    { value: "lm-studio", label: "LM Studio (local)" },
-    { value: "claude-cli", label: "Claude CLI (local)" },
-    { value: "codex-cli", label: "Codex CLI (local CLI)" },
-    { value: "openai-codex", label: "OpenAI Codex (ChatGPT login)" },
-    { value: "openai-compatible", label: "OpenAI Compatible (custom endpoint)" },
-  ];
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
-  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
-  const KNOWN_PROVIDER_VALUES = new Set(
-    PROVIDER_OPTIONS.filter(o => o.value !== OPENAI_COMPATIBLE_VALUE).map(o => o.value)
-  );
 
   let providers = $state<any[]>([]);
   let loading = $state(true);
