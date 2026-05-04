@@ -152,6 +152,10 @@ pub fn handleCreate(
         try state.save();
     }
 
+    // Sync credentials to all live nullclaw instances
+    const sp_for_sync = state.getSavedProvider(new_id).?;
+    syncProviderToInstances(allocator, state, paths, sp_for_sync.provider, sp_for_sync.api_key, sp_for_sync.base_url);
+
     // Return the saved provider
     const sp = state.getSavedProvider(new_id).?;
     var buf = std.array_list.Managed(u8).init(allocator);
@@ -258,6 +262,8 @@ pub fn handleUpdate(
     try state.save();
 
     const sp = state.getSavedProvider(id).?;
+    syncProviderToInstances(allocator, state, paths, sp.provider, sp.api_key, sp.base_url);
+
     var buf = std.array_list.Managed(u8).init(allocator);
     errdefer buf.deinit();
     try appendProviderJson(&buf, sp, true);
@@ -480,6 +486,101 @@ pub fn handleProbeModels(allocator: std.mem.Allocator, target: []const u8) ![]co
     return buf.toOwnedSlice();
 }
 
+// ─── Instance Config Sync ────────────────────────────────────────────────────
+
+/// Sync provider credentials (api_key + base_url) into every registered
+/// nullclaw instance's config.json.  Best-effort: per-instance errors are
+/// silently swallowed so a corrupt config on one instance doesn't block others.
+fn syncProviderToInstances(
+    allocator: std.mem.Allocator,
+    state: *state_mod.State,
+    paths: paths_mod.Paths,
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+) void {
+    const names = state.instanceNames("nullclaw") catch return;
+    defer if (names) |list| allocator.free(list);
+    const list = names orelse return;
+    for (list) |name| {
+        syncProviderToInstance(allocator, paths, name, provider, api_key, base_url) catch {};
+    }
+}
+
+fn syncProviderToInstance(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    instance_name: []const u8,
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+) !void {
+    const config_path = try paths.instanceConfig(allocator, "nullclaw", instance_name);
+    defer allocator.free(config_path);
+
+    // Read existing config or fall back to empty object if the file is missing.
+    const contents = blk: {
+        const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk try allocator.dupe(u8, "{}"),
+            else => return err,
+        };
+        defer file.close();
+        break :blk try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
+    };
+    defer allocator.free(contents);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    const ja = parsed.arena.allocator();
+
+    if (parsed.value != .object) return error.InvalidConfig;
+    const root = &parsed.value.object;
+
+    // Navigate/create: root → models → providers → <provider>
+    const models_obj = try ensureObjectInMap(ja, root, "models");
+    const providers_obj = try ensureObjectInMap(ja, models_obj, "providers");
+    const provider_obj = try ensureObjectInMap(ja, providers_obj, provider);
+
+    // Set api_key (string bytes are state-owned, outlive the arena)
+    try provider_obj.put(ja, "api_key", .{ .string = api_key });
+
+    // Set base_url only when present (mirrors writeMinimalProviderConfig behaviour)
+    if (base_url.len > 0) {
+        try provider_obj.put(ja, "base_url", .{ .string = base_url });
+    }
+
+    // Serialize and write back
+    const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
+    defer allocator.free(rendered);
+
+    const out = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer out.close();
+    try out.writeAll(rendered);
+    try out.writeAll("\n");
+}
+
+fn ensureObjectInMap(
+    allocator: std.mem.Allocator,
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.ObjectMap {
+    const gop = try obj.getOrPut(allocator, key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .object = .empty };
+        return &gop.value_ptr.object;
+    }
+    if (gop.value_ptr.* != .object) {
+        gop.value_ptr.* = .{ .object = .empty };
+    }
+    return &gop.value_ptr.object;
+}
+
 fn findProviderProbeComponent(allocator: std.mem.Allocator, state: *state_mod.State) ?[]const u8 {
     const names = state.instanceNames("nullclaw") catch return null;
     defer if (names) |list| allocator.free(list);
@@ -668,16 +769,16 @@ test "handleList includes base_url for openai-compatible provider" {
     defer s.deinit();
 
     try s.addSavedProvider(.{
-        .provider = "infini-ai",
-        .api_key = "sk-cp-test",
-        .model = "minimax-m2.7",
-        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+        .provider = "custom-llm",
+        .api_key = "sk-test-key",
+        .model = "test-model",
+        .base_url = "https://example.com/v1",
     });
 
     const json = try handleList(allocator, &s, true);
     defer allocator.free(json);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"https://cloud.infini-ai.com/maas/coding/v1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\":\"infini-ai\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"https://example.com/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\":\"custom-llm\"") != null);
 }
 
 test "handleList includes empty base_url for standard provider" {
@@ -797,13 +898,13 @@ test "handleCreate with base_url saves without requiring nullclaw probe" {
     const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
 
     const body =
-        \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}
+        \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:19999/v1"}
     ;
     const json = try handleCreate(allocator, body, &s, paths);
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"http://127.0.0.1:5801/v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"base_url\":\"http://127.0.0.1:19999/v1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"provider\":\"local-llm\"") != null);
     try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
 }
@@ -839,7 +940,7 @@ test "handleCreate without base_url requires nullclaw instance" {
 test "handleValidate for custom provider uses models probe (not nullclaw)" {
     // Regression: handleValidate for a custom provider must not require a nullclaw
     // instance — it uses the /models probe directly. The probe will fail here
-    // (no server at 5801) but the key point is we get a live_ok + reason response,
+    // (no server at 19999) but the key point is we get a live_ok + reason response,
     // NOT the old "custom endpoint — validation via /models not yet available" placeholder.
     const allocator = std.testing.allocator;
     const tmp = "/tmp/nullhub-provider-test-validate-custom";
@@ -856,7 +957,7 @@ test "handleValidate for custom provider uses models probe (not nullclaw)" {
     try s.addSavedProvider(.{
         .provider = "local-llm",
         .api_key = "sk-test",
-        .base_url = "http://127.0.0.1:5801/v1",
+        .base_url = "http://127.0.0.1:19999/v1",
     });
 
     const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
@@ -868,7 +969,7 @@ test "handleValidate for custom provider uses models probe (not nullclaw)" {
     try std.testing.expect(std.mem.indexOf(u8, json, "not yet available") == null);
     // No nullclaw probe: no "Install a nullclaw instance" error expected.
     try std.testing.expect(std.mem.indexOf(u8, json, "Install a nullclaw instance") == null);
-    // Probe should fail (5801 is not running in tests)
+    // Probe should fail (19999 is not running in tests)
     try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":false") != null);
 }
 
@@ -926,7 +1027,7 @@ test "handleProbeModels returns error when base_url missing" {
 
 test "handleProbeModels returns error when api_key missing" {
     const allocator = std.testing.allocator;
-    const json = try handleProbeModels(allocator, "/api/providers/probe-models?base_url=http%3A%2F%2F127.0.0.1%3A5801%2Fv1");
+    const json = try handleProbeModels(allocator, "/api/providers/probe-models?base_url=http%3A%2F%2F127.0.0.1%3A19999%2Fv1");
     defer allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "api_key") != null);
@@ -973,4 +1074,111 @@ test "handleCreate custom provider records last_validation_at after probe attemp
     try std.testing.expect(sp.last_validation_at.len > 0);
     // last_validation_ok must be false (port 19998 not running)
     try std.testing.expect(!sp.last_validation_ok);
+}
+
+// ─── syncProviderToInstances tests ───────────────────────────────────────────
+
+fn makeInstanceDir(tmp: []const u8) !void {
+    var buf: [512]u8 = undefined;
+    const instances = try std.fmt.bufPrint(&buf, "{s}/instances", .{tmp});
+    std_compat.fs.makeDirAbsolute(instances) catch |e| if (e != error.PathAlreadyExists) return e;
+    const nullclaw = try std.fmt.bufPrint(&buf, "{s}/instances/nullclaw", .{tmp});
+    std_compat.fs.makeDirAbsolute(nullclaw) catch |e| if (e != error.PathAlreadyExists) return e;
+    const default = try std.fmt.bufPrint(&buf, "{s}/instances/nullclaw/default", .{tmp});
+    std_compat.fs.makeDirAbsolute(default) catch |e| if (e != error.PathAlreadyExists) return e;
+}
+
+test "syncProviderToInstances writes provider creds into instance config" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-sync-test-write";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
+
+    try makeInstanceDir(tmp);
+
+    // Write an existing config with an unrelated key
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    defer allocator.free(config_path);
+    {
+        const f = try std_compat.fs.createFileAbsolute(config_path, .{});
+        defer f.close();
+        try f.writeAll("{\"port\":9100}\n");
+    }
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    syncProviderToInstances(allocator, &s, paths, "custom-llm", "sk-abc123", "https://example.com/v1");
+
+    // Read back and verify credentials are present
+    const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer f2.close();
+    const result = try f2.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"custom-llm\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"sk-abc123\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"https://example.com/v1\"") != null);
+    // Existing key must not be clobbered
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"port\"") != null);
+}
+
+test "syncProviderToInstances omits base_url when empty" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-sync-test-no-baseurl";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
+
+    try makeInstanceDir(tmp);
+
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    defer allocator.free(config_path);
+    {
+        const f = try std_compat.fs.createFileAbsolute(config_path, .{});
+        defer f.close();
+        try f.writeAll("{}\n");
+    }
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-or-key", "");
+
+    const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer f2.close();
+    const result = try f2.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"openrouter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"sk-or-key\"") != null);
+    // base_url must not appear when empty
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"base_url\"") == null);
+}
+
+test "syncProviderToInstances is no-op when no nullclaw instances" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-sync-test-noop";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    // No nullclaw instances registered
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    // Should not panic or error when there are no instances
+    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-key", "");
 }
