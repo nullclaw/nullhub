@@ -210,7 +210,13 @@ pub fn install(
     // If the primary provider is openai-compatible (has a base_url), strip it from the answers
     // before passing to the binary — the binary only knows standard provider names.  We will
     // inject the custom provider credentials into the generated config afterwards.
-    const custom_provider_result = extractCustomProvider(allocator, opts.answers_json) catch null;
+    const custom_provider_result = extractCustomProvider(allocator, opts.answers_json) catch |err| blk: {
+        std.debug.print("[orchestrator] extractCustomProvider error: {s}\n", .{@errorName(err)});
+        break :blk null;
+    };
+    if (custom_provider_result == null) {
+        std.debug.print("[orchestrator] no custom provider detected in answers\n", .{});
+    }
     defer if (custom_provider_result) |cp| {
         allocator.free(cp.custom.provider);
         allocator.free(cp.custom.api_key);
@@ -621,13 +627,31 @@ fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struc
         .base_url = try allocator.dupe(u8, base_url),
     };
 
-    // Clear the provider-specific fields so the binary receives no provider.
-    try root.put(allocator, "provider", .{ .string = "" });
+    // Replace provider-specific fields with a known standard provider so the
+    // binary generates a valid base config without failing on the custom name.
+    // The real credentials are injected into the config file after the binary runs.
+    try root.put(allocator, "provider", .{ .string = "openai" });
     try root.put(allocator, "api_key", .{ .string = "" });
     try root.put(allocator, "model", .{ .string = "" });
     try root.put(allocator, "base_url", .{ .string = "" });
 
+    // Also neutralise the `providers` array that the wizard sends alongside the
+    // top-level fields — nullclaw reads from both, and leaving the custom name
+    // in the array is what caused "UNKNOWN PROVIDER '<name>'" errors.
+    if (root.getPtr("providers")) |arr_val| {
+        if (arr_val.* == .array) {
+            for (arr_val.array.items) |*item| {
+                if (item.* != .object) continue;
+                try item.object.put(allocator, "provider", .{ .string = "openai" });
+                try item.object.put(allocator, "api_key", .{ .string = "" });
+                try item.object.put(allocator, "model", .{ .string = "" });
+                try item.object.put(allocator, "base_url", .{ .string = "" });
+            }
+        }
+    }
+
     const stripped = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
+    std.debug.print("[orchestrator] custom provider '{s}' detected; stripped answers: {s}\n", .{ cp.provider, stripped });
     return .{ .custom = cp, .stripped_json = stripped };
 }
 
