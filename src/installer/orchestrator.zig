@@ -721,6 +721,30 @@ fn patchProviderIntoConfig(
         const defaults_obj = try ensureObjectInMap(ja, agents_obj, "defaults");
         const model_obj = try ensureObjectInMap(ja, defaults_obj, "model");
         try model_obj.put(ja, "primary", .{ .string = primary });
+
+        // Custom providers (with a base_url) may expose models whose vision
+        // probe hangs indefinitely, blocking the gateway HTTP handler during
+        // startup and causing the supervisor health-check to time out.  Adding
+        // the model to vision_disabled_models skips the probe entirely.
+        if (base_url.len > 0) {
+            const agent_obj = try ensureObjectInMap(ja, root, "agent");
+            const vd_gop = try agent_obj.getOrPut(ja, "vision_disabled_models");
+            if (!vd_gop.found_existing) {
+                vd_gop.value_ptr.* = .{ .array = std.json.Array.init(ja) };
+            }
+            if (vd_gop.value_ptr.* == .array) {
+                var already_present = false;
+                for (vd_gop.value_ptr.array.items) |item| {
+                    if (item == .string and std.mem.eql(u8, item.string, model)) {
+                        already_present = true;
+                        break;
+                    }
+                }
+                if (!already_present) {
+                    try vd_gop.value_ptr.array.append(.{ .string = model });
+                }
+            }
+        }
     }
 
     const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
