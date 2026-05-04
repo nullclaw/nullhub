@@ -693,6 +693,20 @@ fn patchProviderIntoConfig(
     if (parsed.value != .object) return error.InvalidConfig;
     const root = &parsed.value.object;
 
+    // The nullclaw-dev-local binary panics with "programmer bug caused syscall
+    // error: AGAIN" when a2a.enabled is false.  The --from-json generator
+    // always emits enabled:false for fresh installs, so patch it to true here.
+    // Leave all other a2a fields (name, description, url, version) as-is.
+    if (root.getPtr("a2a")) |a2a_val| {
+        if (a2a_val.* == .object) {
+            if (a2a_val.object.getPtr("enabled")) |enabled_val| {
+                if (enabled_val.* == .bool and !enabled_val.bool) {
+                    enabled_val.* = .{ .bool = true };
+                }
+            }
+        }
+    }
+
     const models_obj = try ensureObjectInMap(ja, root, "models");
     const providers_obj = try ensureObjectInMap(ja, models_obj, "providers");
     const provider_obj = try ensureObjectInMap(ja, providers_obj, provider);
@@ -718,10 +732,12 @@ fn patchProviderIntoConfig(
         const model_obj = try ensureObjectInMap(ja, defaults_obj, "model");
         try model_obj.put(ja, "primary", .{ .string = primary });
 
-        // Custom providers (with a base_url) may expose models whose vision
-        // probe hangs indefinitely, blocking the gateway HTTP handler during
-        // startup and causing the supervisor health-check to time out.  Adding
-        // the model to vision_disabled_models skips the probe entirely.
+        // Custom providers (with a base_url) may expose text-only models.
+        // vision_disabled_models is used at inference time to strip image
+        // markers from messages sent to the model; it does not suppress the
+        // startup vision probe.  We still populate it so that once the probe
+        // has run (and the instance is stable), vision content is stripped
+        // correctly on every subsequent request.
         if (base_url.len > 0) {
             const agent_obj = try ensureObjectInMap(ja, root, "agent");
             const vd_gop = try agent_obj.getOrPut(ja, "vision_disabled_models");
@@ -1220,4 +1236,57 @@ test "injectHomeField adds home to JSON object" {
     defer allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"home\":\"/tmp/inst\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"provider\":\"openrouter\"") != null);
+}
+
+test "patchProviderIntoConfig fixes a2a.enabled false to true" {
+    const allocator = std.testing.allocator;
+    const tmp_dir = "/tmp/test-patch-a2a";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp_dir});
+    defer allocator.free(config_path);
+
+    // Simulate the config that --from-json generates: a2a.enabled = false.
+    const initial = "{\"a2a\":{\"enabled\":false,\"url\":\"\"},\"models\":{\"providers\":{}}}";
+    try writeFile(config_path, initial);
+
+    try patchProviderIntoConfig(allocator, config_path, "myprovider", "sk-test", "", "gpt-4o");
+
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(contents);
+
+    // a2a.enabled must be patched to true.
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"enabled\": true") != null);
+    // Provider and api_key must be written.
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"myprovider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"sk-test\"") != null);
+}
+
+test "patchProviderIntoConfig leaves a2a.enabled true unchanged" {
+    const allocator = std.testing.allocator;
+    const tmp_dir = "/tmp/test-patch-a2a-true";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp_dir});
+    defer allocator.free(config_path);
+
+    const initial = "{\"a2a\":{\"enabled\":true,\"url\":\"http://127.0.0.1:5111\"},\"models\":{\"providers\":{}}}";
+    try writeFile(config_path, initial);
+
+    try patchProviderIntoConfig(allocator, config_path, "myprovider", "sk-test", "", "gpt-4o");
+
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(contents);
+
+    // enabled stays true, url is preserved.
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"enabled\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "http://127.0.0.1:5111") != null);
 }
