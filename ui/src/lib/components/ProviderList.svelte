@@ -40,8 +40,10 @@
 
   onMount(async () => {
     try {
-      const data = await api.getSavedProviders();
+      // Fetch revealed keys upfront so the "Use Saved" dropdown is instant on click.
+      const data = await api.getSavedProviders(true);
       savedProviders = data.providers || [];
+      savedProvidersRevealed = true;
     } catch {}
   });
 
