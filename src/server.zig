@@ -55,7 +55,10 @@ pub const Server = struct {
         defer allocator.free(state_path);
 
         const state = try allocator.create(state_mod.State);
-        state.* = state_mod.State.load(allocator, state_path) catch state_mod.State.init(allocator, state_path);
+        state.* = state_mod.State.load(allocator, state_path) catch |err| blk: {
+            std.log.err("state.json load failed ({s}): starting with empty state — YOUR DATA MAY BE AT RISK", .{@errorName(err)});
+            break :blk state_mod.State.init(allocator, state_path);
+        };
 
         orchestrator.syncLocalUiModules(allocator, paths);
 

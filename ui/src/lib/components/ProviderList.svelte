@@ -187,7 +187,7 @@
   }
 
   function modelKey(entry: ProviderEntry) {
-    return `${entry.provider}\u0000${entry.api_key}`;
+    return `${entry.provider}\u0000${entry.api_key}\u0000${entry.base_url}`;
   }
 
   function getModelOptions(entry: ProviderEntry) {
@@ -203,7 +203,11 @@
   }
 
   async function ensureModelOptions(entry: ProviderEntry) {
-    if (!component || !entry.provider) return;
+    if (!entry.provider) return;
+    // openai-compatible requires a base_url to probe — skip until one is entered
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE && !entry.base_url) return;
+    // standard providers require a component (binary) to list models
+    if (entry.provider !== OPENAI_COMPATIBLE_VALUE && !component) return;
 
     const key = modelKey(entry);
     if (modelLoadingByKey[key] || modelLoadedByKey[key]) return;
@@ -212,12 +216,19 @@
     modelErrorsByKey = { ...modelErrorsByKey, [key]: "" };
 
     try {
-      const data = await api.getWizardModels(component, entry.provider, entry.api_key || "");
-      const models = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.models)
-          ? data.models
-          : [];
+      let models: string[];
+      if (entry.provider === OPENAI_COMPATIBLE_VALUE && entry.base_url) {
+        // Custom OpenAI-compatible: probe the /models endpoint directly
+        const data = await api.probeProviderModels(entry.base_url, entry.api_key || "");
+        models = data.live_ok && Array.isArray(data.models) ? data.models : [];
+      } else {
+        const data = await api.getWizardModels(component, entry.provider, entry.api_key || "");
+        models = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.models)
+            ? data.models
+            : [];
+      }
       const normalized = models.filter((model): model is string => typeof model === "string");
       modelOptionsByKey = { ...modelOptionsByKey, [key]: normalized };
       modelLoadedByKey = { ...modelLoadedByKey, [key]: true };
