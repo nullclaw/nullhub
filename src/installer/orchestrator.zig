@@ -221,6 +221,7 @@ pub fn install(
         allocator.free(cp.custom.provider);
         allocator.free(cp.custom.api_key);
         allocator.free(cp.custom.base_url);
+        allocator.free(cp.custom.model);
         allocator.free(cp.stripped_json);
     };
     const answers_for_binary = if (custom_provider_result) |cp| cp.stripped_json else opts.answers_json;
@@ -258,7 +259,7 @@ pub fn install(
         const config_path = p.instanceConfig(allocator, opts.component, opts.instance_name) catch null;
         defer if (config_path) |path| allocator.free(path);
         if (config_path) |path| {
-            patchProviderIntoConfig(allocator, path, cp.custom.provider, cp.custom.api_key, cp.custom.base_url) catch |err| {
+            patchProviderIntoConfig(allocator, path, cp.custom.provider, cp.custom.api_key, cp.custom.base_url, cp.custom.model) catch |err| {
                 std.debug.print("warning: failed to inject custom provider into config: {s}\n", .{@errorName(err)});
             };
         }
@@ -581,6 +582,7 @@ const CustomProvider = struct {
     provider: []const u8,
     api_key: []const u8,
     base_url: []const u8,
+    model: []const u8,
 };
 
 /// If the wizard answers contain a top-level `base_url` (indicating the user
@@ -619,12 +621,17 @@ fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struc
         .string => |s| s,
         else => "",
     };
+    const model = switch (root.get("model") orelse .null) {
+        .string => |s| s,
+        else => "",
+    };
 
     // Duplicate the strings before parsed is deinitialized.
     const cp = CustomProvider{
         .provider = try allocator.dupe(u8, provider),
         .api_key = try allocator.dupe(u8, api_key),
         .base_url = try allocator.dupe(u8, base_url),
+        .model = try allocator.dupe(u8, model),
     };
 
     // Replace provider-specific fields with a known standard provider so the
@@ -657,14 +664,18 @@ fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struc
 
 /// Patch provider credentials into an existing instance config file.
 /// Navigates/creates `models → providers → <provider>` and sets `api_key`
-/// (always) and `base_url` (when non-empty).  Best-effort: errors are returned
-/// so the caller can decide whether to surface them.
+/// (always) and `base_url` (when non-empty).  Also removes the `openai`
+/// placeholder left by `extractCustomProvider`, and sets
+/// `agents → defaults → model → primary` to `"<provider>/<model>"` when
+/// model is non-empty.  Best-effort: errors are returned so the caller can
+/// decide whether to surface them.
 fn patchProviderIntoConfig(
     allocator: std.mem.Allocator,
     config_path: []const u8,
     provider: []const u8,
     api_key: []const u8,
     base_url: []const u8,
+    model: []const u8,
 ) !void {
     const contents = blk: {
         const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
@@ -693,6 +704,23 @@ fn patchProviderIntoConfig(
     try provider_obj.put(ja, "api_key", .{ .string = api_key });
     if (base_url.len > 0) {
         try provider_obj.put(ja, "base_url", .{ .string = base_url });
+    }
+
+    // Remove the "openai" placeholder that extractCustomProvider injected so
+    // the binary could generate a valid base config.  Only remove it when the
+    // real provider name differs (avoids accidentally deleting a genuine openai
+    // entry if someone names their custom provider "openai").
+    if (!std.mem.eql(u8, provider, "openai")) {
+        _ = providers_obj.orderedRemove("openai");
+    }
+
+    // Patch agents → defaults → model → primary to "<provider>/<model>".
+    if (model.len > 0) {
+        const primary = try std.fmt.allocPrint(ja, "{s}/{s}", .{ provider, model });
+        const agents_obj = try ensureObjectInMap(ja, root, "agents");
+        const defaults_obj = try ensureObjectInMap(ja, agents_obj, "defaults");
+        const model_obj = try ensureObjectInMap(ja, defaults_obj, "model");
+        try model_obj.put(ja, "primary", .{ .string = primary });
     }
 
     const rendered = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{
