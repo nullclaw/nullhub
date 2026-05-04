@@ -3,6 +3,7 @@
   import ProviderList from "./ProviderList.svelte";
   import ChannelList from "./ChannelList.svelte";
   import { api } from "$lib/api/client";
+  import { OPENAI_COMPATIBLE_VALUE } from "$lib/providers";
 
   let {
     component = "",
@@ -183,15 +184,38 @@
     providerValidationResults = [];
 
     try {
-      const providers = JSON.parse(answers["_providers"] || "[]");
-      if (providers.length === 0) {
+      const rawProviders: any[] = JSON.parse(answers["_providers"] || "[]");
+      if (rawProviders.length === 0) {
         validationError = "Add at least one provider";
         return false;
       }
-      const result = await api.validateProviders(component, providers);
-      providerValidationResults = result.results || [];
-      validationWarning = result.saved_providers_warning || "";
-      return providerValidationResults.every((r: any) => r.live_ok);
+
+      const allResults: Array<{ provider: string; live_ok: boolean; reason: string }> = [];
+      const standardBatch: any[] = [];
+
+      for (const p of rawProviders) {
+        if (p.provider === OPENAI_COMPATIBLE_VALUE && p.base_url) {
+          // Custom OpenAI-compatible endpoint: validate via HTTP probe, not the nullclaw binary.
+          // The binary doesn't know the "openai-compatible" provider name.
+          try {
+            const probe = await api.probeProviderModels(p.base_url, p.api_key || "");
+            allResults.push({ provider: p.provider, live_ok: probe.live_ok, reason: probe.reason || "" });
+          } catch {
+            allResults.push({ provider: p.provider, live_ok: false, reason: "probe_request_failed" });
+          }
+        } else {
+          standardBatch.push(p);
+        }
+      }
+
+      if (standardBatch.length > 0) {
+        const batchResult = await api.validateProviders(component, standardBatch);
+        allResults.push(...(batchResult.results || []));
+        if (batchResult.saved_providers_warning) validationWarning = batchResult.saved_providers_warning;
+      }
+
+      providerValidationResults = allResults;
+      return allResults.every((r) => r.live_ok);
     } catch (e) {
       validationError = `Validation failed: ${(e as Error).message}`;
       return false;
