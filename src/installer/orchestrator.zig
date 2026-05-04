@@ -161,12 +161,19 @@ pub fn install(
                 resolved_version = allocator.dupe(u8, release.value.tag_name) catch return error.FetchFailed;
                 const bin_path = p.binary(allocator, opts.component, resolved_version.?) catch return error.DownloadFailed;
                 resolved_bin_path = bin_path;
-                downloader.download(allocator, asset.browser_download_url, bin_path) catch {
-                    allocator.free(bin_path);
-                    resolved_bin_path = null;
-                    allocator.free(resolved_version.?);
-                    resolved_version = null;
-                };
+                // Skip the download if the binary is already cached on disk.
+                const already_cached = if (std_compat.fs.openFileAbsolute(bin_path, .{})) |f| blk: {
+                    f.close();
+                    break :blk true;
+                } else |_| false;
+                if (!already_cached) {
+                    downloader.download(allocator, asset.browser_download_url, bin_path) catch {
+                        allocator.free(bin_path);
+                        resolved_bin_path = null;
+                        allocator.free(resolved_version.?);
+                        resolved_version = null;
+                    };
+                }
             }
         } else |_| {}
     }
