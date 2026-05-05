@@ -12,8 +12,23 @@ PORT=19800  # Use high port to avoid conflicts
 BASE="http://127.0.0.1:$PORT"
 TEST_HOME=$(mktemp -d "${TMPDIR:-/tmp}/nullhub-e2e.XXXXXX")
 SERVER_LOG="$TEST_HOME/nullhub-server.log"
+SERVER_PID=""
+
+# Cleanup on exit
+cleanup() {
+    if [ -n "${SERVER_PID:-}" ]; then
+        echo "Stopping server..."
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TEST_HOME"
+}
+trap cleanup EXIT
 
 server_is_running() {
+    if [ -z "${SERVER_PID:-}" ]; then
+        return 1
+    fi
     kill -0 "$SERVER_PID" 2>/dev/null
 }
 
@@ -49,17 +64,6 @@ echo "Starting nullhub on port $PORT..."
 HOME="$TEST_HOME" ./zig-out/bin/nullhub serve --port "$PORT" --no-open >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
-# Cleanup on exit
-cleanup() {
-    echo "Stopping server..."
-    if [ -n "${SERVER_PID:-}" ]; then
-        kill "$SERVER_PID" 2>/dev/null || true
-        wait "$SERVER_PID" 2>/dev/null || true
-    fi
-    rm -rf "$TEST_HOME"
-}
-trap cleanup EXIT
-
 # Wait for server to be ready (retry loop instead of fixed sleep)
 echo "Waiting for server..."
 for i in $(seq 1 20); do
@@ -82,16 +86,25 @@ assert_status() {
     local method="$3"
     local url="$4"
     local body="${5:-}"
+    local actual=""
+    local curl_exit=0
 
     fail_if_server_exited "$description (before request)"
 
+    set +e
     if [ -n "$body" ]; then
         actual=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" -H "Content-Type: application/json" -d "$body" "$url")
     else
         actual=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url")
     fi
+    curl_exit=$?
+    set -e
 
     fail_if_server_exited "$description (after request)"
+
+    if [ "$curl_exit" -ne 0 ]; then
+        actual="CURL_ERROR($curl_exit, HTTP ${actual:-000})"
+    fi
 
     if [ "$actual" = "$expected" ]; then
         echo -e "${GREEN}PASS${NC}: $description (HTTP $actual)"
@@ -107,11 +120,22 @@ assert_json_field() {
     local url="$2"
     local field="$3"
     local expected="$4"
+    local response=""
+    local curl_exit=0
+    local actual=""
 
     fail_if_server_exited "$description (before request)"
-    local response=$(curl -s "$url")
+    set +e
+    response=$(curl -s "$url")
+    curl_exit=$?
+    set -e
     fail_if_server_exited "$description (after request)"
-    local actual=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)$field)" 2>/dev/null || echo "PARSE_ERROR")
+
+    if [ "$curl_exit" -ne 0 ]; then
+        actual="CURL_ERROR($curl_exit)"
+    else
+        actual=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)$field)" 2>/dev/null || echo "PARSE_ERROR")
+    fi
 
     if [ "$actual" = "$expected" ]; then
         echo -e "${GREEN}PASS${NC}: $description ($field = $actual)"
