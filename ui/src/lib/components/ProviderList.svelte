@@ -12,6 +12,8 @@
 
   const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
   const MODEL_RESULTS_LIMIT = 80;
+  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
+  const OPENAI_COMPATIBLE_OPTION = { value: OPENAI_COMPATIBLE_VALUE, label: "OpenAI Compatible (custom endpoint)" };
 
   type ProviderOption = {
     value: string;
@@ -23,6 +25,8 @@
     provider: string;
     api_key: string;
     model: string;
+    base_url: string;
+    provider_name: string;
   };
 
   let savedProviders = $state<any[]>([]);
@@ -34,6 +38,11 @@
   let modelLoadedByKey = $state<Record<string, boolean>>({});
   let modelOptionsByKey = $state<Record<string, string[]>>({});
   let modelErrorsByKey = $state<Record<string, string>>({});
+  let providerOptions = $derived(
+    providers.some((p: any) => p.value === OPENAI_COMPATIBLE_VALUE)
+      ? providers
+      : [...providers, OPENAI_COMPATIBLE_OPTION],
+  );
 
   const modelBlurTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -72,14 +81,20 @@
   }
 
   function isPlaceholderEntry(entry: ProviderEntry) {
-    return entry.api_key.trim().length === 0 && entry.model.trim().length === 0;
+    return entry.api_key.trim().length === 0 &&
+      entry.model.trim().length === 0 &&
+      (entry.base_url || "").trim().length === 0 &&
+      (entry.provider_name || "").trim().length === 0;
   }
 
   function useSaved(sp: any) {
+    const isCompat = sp.base_url && sp.base_url.length > 0;
     const savedEntry = {
-      provider: sp.provider,
+      provider: isCompat ? OPENAI_COMPATIBLE_VALUE : sp.provider,
       api_key: sp.api_key,
       model: sp.model || "",
+      base_url: sp.base_url || "",
+      provider_name: isCompat ? sp.provider : "",
     };
 
     if (entries.length === 1 && isPlaceholderEntry(entries[0])) {
@@ -101,7 +116,11 @@
     try {
       const parsed = JSON.parse(value);
       if (Array.isArray(parsed)) {
-        entries = parsed;
+        entries = parsed.map((entry: any) => ({
+          ...entry,
+          base_url: entry.base_url || "",
+          provider_name: entry.provider_name || "",
+        }));
       }
     } catch {
       entries = [];
@@ -114,11 +133,11 @@
 
   function addEntry() {
     // Find recommended provider or first available
-    const rec = providers.find((p: any) => p.recommended);
-    const defaultProvider = rec?.value || providers[0]?.value || "";
+    const rec = providerOptions.find((p: any) => p.recommended);
+    const defaultProvider = rec?.value || providerOptions[0]?.value || "";
     entries = [
       ...entries,
-      { provider: defaultProvider, api_key: "", model: "" },
+      { provider: defaultProvider, api_key: "", model: "", base_url: "", provider_name: "" },
     ];
     emitChange();
   }
@@ -157,6 +176,17 @@
     emitChange();
   }
 
+  function updateProvider(index: number, provider: string) {
+    entries = entries.map((e: any, i: number) => {
+      if (i !== index) return e;
+      if (provider === OPENAI_COMPATIBLE_VALUE) {
+        return { ...e, provider, base_url: e.base_url || "", provider_name: e.provider_name || "" };
+      }
+      return { ...e, provider, base_url: "", provider_name: "" };
+    });
+    emitChange();
+  }
+
   function isLocal(provider: string) {
     return LOCAL_PROVIDERS.includes(provider);
   }
@@ -181,7 +211,18 @@
   }
 
   function modelKey(entry: ProviderEntry) {
-    return `${entry.provider}\u0000${entry.api_key}`;
+    return `${actualProvider(entry)}\u0000${entry.base_url || ""}\u0000${entry.api_key}`;
+  }
+
+  function actualProvider(entry: ProviderEntry) {
+    return entry.provider === OPENAI_COMPATIBLE_VALUE
+      ? (entry.provider_name || "").trim()
+      : entry.provider;
+  }
+
+  function validationResultForEntry(entry: ProviderEntry) {
+    const provider = actualProvider(entry) || entry.provider;
+    return validationResults.find((r: any) => r.provider === provider || r.provider === entry.provider);
   }
 
   function getModelOptions(entry: ProviderEntry) {
@@ -198,6 +239,7 @@
 
   async function ensureModelOptions(entry: ProviderEntry) {
     if (!component || !entry.provider) return;
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE) return;
 
     const key = modelKey(entry);
     if (modelLoadingByKey[key] || modelLoadedByKey[key]) return;
@@ -206,7 +248,7 @@
     modelErrorsByKey = { ...modelErrorsByKey, [key]: "" };
 
     try {
-      const data = await api.getWizardModels(component, entry.provider, entry.api_key || "");
+      const data = await api.getWizardModels(component, actualProvider(entry), entry.api_key || "");
       const models = Array.isArray(data)
         ? data
         : Array.isArray(data?.models)
@@ -291,6 +333,9 @@
   }
 
   function modelPlaceholder(entry: ProviderEntry) {
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+      return "e.g. gpt-4o-mini";
+    }
     if (entry.provider === "codex-cli" || entry.provider === "openai-codex") {
       return "e.g. gpt-5.4";
     }
@@ -303,6 +348,9 @@
     }
     if (entry.provider === "openai-codex") {
       return "Uses ChatGPT/Codex auth from ~/.codex/auth.json. No API key required here.";
+    }
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+      return "Type a model name manually.";
     }
     return "Click to load models, then filter as you type.";
   }
@@ -318,7 +366,7 @@
     <div class="provider-row">
       <div class="provider-row-header">
         <span class="provider-number">{i + 1}.</span>
-        {#each [validationResults.find((r: any) => r.provider === entry.provider)] as result}
+        {#each [validationResultForEntry(entry)] as result}
           {#if result}
             <span class="status-dot" class:ok={result.live_ok} class:error={!result.live_ok}
               title={result.reason}></span>
@@ -326,9 +374,9 @@
         {/each}
         <select
           value={entry.provider}
-          onchange={(e) => updateEntry(i, "provider", e.currentTarget.value)}
+          onchange={(e) => updateProvider(i, e.currentTarget.value)}
         >
-          {#each providers as opt}
+          {#each providerOptions as opt}
             <option value={opt.value}
               >{formatRecommendedLabel(opt.label, opt.recommended)}</option
             >
@@ -364,6 +412,29 @@
             value={entry.api_key}
             oninput={(e) => updateEntry(i, "api_key", e.currentTarget.value)}
             placeholder="Enter API key..."
+          />
+        </div>
+      {/if}
+
+      {#if entry.provider === OPENAI_COMPATIBLE_VALUE}
+        <div class="provider-field">
+          <label for={`provider-name-${i}`}>Provider Name</label>
+          <input
+            id={`provider-name-${i}`}
+            type="text"
+            value={entry.provider_name}
+            oninput={(e) => updateEntry(i, "provider_name", e.currentTarget.value)}
+            placeholder="e.g. infini-ai, xiaomi-mimo"
+          />
+        </div>
+        <div class="provider-field">
+          <label for={`provider-base-url-${i}`}>Base URL</label>
+          <input
+            id={`provider-base-url-${i}`}
+            type="text"
+            value={entry.base_url}
+            oninput={(e) => updateEntry(i, "base_url", e.currentTarget.value)}
+            placeholder="https://api.example.com/v1"
           />
         </div>
       {/if}
