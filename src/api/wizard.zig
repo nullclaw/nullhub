@@ -651,7 +651,7 @@ pub fn handleValidateProviders(
             const now = providers_api.nowIso8601(allocator) catch "";
             defer if (now.len > 0) allocator.free(now);
 
-            if (state.findSavedProviderId(prov.provider, prov.api_key, prov.model)) |existing_id| {
+            if (state.findSavedProviderId(prov.provider, prov.api_key, prov.model, prov.base_url)) |existing_id| {
                 if (now.len > 0) {
                     _ = state.updateSavedProvider(existing_id, .{
                         .validated_at = now,

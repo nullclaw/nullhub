@@ -651,11 +651,12 @@ pub const State = struct {
         return false;
     }
 
-    pub fn hasSavedProvider(self: *State, provider: []const u8, api_key: []const u8, model: []const u8) bool {
+    pub fn hasSavedProvider(self: *State, provider: []const u8, api_key: []const u8, model: []const u8, base_url: []const u8) bool {
         for (self.saved_providers.items) |sp| {
             if (std.mem.eql(u8, sp.provider, provider) and
                 std.mem.eql(u8, sp.api_key, api_key) and
-                std.mem.eql(u8, sp.model, model))
+                std.mem.eql(u8, sp.model, model) and
+                std.mem.eql(u8, sp.base_url, base_url))
             {
                 return true;
             }
@@ -663,11 +664,12 @@ pub const State = struct {
         return false;
     }
 
-    pub fn findSavedProviderId(self: *State, provider: []const u8, api_key: []const u8, model: []const u8) ?u32 {
+    pub fn findSavedProviderId(self: *State, provider: []const u8, api_key: []const u8, model: []const u8, base_url: []const u8) ?u32 {
         for (self.saved_providers.items) |sp| {
             if (std.mem.eql(u8, sp.provider, provider) and
                 std.mem.eql(u8, sp.api_key, api_key) and
-                std.mem.eql(u8, sp.model, model))
+                std.mem.eql(u8, sp.model, model) and
+                std.mem.eql(u8, sp.base_url, base_url))
             {
                 return sp.id;
             }
@@ -1523,6 +1525,33 @@ test "multiple openai-compatible providers with different names" {
     try std.testing.expectEqualStrings("another-llm", providers[2].provider);
     try std.testing.expectEqualStrings("https://example.com/v1", providers[0].base_url);
     try std.testing.expectEqualStrings("https://other.example.com/v1", providers[2].base_url);
+}
+
+test "find saved provider distinguishes base_url" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "custom-llm",
+        .api_key = "key1",
+        .model = "test-model",
+        .base_url = "https://one.example.com/v1",
+    });
+    try s.addSavedProvider(.{
+        .provider = "custom-llm",
+        .api_key = "key1",
+        .model = "test-model",
+        .base_url = "https://two.example.com/v1",
+    });
+
+    try std.testing.expectEqual(@as(?u32, 1), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://one.example.com/v1"));
+    try std.testing.expectEqual(@as(?u32, 2), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://two.example.com/v1"));
+    try std.testing.expectEqual(@as(?u32, null), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://three.example.com/v1"));
 }
 
 test "openai-compatible provider base_url defaults to empty" {

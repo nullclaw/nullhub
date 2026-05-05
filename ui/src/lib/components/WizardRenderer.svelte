@@ -194,11 +194,21 @@
       const standardBatch: any[] = [];
 
       for (const p of rawProviders) {
-        if (p.provider === OPENAI_COMPATIBLE_VALUE && p.base_url) {
+        if (p.provider === OPENAI_COMPATIBLE_VALUE) {
+          const providerName = String(p.provider_name || "").trim();
+          const baseUrl = String(p.base_url || "").trim();
+          if (!providerName) {
+            allResults.push({ provider: p.provider, live_ok: false, reason: "missing_provider_name" });
+            continue;
+          }
+          if (!baseUrl) {
+            allResults.push({ provider: p.provider, live_ok: false, reason: "missing_base_url" });
+            continue;
+          }
           // Custom OpenAI-compatible endpoint: validate via HTTP probe, not the nullclaw binary.
           // The binary doesn't know the "openai-compatible" provider name.
           try {
-            const probe = await api.probeProviderModels(p.base_url, p.api_key || "");
+            const probe = await api.probeProviderModels(baseUrl, p.api_key || "");
             allResults.push({ provider: p.provider, live_ok: probe.live_ok, reason: probe.reason || "" });
           } catch {
             allResults.push({ provider: p.provider, live_ok: false, reason: "probe_request_failed" });
@@ -299,7 +309,7 @@
           parsed = parsed.map((entry: any) => {
             if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
               const { provider_name, ...rest } = entry;
-              return { ...rest, provider: provider_name || entry.provider };
+              return { ...rest, provider: String(provider_name || "").trim() };
             }
             return entry;
           });

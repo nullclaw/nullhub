@@ -307,7 +307,7 @@
             <button
               class="btn fetch-models-btn"
               onclick={fetchAddModels}
-              disabled={addProbing || !addForm.base_url.trim() || !addForm.api_key.trim()}
+              disabled={addProbing || !addForm.base_url.trim()}
               title="Fetch available models from this endpoint"
             >
               {addProbing ? "Fetching..." : "Fetch Models"}

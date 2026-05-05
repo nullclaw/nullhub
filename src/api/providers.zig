@@ -85,10 +85,8 @@ pub fn handleCreate(
     }) catch return try allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}");
     defer parsed.deinit();
 
-    // Custom providers (base_url set) bypass the nullclaw probe: the probe is
-    // designed for known providers and can misclassify valid responses from
-    // arbitrary OpenAI-compatible endpoints. Credential validation for custom
-    // endpoints will be handled via the /models probe (added in a follow-up).
+    // Custom providers (base_url set) use the OpenAI-compatible /models probe:
+    // the nullclaw probe only understands known provider names.
     const is_custom = parsed.value.base_url.len > 0;
     var validated_ok = false;
     var validated_with_buf: ?[]const u8 = null;
@@ -342,7 +340,7 @@ const ModelsProbeResult = struct {
     model_ids_json: []u8,
 
     fn deinit(self: *ModelsProbeResult, allocator: std.mem.Allocator) void {
-        allocator.free(self.model_ids_json);
+        if (self.model_ids_json.len > 0) allocator.free(self.model_ids_json);
     }
 };
 
@@ -354,27 +352,31 @@ fn buildModelsUrl(allocator: std.mem.Allocator, base_url: []const u8) ![]const u
     return std.fmt.allocPrint(allocator, "{s}/models", .{base_url});
 }
 
+fn emptyModelIdsJson(allocator: std.mem.Allocator) ![]u8 {
+    return allocator.dupe(u8, "[]");
+}
+
 /// Parse `data[].id` strings from an OpenAI-compatible /models JSON response.
 /// Returns a JSON array string like `["gpt-4","llama3"]`. Caller owns the result.
-fn parseModelIdsJson(allocator: std.mem.Allocator, body: []const u8) []u8 {
-    const empty = allocator.dupe(u8, "[]") catch return @constCast("[]");
+fn parseModelIdsJson(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
-    }) catch return empty;
+    }) catch return emptyModelIdsJson(allocator);
     defer parsed.deinit();
 
     const data = switch (parsed.value) {
-        .object => |obj| obj.get("data") orelse return empty,
-        else => return empty,
+        .object => |obj| obj.get("data") orelse return emptyModelIdsJson(allocator),
+        else => return emptyModelIdsJson(allocator),
     };
     const items = switch (data) {
         .array => |arr| arr.items,
-        else => return empty,
+        else => return emptyModelIdsJson(allocator),
     };
 
     var out = std.array_list.Managed(u8).init(allocator);
-    out.append('[') catch return empty;
+    errdefer out.deinit();
+    try out.append('[');
     var first = true;
     for (items) |item| {
         const id_val = switch (item) {
@@ -385,15 +387,14 @@ fn parseModelIdsJson(allocator: std.mem.Allocator, body: []const u8) []u8 {
             .string => |s| s,
             else => continue,
         };
-        if (!first) out.append(',') catch break;
+        if (!first) try out.append(',');
         first = false;
-        out.append('"') catch break;
-        appendEscaped(&out, id_str) catch break;
-        out.append('"') catch break;
+        try out.append('"');
+        try appendEscaped(&out, id_str);
+        try out.append('"');
     }
-    out.append(']') catch return empty;
-    allocator.free(empty);
-    return out.toOwnedSlice() catch @constCast("[]");
+    try out.append(']');
+    return out.toOwnedSlice();
 }
 
 /// Probe an OpenAI-compatible `/models` endpoint using the given key.
@@ -402,10 +403,10 @@ fn probeModels(
     base_url: []const u8,
     api_key: []const u8,
 ) ModelsProbeResult {
-    const empty_models = allocator.dupe(u8, "[]") catch return .{
+    const empty_models = emptyModelIdsJson(allocator) catch return .{
         .live_ok = false,
         .reason = "alloc_failed",
-        .model_ids_json = @constCast("[]"),
+        .model_ids_json = &.{},
     };
 
     const url = buildModelsUrl(allocator, base_url) catch return .{
@@ -421,19 +422,22 @@ fn probeModels(
     var response_body: std.Io.Writer.Allocating = .init(allocator);
     defer response_body.deinit();
 
-    const auth_header_value = std.fmt.allocPrint(allocator, "Bearer {s}", .{api_key}) catch
-        return .{ .live_ok = false, .reason = "alloc_failed", .model_ids_json = empty_models };
-    defer allocator.free(auth_header_value);
-
-    const header_buf = [1]std.http.Header{
-        .{ .name = "Authorization", .value = auth_header_value },
-    };
+    var auth_header_value: ?[]u8 = null;
+    defer if (auth_header_value) |value| allocator.free(value);
+    var header_buf: [1]std.http.Header = undefined;
+    const extra_headers: []const std.http.Header = if (api_key.len > 0) blk: {
+        const value = std.fmt.allocPrint(allocator, "Bearer {s}", .{api_key}) catch
+            return .{ .live_ok = false, .reason = "alloc_failed", .model_ids_json = empty_models };
+        auth_header_value = value;
+        header_buf[0] = .{ .name = "Authorization", .value = value };
+        break :blk header_buf[0..];
+    } else &.{};
 
     const result = client.fetch(.{
         .location = .{ .url = url },
         .method = .GET,
         .response_writer = &response_body.writer,
-        .extra_headers = header_buf[0..],
+        .extra_headers = extra_headers,
     }) catch return .{ .live_ok = false, .reason = "network_error", .model_ids_json = empty_models };
 
     const status_code = @intFromEnum(result.status);
@@ -444,19 +448,49 @@ fn probeModels(
         return .{ .live_ok = false, .reason = "http_error", .model_ids_json = empty_models };
     }
 
-    allocator.free(empty_models);
     const bytes = response_body.toOwnedSlice() catch return .{
         .live_ok = true,
         .reason = "",
-        .model_ids_json = allocator.dupe(u8, "[]") catch @constCast("[]"),
+        .model_ids_json = empty_models,
     };
     defer allocator.free(bytes);
+
+    const model_ids_json = parseModelIdsJson(allocator, bytes) catch return .{
+        .live_ok = true,
+        .reason = "",
+        .model_ids_json = empty_models,
+    };
+    allocator.free(empty_models);
 
     return .{
         .live_ok = true,
         .reason = "",
-        .model_ids_json = parseModelIdsJson(allocator, bytes),
+        .model_ids_json = model_ids_json,
     };
+}
+
+fn handleProbeModelsFromValues(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    api_key: []const u8,
+) ![]const u8 {
+    var probe = probeModels(allocator, base_url, api_key);
+    defer probe.deinit(allocator);
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    try buf.appendSlice("{\"live_ok\":");
+    try buf.appendSlice(if (probe.live_ok) "true" else "false");
+    try buf.appendSlice(",\"reason\":\"");
+    try appendEscaped(&buf, probe.reason);
+    try buf.appendSlice("\",\"models\":");
+    if (probe.model_ids_json.len > 0) {
+        try buf.appendSlice(probe.model_ids_json);
+    } else {
+        try buf.appendSlice("[]");
+    }
+    try buf.append('}');
+    return buf.toOwnedSlice();
 }
 
 /// GET /api/providers/probe-models?base_url=...&api_key=...
@@ -468,22 +502,29 @@ pub fn handleProbeModels(allocator: std.mem.Allocator, target: []const u8) ![]co
     defer allocator.free(base_url);
 
     const api_key = (try query_mod.valueAlloc(allocator, target, "api_key")) orelse
-        return try allocator.dupe(u8, "{\"error\":\"api_key is required\"}");
+        try allocator.dupe(u8, "");
     defer allocator.free(api_key);
 
-    var probe = probeModels(allocator, base_url, api_key);
-    defer probe.deinit(allocator);
+    return handleProbeModelsFromValues(allocator, base_url, api_key);
+}
 
-    var buf = std.array_list.Managed(u8).init(allocator);
-    errdefer buf.deinit();
-    try buf.appendSlice("{\"live_ok\":");
-    try buf.appendSlice(if (probe.live_ok) "true" else "false");
-    try buf.appendSlice(",\"reason\":\"");
-    try appendEscaped(&buf, probe.reason);
-    try buf.appendSlice("\",\"models\":");
-    try buf.appendSlice(probe.model_ids_json);
-    try buf.append('}');
-    return buf.toOwnedSlice();
+/// POST /api/providers/probe-models
+/// Body: {"base_url":"...","api_key":"..."}; api_key may be empty for local endpoints.
+pub fn handleProbeModelsBody(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
+    const parsed = std.json.parseFromSlice(struct {
+        base_url: []const u8,
+        api_key: []const u8 = "",
+    }, allocator, body, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    }) catch return try allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}");
+    defer parsed.deinit();
+
+    if (parsed.value.base_url.len == 0) {
+        return try allocator.dupe(u8, "{\"error\":\"base_url is required\"}");
+    }
+
+    return handleProbeModelsFromValues(allocator, parsed.value.base_url, parsed.value.api_key);
 }
 
 // ─── Instance Config Sync ────────────────────────────────────────────────────
@@ -550,6 +591,8 @@ fn syncProviderToInstance(
     // Set base_url only when present (mirrors writeMinimalProviderConfig behaviour)
     if (base_url.len > 0) {
         try provider_obj.put(ja, "base_url", .{ .string = base_url });
+    } else {
+        _ = provider_obj.orderedRemove("base_url");
     }
 
     // Serialize and write back
@@ -990,21 +1033,21 @@ test "parseModelIdsJson extracts data[].id strings" {
     const body =
         \\{"object":"list","data":[{"id":"gpt-4","object":"model"},{"id":"gpt-3.5-turbo","object":"model"}]}
     ;
-    const result = parseModelIdsJson(allocator, body);
+    const result = try parseModelIdsJson(allocator, body);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("[\"gpt-4\",\"gpt-3.5-turbo\"]", result);
 }
 
 test "parseModelIdsJson returns empty array for invalid JSON" {
     const allocator = std.testing.allocator;
-    const result = parseModelIdsJson(allocator, "not json");
+    const result = try parseModelIdsJson(allocator, "not json");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("[]", result);
 }
 
 test "parseModelIdsJson returns empty array for missing data field" {
     const allocator = std.testing.allocator;
-    const result = parseModelIdsJson(allocator, "{\"object\":\"list\"}");
+    const result = try parseModelIdsJson(allocator, "{\"object\":\"list\"}");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("[]", result);
 }
@@ -1025,12 +1068,21 @@ test "handleProbeModels returns error when base_url missing" {
     try std.testing.expect(std.mem.indexOf(u8, json, "base_url") != null);
 }
 
-test "handleProbeModels returns error when api_key missing" {
+test "handleProbeModels allows missing api_key for local endpoints" {
     const allocator = std.testing.allocator;
     const json = try handleProbeModels(allocator, "/api/providers/probe-models?base_url=http%3A%2F%2F127.0.0.1%3A19999%2Fv1");
     defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"models\":[]") != null);
+}
+
+test "handleProbeModelsBody returns error when base_url missing" {
+    const allocator = std.testing.allocator;
+    const json = try handleProbeModelsBody(allocator, "{\"api_key\":\"sk-test\"}");
+    defer allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "api_key") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "base_url") != null);
 }
 
 test "handleProbeModels returns live_ok false for unreachable endpoint" {
@@ -1162,6 +1214,42 @@ test "syncProviderToInstances omits base_url when empty" {
     try std.testing.expect(std.mem.indexOf(u8, result, "\"openrouter\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"sk-or-key\"") != null);
     // base_url must not appear when empty
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"base_url\"") == null);
+}
+
+test "syncProviderToInstances removes stale base_url when empty" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-sync-test-clear-baseurl";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
+
+    try makeInstanceDir(tmp);
+
+    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    defer allocator.free(config_path);
+    {
+        const f = try std_compat.fs.createFileAbsolute(config_path, .{});
+        defer f.close();
+        try f.writeAll("{\"models\":{\"providers\":{\"openrouter\":{\"api_key\":\"old\",\"base_url\":\"https://old.example.com/v1\"}}}}\n");
+    }
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-or-key", "");
+
+    const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer f2.close();
+    const result = try f2.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"openrouter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"sk-or-key\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"base_url\"") == null);
 }
 
