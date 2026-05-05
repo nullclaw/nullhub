@@ -317,6 +317,8 @@ pub const State = struct {
             errdefer allocator.free(owned_api_key);
             const owned_model = if (sp.model.len > 0) try allocator.dupe(u8, sp.model) else @as([]const u8, "");
             errdefer if (owned_model.len > 0) allocator.free(@constCast(owned_model));
+            const owned_base_url = if (sp.base_url.len > 0) try allocator.dupe(u8, sp.base_url) else @as([]const u8, "");
+            errdefer if (owned_base_url.len > 0) allocator.free(@constCast(owned_base_url));
             const owned_validated_at = if (sp.validated_at.len > 0) try allocator.dupe(u8, sp.validated_at) else @as([]const u8, "");
             errdefer if (owned_validated_at.len > 0) allocator.free(@constCast(owned_validated_at));
             const owned_validated_with = if (sp.validated_with.len > 0) try allocator.dupe(u8, sp.validated_with) else @as([]const u8, "");
@@ -330,6 +332,7 @@ pub const State = struct {
                 .provider = owned_provider,
                 .api_key = owned_api_key,
                 .model = owned_model,
+                .base_url = owned_base_url,
                 .validated_at = owned_validated_at,
                 .validated_with = owned_validated_with,
                 .last_validation_at = owned_last_validation_at,
@@ -648,11 +651,12 @@ pub const State = struct {
         return false;
     }
 
-    pub fn hasSavedProvider(self: *State, provider: []const u8, api_key: []const u8, model: []const u8) bool {
+    pub fn hasSavedProvider(self: *State, provider: []const u8, api_key: []const u8, model: []const u8, base_url: []const u8) bool {
         for (self.saved_providers.items) |sp| {
             if (std.mem.eql(u8, sp.provider, provider) and
                 std.mem.eql(u8, sp.api_key, api_key) and
-                std.mem.eql(u8, sp.model, model))
+                std.mem.eql(u8, sp.model, model) and
+                std.mem.eql(u8, sp.base_url, base_url))
             {
                 return true;
             }
@@ -660,11 +664,12 @@ pub const State = struct {
         return false;
     }
 
-    pub fn findSavedProviderId(self: *State, provider: []const u8, api_key: []const u8, model: []const u8) ?u32 {
+    pub fn findSavedProviderId(self: *State, provider: []const u8, api_key: []const u8, model: []const u8, base_url: []const u8) ?u32 {
         for (self.saved_providers.items) |sp| {
             if (std.mem.eql(u8, sp.provider, provider) and
                 std.mem.eql(u8, sp.api_key, api_key) and
-                std.mem.eql(u8, sp.model, model))
+                std.mem.eql(u8, sp.model, model) and
+                std.mem.eql(u8, sp.base_url, base_url))
             {
                 return sp.id;
             }

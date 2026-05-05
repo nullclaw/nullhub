@@ -47,14 +47,8 @@
   // Re-validate state
   let revalidatingId = $state<string | null>(null);
 
-  let hasComponents = $state(false);
-
   onMount(async () => {
     await loadProviders();
-    try {
-      const status = await api.getStatus();
-      hasComponents = Object.keys(status.instances || {}).length > 0;
-    } catch {}
   });
 
   onDestroy(() => {
@@ -88,15 +82,17 @@
     addValidating = true;
     addError = "";
     try {
+      const isCustom = addForm.provider === OPENAI_COMPATIBLE_VALUE;
       const providerValue = addForm.provider === OPENAI_COMPATIBLE_VALUE
         ? addForm.provider_name.trim()
         : addForm.provider;
-      if (addForm.provider === OPENAI_COMPATIBLE_VALUE && !providerValue) {
+      const baseUrl = addForm.base_url.trim();
+      if (isCustom && !providerValue) {
         addError = "Provider name is required for OpenAI Compatible providers.";
         addValidating = false;
         return;
       }
-      if (addForm.provider === OPENAI_COMPATIBLE_VALUE && !addForm.base_url.trim()) {
+      if (isCustom && !baseUrl) {
         addError = "Base URL is required for OpenAI Compatible providers.";
         addValidating = false;
         return;
@@ -105,7 +101,7 @@
         provider: providerValue,
         api_key: addForm.api_key,
         model: addForm.model || undefined,
-        base_url: addForm.base_url || undefined,
+        base_url: isCustom ? baseUrl : undefined,
       });
       showAddForm = false;
       addForm = { provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" };
@@ -135,7 +131,7 @@
       if (editForm.name) payload.name = editForm.name;
       if (editForm.api_key) payload.api_key = editForm.api_key;
       payload.model = editForm.model;
-      payload.base_url = editForm.base_url;
+      payload.base_url = editForm.base_url.trim();
       await api.updateSavedProvider(id, payload);
       editingId = null;
       flashMessage("Provider updated");
@@ -207,11 +203,9 @@
 <div class="providers-page">
   <div class="page-header">
     <h1>Providers</h1>
-    {#if hasComponents}
-      <button class="primary-btn" onclick={() => (showAddForm = !showAddForm)}>
-        {showAddForm ? "Cancel" : "+ Add Provider"}
-      </button>
-    {/if}
+    <button class="primary-btn" onclick={() => (showAddForm = !showAddForm)}>
+      {showAddForm ? "Cancel" : "+ Add Provider"}
+    </button>
   </div>
 
   {#if message}
@@ -222,12 +216,7 @@
     <div class="error-message">{error}</div>
   {/if}
 
-  {#if !hasComponents}
-    <div class="empty-state">
-      <p>Install a component first to add providers.</p>
-      <a href="/install" class="link-btn">Install Component</a>
-    </div>
-  {:else if showAddForm}
+  {#if showAddForm}
     <div class="add-form">
       <h2>Add Provider</h2>
       <div class="field">
@@ -269,7 +258,7 @@
 
   {#if loading}
     <p class="loading">Loading providers...</p>
-  {:else if providers.length === 0 && hasComponents}
+  {:else if providers.length === 0}
     <div class="empty-state">
       <p>No saved providers yet. Add one above or install a component — providers are saved automatically during setup.</p>
     </div>
@@ -665,23 +654,6 @@
   .empty-state p {
     margin-bottom: 1rem;
     font-family: var(--font-mono);
-  }
-
-  .link-btn {
-    color: var(--accent);
-    text-decoration: none;
-    border: 1px solid var(--accent);
-    padding: 0.5rem 1.25rem;
-    border-radius: 2px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 0.875rem;
-    transition: all 0.2s ease;
-  }
-
-  .link-btn:hover {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    box-shadow: 0 0 10px var(--border-glow);
   }
 
   .loading {
