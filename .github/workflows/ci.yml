@@ -55,7 +55,7 @@ jobs:
           npm --prefix ui run build
 
       - name: Run unit tests
-        run: zig build test -Dbuild-ui=false --summary all 2>&1 | tee test-output.txt
+        run: zig build test -Dembed-ui=false -Dbuild-ui=false --summary all 2>&1 | tee test-output.txt
 
       - name: Run E2E tests
         if: runner.os == 'Linux'
