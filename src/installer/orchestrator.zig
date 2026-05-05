@@ -207,20 +207,14 @@ pub fn install(
 
     // 5. Run --from-json to generate config (component owns its config generation)
     // Inject the resolved port and instance home so generated configs align with supervisor state.
-    // If the primary provider is openai-compatible (has a base_url), strip it from the answers
-    // before passing to the binary — the binary only knows standard provider names.  We will
-    // inject the custom provider credentials into the generated config afterwards.
-    const custom_provider_result = extractCustomProvider(allocator, opts.answers_json) catch |err| blk: {
-        std.log.warn("extractCustomProvider failed: {s}", .{@errorName(err)});
+    // If any selected provider is openai-compatible (has a base_url), strip only those
+    // entries before passing answers to the binary. The binary only knows standard
+    // provider names; custom credentials and fallback order are restored afterwards.
+    const custom_provider_result = extractCustomProviders(allocator, opts.answers_json) catch |err| blk: {
+        std.log.warn("extractCustomProviders failed: {s}", .{@errorName(err)});
         break :blk null;
     };
-    defer if (custom_provider_result) |cp| {
-        allocator.free(cp.custom.provider);
-        allocator.free(cp.custom.api_key);
-        allocator.free(cp.custom.base_url);
-        allocator.free(cp.custom.model);
-        allocator.free(cp.stripped_json);
-    };
+    defer if (custom_provider_result) |cp| cp.deinit(allocator);
     const answers_for_binary = if (custom_provider_result) |cp| cp.stripped_json else opts.answers_json;
 
     const answers_with_port = injectPortFields(allocator, answers_for_binary, port, managed_port) catch answers_for_binary;
@@ -250,14 +244,14 @@ pub fn install(
         return error.ConfigGenerationFailed;
     }
 
-    // If there was a custom (openai-compatible) provider, patch its credentials
-    // into the generated config now that the binary has written it.
+    // If there were custom (openai-compatible) providers, patch their credentials
+    // and the original provider order into the generated config now that the binary has written it.
     if (custom_provider_result) |cp| {
         const config_path = p.instanceConfig(allocator, opts.component, opts.instance_name) catch null;
         defer if (config_path) |path| allocator.free(path);
         if (config_path) |path| {
-            patchProviderIntoConfig(allocator, path, cp.custom.provider, cp.custom.api_key, cp.custom.base_url, cp.custom.model) catch |err| {
-                std.log.warn("failed to inject custom provider into config: {s}", .{@errorName(err)});
+            patchCustomProvidersIntoConfig(allocator, path, cp.selections, cp.custom_providers) catch |err| {
+                std.log.warn("failed to inject custom providers into config: {s}", .{@errorName(err)});
             };
         }
     }
@@ -582,16 +576,137 @@ const CustomProvider = struct {
     model: []const u8,
 };
 
-/// If the wizard answers contain a top-level `base_url` (indicating the user
-/// chose an OpenAI-compatible / custom endpoint), return the custom provider
-/// fields and a NEW answers JSON string with those fields cleared so the
-/// component binary does not see an unknown provider name.
+const ProviderSelection = struct {
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+    model: []const u8,
+};
+
+const CustomProvidersRewrite = struct {
+    custom_providers: []CustomProvider,
+    selections: []ProviderSelection,
+    stripped_json: []const u8,
+
+    fn deinit(self: CustomProvidersRewrite, allocator: std.mem.Allocator) void {
+        freeCustomProviders(allocator, self.custom_providers);
+        freeProviderSelections(allocator, self.selections);
+        allocator.free(self.stripped_json);
+    }
+};
+
+fn freeCustomProviders(allocator: std.mem.Allocator, providers: []CustomProvider) void {
+    for (providers) |provider| {
+        allocator.free(provider.provider);
+        allocator.free(provider.api_key);
+        allocator.free(provider.base_url);
+        allocator.free(provider.model);
+    }
+    allocator.free(providers);
+}
+
+fn deinitCustomProviderList(allocator: std.mem.Allocator, providers: *std.array_list.Managed(CustomProvider)) void {
+    for (providers.items) |provider| {
+        allocator.free(provider.provider);
+        allocator.free(provider.api_key);
+        allocator.free(provider.base_url);
+        allocator.free(provider.model);
+    }
+    providers.deinit();
+}
+
+fn freeProviderSelections(allocator: std.mem.Allocator, selections: []ProviderSelection) void {
+    for (selections) |selection| {
+        allocator.free(selection.provider);
+        allocator.free(selection.api_key);
+        allocator.free(selection.base_url);
+        allocator.free(selection.model);
+    }
+    allocator.free(selections);
+}
+
+fn deinitProviderSelectionList(allocator: std.mem.Allocator, selections: *std.array_list.Managed(ProviderSelection)) void {
+    for (selections.items) |selection| {
+        allocator.free(selection.provider);
+        allocator.free(selection.api_key);
+        allocator.free(selection.base_url);
+        allocator.free(selection.model);
+    }
+    selections.deinit();
+}
+
+fn stringField(obj: *std.json.ObjectMap, key: []const u8) []const u8 {
+    return switch (obj.get(key) orelse .null) {
+        .string => |s| s,
+        else => "",
+    };
+}
+
+fn appendProviderSelection(
+    allocator: std.mem.Allocator,
+    selections: *std.array_list.Managed(ProviderSelection),
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+    model: []const u8,
+) !void {
+    if (provider.len == 0) return;
+    const owned_provider = try allocator.dupe(u8, provider);
+    errdefer allocator.free(owned_provider);
+    const owned_api_key = try allocator.dupe(u8, api_key);
+    errdefer allocator.free(owned_api_key);
+    const owned_base_url = try allocator.dupe(u8, base_url);
+    errdefer allocator.free(owned_base_url);
+    const owned_model = try allocator.dupe(u8, model);
+    errdefer allocator.free(owned_model);
+    try selections.append(.{
+        .provider = owned_provider,
+        .api_key = owned_api_key,
+        .base_url = owned_base_url,
+        .model = owned_model,
+    });
+}
+
+fn appendCustomProvider(
+    allocator: std.mem.Allocator,
+    providers: *std.array_list.Managed(CustomProvider),
+    provider: []const u8,
+    api_key: []const u8,
+    base_url: []const u8,
+    model: []const u8,
+) !void {
+    if (provider.len == 0 or base_url.len == 0) return;
+    const owned_provider = try allocator.dupe(u8, provider);
+    errdefer allocator.free(owned_provider);
+    const owned_api_key = try allocator.dupe(u8, api_key);
+    errdefer allocator.free(owned_api_key);
+    const owned_base_url = try allocator.dupe(u8, base_url);
+    errdefer allocator.free(owned_base_url);
+    const owned_model = try allocator.dupe(u8, model);
+    errdefer allocator.free(owned_model);
+    try providers.append(.{
+        .provider = owned_provider,
+        .api_key = owned_api_key,
+        .base_url = owned_base_url,
+        .model = owned_model,
+    });
+}
+
+fn neutralizeProviderObject(allocator: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
+    try obj.put(allocator, "provider", .{ .string = "openai" });
+    try obj.put(allocator, "api_key", .{ .string = "" });
+    try obj.put(allocator, "model", .{ .string = "" });
+    try obj.put(allocator, "base_url", .{ .string = "" });
+}
+
+/// If the wizard answers contain any provider with a non-empty `base_url`
+/// (indicating an OpenAI-compatible / custom endpoint), return all custom
+/// provider fields, the original provider order, and a NEW answers JSON string
+/// with only custom entries neutralized so the component binary does not see
+/// unknown provider names.
 ///
 /// Returns `null` when no custom provider is present (standard flow).
-fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struct {
-    custom: CustomProvider,
-    stripped_json: []const u8,
-} {
+fn extractCustomProviders(allocator: std.mem.Allocator, json: []const u8) !?CustomProvidersRewrite {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
@@ -601,77 +716,100 @@ fn extractCustomProvider(allocator: std.mem.Allocator, json: []const u8) !?struc
 
     const root = &parsed.value.object;
 
-    // A non-empty top-level `base_url` means this is a custom/openai-compatible
-    // provider that the component binary will not recognise.
-    const base_url_val = root.get("base_url") orelse return null;
-    const base_url = switch (base_url_val) {
-        .string => |s| s,
-        else => return null,
-    };
-    if (base_url.len == 0) return null;
+    var custom_providers = std.array_list.Managed(CustomProvider).init(allocator);
+    errdefer deinitCustomProviderList(allocator, &custom_providers);
+    var selections = std.array_list.Managed(ProviderSelection).init(allocator);
+    errdefer deinitProviderSelectionList(allocator, &selections);
 
-    const provider = switch (root.get("provider") orelse .null) {
-        .string => |s| s,
-        else => "",
-    };
-    const api_key = switch (root.get("api_key") orelse .null) {
-        .string => |s| s,
-        else => "",
-    };
-    const model = switch (root.get("model") orelse .null) {
-        .string => |s| s,
-        else => "",
-    };
-
-    // Duplicate the strings before parsed is deinitialized.
-    const cp = CustomProvider{
-        .provider = try allocator.dupe(u8, provider),
-        .api_key = try allocator.dupe(u8, api_key),
-        .base_url = try allocator.dupe(u8, base_url),
-        .model = try allocator.dupe(u8, model),
-    };
-
-    // Replace provider-specific fields with a known standard provider so the
-    // binary generates a valid base config without failing on the custom name.
-    // The real credentials are injected into the config file after the binary runs.
-    try root.put(allocator, "provider", .{ .string = "openai" });
-    try root.put(allocator, "api_key", .{ .string = "" });
-    try root.put(allocator, "model", .{ .string = "" });
-    try root.put(allocator, "base_url", .{ .string = "" });
-
-    // Also neutralise the `providers` array that the wizard sends alongside the
-    // top-level fields — nullclaw reads from both, and leaving the custom name
-    // in the array is what caused "UNKNOWN PROVIDER '<name>'" errors.
+    var saw_providers_array = false;
     if (root.getPtr("providers")) |arr_val| {
         if (arr_val.* == .array) {
+            saw_providers_array = true;
             for (arr_val.array.items) |*item| {
                 if (item.* != .object) continue;
-                try item.object.put(allocator, "provider", .{ .string = "openai" });
-                try item.object.put(allocator, "api_key", .{ .string = "" });
-                try item.object.put(allocator, "model", .{ .string = "" });
-                try item.object.put(allocator, "base_url", .{ .string = "" });
+                const provider = stringField(&item.object, "provider");
+                const api_key = stringField(&item.object, "api_key");
+                const base_url = stringField(&item.object, "base_url");
+                const model = stringField(&item.object, "model");
+
+                try appendProviderSelection(allocator, &selections, provider, api_key, base_url, model);
+
+                if (base_url.len > 0) {
+                    try appendCustomProvider(allocator, &custom_providers, provider, api_key, base_url, model);
+                    try neutralizeProviderObject(allocator, &item.object);
+                }
             }
         }
     }
 
+    const top_provider = stringField(root, "provider");
+    const top_api_key = stringField(root, "api_key");
+    const top_base_url = stringField(root, "base_url");
+    const top_model = stringField(root, "model");
+
+    if (!saw_providers_array) {
+        try appendProviderSelection(allocator, &selections, top_provider, top_api_key, top_base_url, top_model);
+        if (top_base_url.len > 0) {
+            try appendCustomProvider(allocator, &custom_providers, top_provider, top_api_key, top_base_url, top_model);
+        }
+    }
+
+    if (top_base_url.len > 0) {
+        try neutralizeProviderObject(allocator, root);
+    }
+
+    if (custom_providers.items.len == 0) {
+        deinitCustomProviderList(allocator, &custom_providers);
+        deinitProviderSelectionList(allocator, &selections);
+        return null;
+    }
+
+    const custom_slice = try custom_providers.toOwnedSlice();
+    errdefer freeCustomProviders(allocator, custom_slice);
+    const selection_slice = try selections.toOwnedSlice();
+    errdefer freeProviderSelections(allocator, selection_slice);
     const stripped = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{});
-    return .{ .custom = cp, .stripped_json = stripped };
+    return .{
+        .custom_providers = custom_slice,
+        .selections = selection_slice,
+        .stripped_json = stripped,
+    };
 }
 
-/// Patch provider credentials into an existing instance config file.
-/// Navigates/creates `models → providers → <provider>` and sets `api_key`
-/// (always) and `base_url` (when non-empty).  Also removes the `openai`
-/// placeholder left by `extractCustomProvider`, and sets
-/// `agents → defaults → model → primary` to `"<provider>/<model>"` when
-/// model is non-empty.  Best-effort: errors are returned so the caller can
-/// decide whether to surface them.
-fn patchProviderIntoConfig(
+fn selectionContainsProvider(selections: []const ProviderSelection, provider: []const u8) bool {
+    for (selections) |selection| {
+        if (std.mem.eql(u8, selection.provider, provider)) return true;
+    }
+    return false;
+}
+
+fn putFallbackProviders(
+    allocator: std.mem.Allocator,
+    root: *std.json.ObjectMap,
+    selections: []const ProviderSelection,
+) !void {
+    const reliability_obj = try ensureObjectInMap(allocator, root, "reliability");
+    var fallbacks = std.json.Array.init(allocator);
+    errdefer fallbacks.deinit();
+
+    if (selections.len > 1) {
+        for (selections[1..]) |selection| {
+            if (selection.provider.len == 0) continue;
+            try fallbacks.append(.{ .string = selection.provider });
+        }
+    }
+
+    try reliability_obj.put(allocator, "fallback_providers", .{ .array = fallbacks });
+}
+
+/// Patch custom provider credentials and original provider order into an
+/// existing instance config file after the component binary generates its base
+/// config with placeholder OpenAI entries.
+fn patchCustomProvidersIntoConfig(
     allocator: std.mem.Allocator,
     config_path: []const u8,
-    provider: []const u8,
-    api_key: []const u8,
-    base_url: []const u8,
-    model: []const u8,
+    selections: []const ProviderSelection,
+    custom_providers: []const CustomProvider,
 ) !void {
     const contents = blk: {
         const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch |err| switch (err) {
@@ -695,36 +833,34 @@ fn patchProviderIntoConfig(
 
     const models_obj = try ensureObjectInMap(ja, root, "models");
     const providers_obj = try ensureObjectInMap(ja, models_obj, "providers");
-    const provider_obj = try ensureObjectInMap(ja, providers_obj, provider);
 
-    try provider_obj.put(ja, "api_key", .{ .string = api_key });
-    if (base_url.len > 0) {
-        try provider_obj.put(ja, "base_url", .{ .string = base_url });
+    for (selections) |selection| {
+        const provider_obj = try ensureObjectInMap(ja, providers_obj, selection.provider);
+        try provider_obj.put(ja, "api_key", .{ .string = selection.api_key });
+        if (selection.base_url.len > 0) {
+            try provider_obj.put(ja, "base_url", .{ .string = selection.base_url });
+        } else {
+            _ = provider_obj.orderedRemove("base_url");
+        }
     }
 
-    // Remove the "openai" placeholder that extractCustomProvider injected so
-    // the binary could generate a valid base config.  Only remove it when the
-    // real provider name differs (avoids accidentally deleting a genuine openai
-    // entry if someone names their custom provider "openai").
-    if (!std.mem.eql(u8, provider, "openai")) {
+    // Remove the placeholder unless the user's actual provider order includes OpenAI.
+    if (!selectionContainsProvider(selections, "openai")) {
         _ = providers_obj.orderedRemove("openai");
     }
 
-    // Patch agents → defaults → model → primary to "<provider>/<model>".
-    if (model.len > 0) {
-        const primary = try std.fmt.allocPrint(ja, "{s}/{s}", .{ provider, model });
+    if (selections.len > 0 and selections[0].model.len > 0) {
+        const primary = try std.fmt.allocPrint(ja, "{s}/{s}", .{ selections[0].provider, selections[0].model });
         const agents_obj = try ensureObjectInMap(ja, root, "agents");
         const defaults_obj = try ensureObjectInMap(ja, agents_obj, "defaults");
         const model_obj = try ensureObjectInMap(ja, defaults_obj, "model");
         try model_obj.put(ja, "primary", .{ .string = primary });
+    }
 
-        // Custom providers (with a base_url) may expose text-only models.
-        // vision_disabled_models is used at inference time to strip image
-        // markers from messages sent to the model; it does not suppress the
-        // startup vision probe.  We still populate it so that once the probe
-        // has run (and the instance is stable), vision content is stripped
-        // correctly on every subsequent request.
-        if (base_url.len > 0) {
+    try putFallbackProviders(ja, root, selections);
+
+    for (custom_providers) |custom| {
+        if (custom.model.len > 0) {
             const agent_obj = try ensureObjectInMap(ja, root, "agent");
             const vd_gop = try agent_obj.getOrPut(ja, "vision_disabled_models");
             if (!vd_gop.found_existing) {
@@ -733,13 +869,13 @@ fn patchProviderIntoConfig(
             if (vd_gop.value_ptr.* == .array) {
                 var already_present = false;
                 for (vd_gop.value_ptr.array.items) |item| {
-                    if (item == .string and std.mem.eql(u8, item.string, model)) {
+                    if (item == .string and std.mem.eql(u8, item.string, custom.model)) {
                         already_present = true;
                         break;
                     }
                 }
                 if (!already_present) {
-                    try vd_gop.value_ptr.array.append(.{ .string = model });
+                    try vd_gop.value_ptr.array.append(.{ .string = custom.model });
                 }
             }
         }
@@ -1222,4 +1358,148 @@ test "injectHomeField adds home to JSON object" {
     defer allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"home\":\"/tmp/inst\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"provider\":\"openrouter\"") != null);
+}
+
+test "extractCustomProviders neutralizes custom fallback while preserving standard primary" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"provider":"openrouter","api_key":"sk-or","model":"openrouter/auto","providers":[{"provider":"openrouter","api_key":"sk-or","model":"openrouter/auto"},{"provider":"local-llm","api_key":"sk-local","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}]}
+    ;
+
+    const rewrite = (try extractCustomProviders(allocator, json)).?;
+    defer rewrite.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), rewrite.custom_providers.len);
+    try std.testing.expectEqualStrings("local-llm", rewrite.custom_providers[0].provider);
+    try std.testing.expectEqual(@as(usize, 2), rewrite.selections.len);
+    try std.testing.expectEqualStrings("openrouter", rewrite.selections[0].provider);
+    try std.testing.expectEqualStrings("local-llm", rewrite.selections[1].provider);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, rewrite.stripped_json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    const providers = parsed.value.object.get("providers").?.array.items;
+    try std.testing.expectEqualStrings("openrouter", providers[0].object.get("provider").?.string);
+    try std.testing.expectEqualStrings("openai", providers[1].object.get("provider").?.string);
+    try std.testing.expectEqualStrings("", providers[1].object.get("base_url").?.string);
+}
+
+test "extractCustomProviders neutralizes primary custom without dropping standard fallback" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"provider":"local-llm","api_key":"sk-local","model":"llama3","base_url":"http://127.0.0.1:5801/v1","providers":[{"provider":"local-llm","api_key":"sk-local","model":"llama3","base_url":"http://127.0.0.1:5801/v1"},{"provider":"openrouter","api_key":"sk-or","model":"openrouter/auto"}]}
+    ;
+
+    const rewrite = (try extractCustomProviders(allocator, json)).?;
+    defer rewrite.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), rewrite.custom_providers.len);
+    try std.testing.expectEqualStrings("local-llm", rewrite.custom_providers[0].provider);
+    try std.testing.expectEqual(@as(usize, 2), rewrite.selections.len);
+    try std.testing.expectEqualStrings("local-llm", rewrite.selections[0].provider);
+    try std.testing.expectEqualStrings("openrouter", rewrite.selections[1].provider);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, rewrite.stripped_json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("openai", parsed.value.object.get("provider").?.string);
+    try std.testing.expectEqualStrings("", parsed.value.object.get("base_url").?.string);
+    const providers = parsed.value.object.get("providers").?.array.items;
+    try std.testing.expectEqualStrings("openai", providers[0].object.get("provider").?.string);
+    try std.testing.expectEqualStrings("openrouter", providers[1].object.get("provider").?.string);
+}
+
+test "patchCustomProvidersIntoConfig restores custom fallback provider order" {
+    const allocator = std.testing.allocator;
+    const tmp_dir = "/tmp/test-orchestrator-custom-fallback-patch";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    const config_path = try std.fs.path.join(allocator, &.{ tmp_dir, "config.json" });
+    defer allocator.free(config_path);
+    try writeFile(config_path,
+        \\{"models":{"providers":{"openrouter":{"api_key":"sk-or"},"openai":{"api_key":""}}},"agents":{"defaults":{"model":{"primary":"openrouter/openrouter-auto"}}},"reliability":{"fallback_providers":["openai"]}}
+    );
+
+    const selections = [_]ProviderSelection{
+        .{ .provider = "openrouter", .api_key = "sk-or", .base_url = "", .model = "openrouter-auto" },
+        .{ .provider = "local-llm", .api_key = "sk-local", .base_url = "http://127.0.0.1:5801/v1", .model = "llama3" },
+    };
+    const custom_providers = [_]CustomProvider{
+        .{ .provider = "local-llm", .api_key = "sk-local", .base_url = "http://127.0.0.1:5801/v1", .model = "llama3" },
+    };
+
+    try patchCustomProvidersIntoConfig(allocator, config_path, &selections, &custom_providers);
+
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    const providers = parsed.value.object.get("models").?.object.get("providers").?.object;
+    try std.testing.expect(providers.get("openai") == null);
+    try std.testing.expect(providers.get("openrouter") != null);
+    const local = providers.get("local-llm").?.object;
+    try std.testing.expectEqualStrings("sk-local", local.get("api_key").?.string);
+    try std.testing.expectEqualStrings("http://127.0.0.1:5801/v1", local.get("base_url").?.string);
+
+    const primary = parsed.value.object.get("agents").?.object.get("defaults").?.object.get("model").?.object.get("primary").?.string;
+    try std.testing.expectEqualStrings("openrouter/openrouter-auto", primary);
+    const fallbacks = parsed.value.object.get("reliability").?.object.get("fallback_providers").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), fallbacks.len);
+    try std.testing.expectEqualStrings("local-llm", fallbacks[0].string);
+}
+
+test "patchCustomProvidersIntoConfig restores primary custom and keeps standard fallback" {
+    const allocator = std.testing.allocator;
+    const tmp_dir = "/tmp/test-orchestrator-primary-custom-patch";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    const config_path = try std.fs.path.join(allocator, &.{ tmp_dir, "config.json" });
+    defer allocator.free(config_path);
+    try writeFile(config_path,
+        \\{"models":{"providers":{"openai":{"api_key":""},"openrouter":{"api_key":"sk-or"}}},"agents":{"defaults":{"model":{"primary":"openai/"}}},"reliability":{"fallback_providers":["openrouter"]}}
+    );
+
+    const selections = [_]ProviderSelection{
+        .{ .provider = "local-llm", .api_key = "sk-local", .base_url = "http://127.0.0.1:5801/v1", .model = "llama3" },
+        .{ .provider = "openrouter", .api_key = "sk-or", .base_url = "", .model = "openrouter-auto" },
+    };
+    const custom_providers = [_]CustomProvider{
+        .{ .provider = "local-llm", .api_key = "sk-local", .base_url = "http://127.0.0.1:5801/v1", .model = "llama3" },
+    };
+
+    try patchCustomProvidersIntoConfig(allocator, config_path, &selections, &custom_providers);
+
+    const file = try std_compat.fs.openFileAbsolute(config_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024);
+    defer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    const providers = parsed.value.object.get("models").?.object.get("providers").?.object;
+    try std.testing.expect(providers.get("openai") == null);
+    try std.testing.expect(providers.get("openrouter") != null);
+    try std.testing.expect(providers.get("local-llm") != null);
+    const primary = parsed.value.object.get("agents").?.object.get("defaults").?.object.get("model").?.object.get("primary").?.string;
+    try std.testing.expectEqualStrings("local-llm/llama3", primary);
+    const fallbacks = parsed.value.object.get("reliability").?.object.get("fallback_providers").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), fallbacks.len);
+    try std.testing.expectEqualStrings("openrouter", fallbacks[0].string);
 }
