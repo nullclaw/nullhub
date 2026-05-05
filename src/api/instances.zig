@@ -89,6 +89,67 @@ fn refreshLocalDevBinary(
     }
 }
 
+const InstanceSnapshot = struct {
+    status: manager_mod.Status,
+    pid: ?std.process.Child.Id = null,
+    uptime_seconds: ?u64 = null,
+    restart_count: u32 = 0,
+    port: u16 = 0,
+};
+
+fn deriveStandaloneSnapshot(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    entry: state_mod.InstanceEntry,
+) ?InstanceSnapshot {
+    if (!std.mem.eql(u8, component, "nullclaw")) return null;
+
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return null;
+    defer allocator.free(inst_dir);
+    const real_dir = std_compat.fs.realpathAlloc(allocator, inst_dir) catch return null;
+    defer allocator.free(real_dir);
+
+    const home = std_compat.process.getEnvVarOwned(allocator, "HOME") catch return null;
+    defer allocator.free(home);
+    const standalone_root = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return null;
+    defer allocator.free(standalone_root);
+
+    if (!std.mem.eql(u8, real_dir, standalone_root)) return null;
+    if (!std.mem.eql(u8, entry.launch_mode, "gateway")) return null;
+
+    const port = readPortFromConfig(allocator, paths, component, name, "gateway.port") orelse 0;
+    if (port == 0) return null;
+
+    const health = @import("../supervisor/health.zig").check(allocator, "127.0.0.1", port, "/health");
+    return .{
+        .status = if (health.ok) .running else .stopped,
+        .port = port,
+    };
+}
+
+fn resolveInstanceSnapshot(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    manager: *manager_mod.Manager,
+    component: []const u8,
+    name: []const u8,
+    entry: state_mod.InstanceEntry,
+) InstanceSnapshot {
+    if (manager.getStatus(component, name)) |st| {
+        return .{
+            .status = st.status,
+            .pid = st.pid,
+            .uptime_seconds = st.uptime_seconds,
+            .restart_count = st.restart_count,
+            .port = st.port,
+        };
+    }
+    if (deriveStandaloneSnapshot(allocator, paths, component, name, entry)) |snapshot| return snapshot;
+    return .{ .status = .stopped };
+}
+
 const FetchedJsonValue = struct {
     bytes: []u8,
     parsed: std.json.Parsed(std.json.Value),
@@ -1800,8 +1861,8 @@ fn pidToU64(pid: std.process.Child.Id) u64 {
     };
 }
 
-fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, runtime_status: ?manager_mod.InstanceStatus) !void {
-    const status_str = if (runtime_status) |status| @tagName(status.status) else "stopped";
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, snapshot: InstanceSnapshot) !void {
+    const status_str = @tagName(snapshot.status);
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
     try buf.appendSlice("\",\"auto_start\":");
@@ -1814,31 +1875,29 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.appendSlice(status_str);
     try buf.append('"');
 
-    if (runtime_status) |status| {
-        if (status.pid) |pid| {
+    if (snapshot.pid) |pid| {
             try buf.appendSlice(",\"pid\":");
             var num_buf: [20]u8 = undefined;
             const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
             try buf.appendSlice(text);
-        }
-        if (status.uptime_seconds) |uptime| {
+    }
+    if (snapshot.uptime_seconds) |uptime| {
             try buf.appendSlice(",\"uptime_seconds\":");
             var num_buf: [20]u8 = undefined;
             const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
             try buf.appendSlice(text);
-        }
-        if (status.restart_count > 0) {
+    }
+    if (snapshot.restart_count > 0) {
             try buf.appendSlice(",\"restart_count\":");
             var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.restart_count});
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.restart_count});
             try buf.appendSlice(text);
-        }
-        if (status.port > 0) {
+    }
+    if (snapshot.port > 0) {
             try buf.appendSlice(",\"port\":");
             var num_buf: [10]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.port});
+            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.port});
             try buf.appendSlice(text);
-        }
     }
 
     try buf.append('}');
@@ -1847,10 +1906,10 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/instances — list all instances grouped by component.
-pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager) ApiResponse {
+pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths) ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
 
-    buildListJson(&buf, s, manager) catch return .{
+    buildListJson(&buf, s, manager, paths) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -1859,7 +1918,7 @@ pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *m
     return jsonOk(buf.items);
 }
 
-fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager) !void {
+fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths) !void {
     try buf.appendSlice("{\"instances\":{");
 
     var comp_it = s.instances.iterator();
@@ -1878,12 +1937,12 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
             if (!first_inst) try buf.append(',');
             first_inst = false;
 
-            const runtime_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
+            const snapshot = resolveInstanceSnapshot(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
 
             try buf.append('"');
             try appendEscaped(buf, inst_entry.key_ptr.*);
             try buf.appendSlice("\":");
-            try appendInstanceJson(buf, inst_entry.value_ptr.*, runtime_status);
+            try appendInstanceJson(buf, inst_entry.value_ptr.*, snapshot);
         }
 
         try buf.append('}');
@@ -1893,13 +1952,13 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
 }
 
 /// GET /api/instances/{component}/{name} — detail for one instance.
-pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, component: []const u8, name: []const u8) ApiResponse {
+pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    const runtime_status = manager.getStatus(component, name);
+    const snapshot = resolveInstanceSnapshot(allocator, paths, manager, component, name, entry);
 
     var buf = std.array_list.Managed(u8).init(allocator);
-    appendInstanceJson(&buf, entry, runtime_status) catch return .{
+    appendInstanceJson(&buf, entry, snapshot) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -3681,7 +3740,7 @@ pub fn dispatch(
 ) ?ApiResponse {
     // Exact match for the collection endpoint.
     if (std.mem.eql(u8, stripQuery(target), "/api/instances")) {
-        if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager);
+        if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager, paths);
         return methodNotAllowed();
     }
 
@@ -3871,7 +3930,7 @@ pub fn dispatch(
     }
 
     // No action — CRUD on the instance itself.
-    if (std.mem.eql(u8, method, "GET")) return handleGet(allocator, s, manager, parsed.component, parsed.name);
+    if (std.mem.eql(u8, method, "GET")) return handleGet(allocator, s, manager, paths, parsed.component, parsed.name);
     if (std.mem.eql(u8, method, "DELETE")) return handleDelete(allocator, s, manager, paths, parsed.component, parsed.name);
     if (std.mem.eql(u8, method, "PATCH")) return handlePatch(s, parsed.component, parsed.name, body);
 

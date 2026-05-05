@@ -7,19 +7,28 @@ pub fn find(allocator: std.mem.Allocator, component: []const u8) ?[]const u8 {
     const cwd = std_compat.fs.cwd().realpathAlloc(allocator, ".") catch return null;
     defer allocator.free(cwd);
 
-    const candidates = [_][]const []const u8{
-        &.{ cwd, "zig-out", "bin", component },
-        &.{ cwd, component, "zig-out", "bin", component },
-        &.{ cwd, "..", component, "zig-out", "bin", component },
-    };
+    const native_name = std.fmt.allocPrint(allocator, "{s}-native", .{component}) catch return null;
+    defer allocator.free(native_name);
 
-    for (candidates) |parts| {
-        const path = std.fs.path.join(allocator, parts) catch continue;
-        if (std_compat.fs.openFileAbsolute(path, .{})) |f| {
-            f.close();
-            return path;
-        } else |_| {
-            allocator.free(path);
+    const candidate_dirs = [_][]const []const u8{
+        &.{ cwd, "zig-out", "bin" },
+        &.{ cwd, component, "zig-out", "bin" },
+        &.{ cwd, "..", component, "zig-out", "bin" },
+    };
+    const candidate_names = [_][]const u8{ native_name, component };
+
+    for (candidate_dirs) |parts| {
+        const dir_path = std.fs.path.join(allocator, parts) catch continue;
+        defer allocator.free(dir_path);
+
+        for (candidate_names) |name| {
+            const path = std.fs.path.join(allocator, &.{ dir_path, name }) catch continue;
+            if (std_compat.fs.openFileAbsolute(path, .{})) |f| {
+                f.close();
+                return path;
+            } else |_| {
+                allocator.free(path);
+            }
         }
     }
 

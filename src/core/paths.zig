@@ -62,9 +62,16 @@ pub const Paths = struct {
         return std.fs.path.join(allocator, &.{ self.root, "manifests", filename });
     }
 
-    /// `{root}/bin/{component}-{version}` (or `.exe` on Windows)
+    /// `{root}/bin/{component}-{version}` (or `.exe` on Windows).
+    /// For `dev-local`, use the canonical component basename instead so locally
+    /// staged binaries behave the same as the original executable.
     pub fn binary(self: Paths, allocator: std.mem.Allocator, component: []const u8, version: []const u8) ![]const u8 {
-        const filename = if (builtin.os.tag == .windows)
+        const filename = if (std.mem.eql(u8, version, "dev-local"))
+            if (builtin.os.tag == .windows)
+                try std.fmt.allocPrint(allocator, "{s}.exe", .{component})
+            else
+                try allocator.dupe(u8, component)
+        else if (builtin.os.tag == .windows)
             try std.fmt.allocPrint(allocator, "{s}-{s}.exe", .{ component, version })
         else
             try std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, version });

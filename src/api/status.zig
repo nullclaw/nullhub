@@ -1,9 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const std_compat = @import("compat");
 const state_mod = @import("../core/state.zig");
 const platform = @import("../core/platform.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
+const health_mod = @import("../supervisor/health.zig");
 const helpers = @import("helpers.zig");
 const access = @import("../access.zig");
 const version = @import("../version.zig");
@@ -139,13 +141,103 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.append('}');
 }
 
+fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8, dot_key: []const u8) ?u16 {
+    const config_path = paths.instanceConfig(allocator, component, name) catch return null;
+    defer allocator.free(config_path);
+
+    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
+    defer file.close();
+    const contents = file.readToEndAlloc(allocator, 4 * 1024 * 1024) catch return null;
+    defer allocator.free(contents);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{
+        .allocate = .alloc_always,
+    }) catch return null;
+    defer parsed.deinit();
+
+    var current = parsed.value;
+    var it = std.mem.splitScalar(u8, dot_key, '.');
+    while (it.next()) |segment| {
+        switch (current) {
+            .object => |obj| current = obj.get(segment) orelse return null,
+            else => return null,
+        }
+    }
+
+    return switch (current) {
+        .integer => |v| if (v >= 0 and v <= 65535) @intCast(v) else null,
+        else => null,
+    };
+}
+
+const InstanceSnapshot = struct {
+    status: manager_mod.Status,
+    pid: ?std.process.Child.Id = null,
+    uptime_seconds: ?u64 = null,
+    restart_count: u32 = 0,
+    port: u16 = 0,
+};
+
+fn deriveStandaloneSnapshot(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    name: []const u8,
+    entry: state_mod.InstanceEntry,
+) ?InstanceSnapshot {
+    if (!std.mem.eql(u8, component, "nullclaw")) return null;
+
+    const inst_dir = paths.instanceDir(allocator, component, name) catch return null;
+    defer allocator.free(inst_dir);
+    const real_dir = std_compat.fs.realpathAlloc(allocator, inst_dir) catch return null;
+    defer allocator.free(real_dir);
+
+    const home = std_compat.process.getEnvVarOwned(allocator, "HOME") catch return null;
+    defer allocator.free(home);
+    const standalone_root = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return null;
+    defer allocator.free(standalone_root);
+
+    if (!std.mem.eql(u8, real_dir, standalone_root)) return null;
+    if (!std.mem.eql(u8, entry.launch_mode, "gateway")) return null;
+
+    const port = readPortFromConfig(allocator, paths, component, name, "gateway.port") orelse 0;
+    if (port == 0) return null;
+
+    const health = health_mod.check(allocator, "127.0.0.1", port, "/health");
+    return .{
+        .status = if (health.ok) .running else .stopped,
+        .port = port,
+    };
+}
+
+fn resolveInstanceSnapshot(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    manager: *manager_mod.Manager,
+    component: []const u8,
+    name: []const u8,
+    entry: state_mod.InstanceEntry,
+) InstanceSnapshot {
+    if (manager.getStatus(component, name)) |st| {
+        return .{
+            .status = st.status,
+            .pid = st.pid,
+            .uptime_seconds = st.uptime_seconds,
+            .restart_count = st.restart_count,
+            .port = st.port,
+        };
+    }
+    if (deriveStandaloneSnapshot(allocator, paths, component, name, entry)) |snapshot| return snapshot;
+    return .{ .status = .stopped };
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/status — aggregated dashboard data.
-pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) ApiResponse {
+pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
 
-    buildStatusJson(&buf, s, manager, uptime_seconds, host, port, access_options) catch return .{
+    buildStatusJson(&buf, s, manager, paths, uptime_seconds, host, port, access_options) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -154,7 +246,7 @@ pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
     return .{ .status = "200 OK", .content_type = "application/json", .body = buf.items };
 }
 
-fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) !void {
+fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) !void {
     var urls = try access.buildAccessUrlsWithOptions(buf.allocator, host, port, access_options);
     defer urls.deinit(buf.allocator);
     var component_rollups = std.StringHashMap(ComponentRollup).init(buf.allocator);
@@ -171,8 +263,8 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
         var rollup = ComponentRollup{};
         var inst_it = comp_entry.value_ptr.iterator();
         while (inst_it.next()) |inst_entry| {
-            const mgr_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
-            const runtime_status = if (mgr_status) |st| st.status else manager_mod.Status.stopped;
+            const snapshot = resolveInstanceSnapshot(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
+            const runtime_status = snapshot.status;
             rollup.total += 1;
             if (inst_entry.value_ptr.auto_start) rollup.auto_start += 1;
             observeStatus(&rollup, runtime_status);
@@ -257,12 +349,12 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
 
             const comp_name = comp_entry.key_ptr.*;
             const inst_name = inst_entry.key_ptr.*;
-            const mgr_status = manager.getStatus(comp_name, inst_name);
-            const status_str = if (mgr_status) |st| @tagName(st.status) else "stopped";
-            const pid = if (mgr_status) |st| st.pid else null;
-            const instance_uptime = if (mgr_status) |st| st.uptime_seconds else null;
-            const restart_count: u32 = if (mgr_status) |st| st.restart_count else 0;
-            const instance_port: u16 = if (mgr_status) |st| st.port else 0;
+            const snapshot = resolveInstanceSnapshot(buf.allocator, paths, manager, comp_name, inst_name, inst_entry.value_ptr.*);
+            const status_str = @tagName(snapshot.status);
+            const pid = snapshot.pid;
+            const instance_uptime = snapshot.uptime_seconds;
+            const restart_count: u32 = snapshot.restart_count;
+            const instance_port: u16 = snapshot.port;
 
             try buf.append('"');
             try appendEscaped(buf, inst_name);
@@ -289,7 +381,7 @@ test "handleStatus returns valid JSON with hub version" {
     var mgr = manager_mod.Manager.init(allocator, p);
     defer mgr.deinit();
 
-    const resp = handleStatus(allocator, &s, &mgr, 3600, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 3600, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -356,7 +448,7 @@ test "handleStatus includes instances" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = true });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -427,7 +519,7 @@ test "handleStatus overall_status becomes error when a component has failed inst
         .status = .failed,
     });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"error\"") != null);
@@ -447,7 +539,7 @@ test "handleStatus includes launch_mode" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .launch_mode = "agent" });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -465,7 +557,7 @@ test "handleStatus includes verbose flag" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .verbose = true });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -481,7 +573,7 @@ test "handleStatus with empty state returns empty instances" {
     var mgr = manager_mod.Manager.init(allocator, p);
     defer mgr.deinit();
 
-    const resp = handleStatus(allocator, &s, &mgr, 42, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, p, 42, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
