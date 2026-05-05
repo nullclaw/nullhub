@@ -279,9 +279,7 @@ test "handle passes through upstream 409 status and body" {
     if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var upstream = try TestUpstream.start(allocator,
-        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 19\r\n\r\n{\"error\":\"conflict\"}"
-    );
+    var upstream = try TestUpstream.start(allocator, "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 19\r\n\r\n{\"error\":\"conflict\"}");
     defer upstream.deinit();
 
     const base_url = try upstream.baseUrl(allocator);
