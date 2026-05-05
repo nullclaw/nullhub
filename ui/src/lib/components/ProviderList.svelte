@@ -75,7 +75,10 @@
   }
 
   function isPlaceholderEntry(entry: ProviderEntry) {
-    return entry.api_key.trim().length === 0 && entry.model.trim().length === 0;
+    return entry.api_key.trim().length === 0 &&
+      entry.model.trim().length === 0 &&
+      (entry.base_url || "").trim().length === 0 &&
+      (entry.provider_name || "").trim().length === 0;
   }
 
   function useSaved(sp: any) {
@@ -107,7 +110,11 @@
     try {
       const parsed = JSON.parse(value);
       if (Array.isArray(parsed)) {
-        entries = parsed;
+        entries = parsed.map((entry: any) => ({
+          ...entry,
+          base_url: entry.base_url || "",
+          provider_name: entry.provider_name || "",
+        }));
       }
     } catch {
       entries = [];
@@ -163,6 +170,17 @@
     emitChange();
   }
 
+  function updateProvider(index: number, provider: string) {
+    entries = entries.map((e: any, i: number) => {
+      if (i !== index) return e;
+      if (provider === OPENAI_COMPATIBLE_VALUE) {
+        return { ...e, provider, base_url: e.base_url || "", provider_name: e.provider_name || "" };
+      }
+      return { ...e, provider, base_url: "", provider_name: "" };
+    });
+    emitChange();
+  }
+
   function isLocal(provider: string) {
     return LOCAL_PROVIDERS.includes(provider);
   }
@@ -187,7 +205,18 @@
   }
 
   function modelKey(entry: ProviderEntry) {
-    return `${entry.provider}\u0000${entry.api_key}\u0000${entry.base_url}`;
+    return `${actualProvider(entry)}\u0000${entry.base_url || ""}\u0000${entry.api_key}`;
+  }
+
+  function actualProvider(entry: ProviderEntry) {
+    return entry.provider === OPENAI_COMPATIBLE_VALUE
+      ? (entry.provider_name || "").trim()
+      : entry.provider;
+  }
+
+  function validationResultForEntry(entry: ProviderEntry) {
+    const provider = actualProvider(entry) || entry.provider;
+    return validationResults.find((r: any) => r.provider === provider || r.provider === entry.provider);
   }
 
   function getModelOptions(entry: ProviderEntry) {
@@ -204,9 +233,8 @@
 
   async function ensureModelOptions(entry: ProviderEntry) {
     if (!entry.provider) return;
-    // openai-compatible requires a base_url to probe — skip until one is entered
+    // openai-compatible requires a base_url to probe; skip until one is entered.
     if (entry.provider === OPENAI_COMPATIBLE_VALUE && !entry.base_url) return;
-    // standard providers require a component (binary) to list models
     if (entry.provider !== OPENAI_COMPATIBLE_VALUE && !component) return;
 
     const key = modelKey(entry);
@@ -218,11 +246,10 @@
     try {
       let models: string[];
       if (entry.provider === OPENAI_COMPATIBLE_VALUE && entry.base_url) {
-        // Custom OpenAI-compatible: probe the /models endpoint directly
         const data = await api.probeProviderModels(entry.base_url, entry.api_key || "");
         models = data.live_ok && Array.isArray(data.models) ? data.models : [];
       } else {
-        const data = await api.getWizardModels(component, entry.provider, entry.api_key || "");
+        const data = await api.getWizardModels(component, actualProvider(entry), entry.api_key || "");
         models = Array.isArray(data)
           ? data
           : Array.isArray(data?.models)
@@ -308,6 +335,9 @@
   }
 
   function modelPlaceholder(entry: ProviderEntry) {
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+      return "e.g. gpt-4o-mini";
+    }
     if (entry.provider === "codex-cli" || entry.provider === "openai-codex") {
       return "e.g. gpt-5.4";
     }
@@ -320,6 +350,9 @@
     }
     if (entry.provider === "openai-codex") {
       return "Uses ChatGPT/Codex auth from ~/.codex/auth.json. No API key required here.";
+    }
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+      return "Click to load models from the endpoint, then filter as you type.";
     }
     return "Click to load models, then filter as you type.";
   }
@@ -335,7 +368,7 @@
     <div class="provider-row">
       <div class="provider-row-header">
         <span class="provider-number">{i + 1}.</span>
-        {#each [validationResults.find((r: any) => r.provider === entry.provider)] as result}
+        {#each [validationResultForEntry(entry)] as result}
           {#if result}
             <span class="status-dot" class:ok={result.live_ok} class:error={!result.live_ok}
               title={result.reason}></span>
@@ -343,7 +376,7 @@
         {/each}
         <select
           value={entry.provider}
-          onchange={(e) => updateEntry(i, "provider", e.currentTarget.value)}
+          onchange={(e) => updateProvider(i, e.currentTarget.value)}
         >
           {#each effectiveProviders as opt}
             <option value={opt.value}

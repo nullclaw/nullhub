@@ -317,14 +317,14 @@ pub const State = struct {
             errdefer allocator.free(owned_api_key);
             const owned_model = if (sp.model.len > 0) try allocator.dupe(u8, sp.model) else @as([]const u8, "");
             errdefer if (owned_model.len > 0) allocator.free(@constCast(owned_model));
+            const owned_base_url = if (sp.base_url.len > 0) try allocator.dupe(u8, sp.base_url) else @as([]const u8, "");
+            errdefer if (owned_base_url.len > 0) allocator.free(@constCast(owned_base_url));
             const owned_validated_at = if (sp.validated_at.len > 0) try allocator.dupe(u8, sp.validated_at) else @as([]const u8, "");
             errdefer if (owned_validated_at.len > 0) allocator.free(@constCast(owned_validated_at));
             const owned_validated_with = if (sp.validated_with.len > 0) try allocator.dupe(u8, sp.validated_with) else @as([]const u8, "");
             errdefer if (owned_validated_with.len > 0) allocator.free(@constCast(owned_validated_with));
             const owned_last_validation_at = if (sp.last_validation_at.len > 0) try allocator.dupe(u8, sp.last_validation_at) else @as([]const u8, "");
             errdefer if (owned_last_validation_at.len > 0) allocator.free(@constCast(owned_last_validation_at));
-            const owned_base_url = if (sp.base_url.len > 0) try allocator.dupe(u8, sp.base_url) else @as([]const u8, "");
-            errdefer if (owned_base_url.len > 0) allocator.free(@constCast(owned_base_url));
 
             try state.saved_providers.append(.{
                 .id = sp.id,

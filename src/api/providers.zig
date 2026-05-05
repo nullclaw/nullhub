@@ -139,14 +139,16 @@ pub fn handleCreate(
     const new_id = providers_list[providers_list.len - 1].id;
     if (validated_ok) {
         try persistValidationAttempt(allocator, state, new_id, validated_with, true);
-    } else if (is_custom) {
-        // Custom probe ran but failed — record the attempt so the UI shows status
-        const now = try nowIso8601(allocator);
-        defer allocator.free(now);
-        _ = try state.updateSavedProvider(new_id, .{
-            .last_validation_at = now,
-            .last_validation_ok = false,
-        });
+    } else {
+        if (is_custom) {
+            // Custom probe ran but failed — record the attempt so the UI shows status.
+            const now = try nowIso8601(allocator);
+            defer allocator.free(now);
+            _ = try state.updateSavedProvider(new_id, .{
+                .last_validation_at = now,
+                .last_validation_ok = false,
+            });
+        }
         try state.save();
     }
 
@@ -246,8 +248,8 @@ pub fn handleUpdate(
                 .api_key = parsed.value.api_key,
                 .model = parsed.value.model,
                 .base_url = parsed.value.base_url,
-                .validated_at = if (models_probe.live_ok) now else null,
-                .validated_with = if (models_probe.live_ok) "models-probe" else null,
+                .validated_at = if (models_probe.live_ok) now else "",
+                .validated_with = if (models_probe.live_ok) "models-probe" else "",
                 .last_validation_at = now,
                 .last_validation_ok = models_probe.live_ok,
             });
@@ -952,6 +954,39 @@ test "handleCreate with base_url saves without requiring nullclaw probe" {
     try std.testing.expectEqual(@as(usize, 1), s.savedProviders().len);
 }
 
+test "handleCreate with base_url persists custom provider" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-custom-create-persist";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    {
+        var s = state_mod.State.init(allocator, state_path);
+        defer s.deinit();
+
+        const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+        const body =
+            \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}
+        ;
+        const json = try handleCreate(allocator, body, &s, paths);
+        defer allocator.free(json);
+
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
+    }
+
+    var loaded = try state_mod.State.load(allocator, state_path);
+    defer loaded.deinit();
+
+    const providers = loaded.savedProviders();
+    try std.testing.expectEqual(@as(usize, 1), providers.len);
+    try std.testing.expectEqualStrings("local-llm", providers[0].provider);
+    try std.testing.expectEqualStrings("http://127.0.0.1:5801/v1", providers[0].base_url);
+}
+
 test "handleCreate without base_url requires nullclaw instance" {
     // Standard providers (no base_url) must require an installed nullclaw
     // instance to run the probe.
@@ -1269,4 +1304,42 @@ test "syncProviderToInstances is no-op when no nullclaw instances" {
     const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
     // Should not panic or error when there are no instances
     syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-key", "");
+}
+
+test "handleUpdate custom provider clears stale validation metadata" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-provider-test-update-custom-clears-validation";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "local-llm",
+        .api_key = "old-key",
+        .base_url = "http://127.0.0.1:5801/v1",
+        .validated_with = "nullclaw",
+    });
+    _ = try s.updateSavedProvider(1, .{
+        .validated_at = "2026-03-11T18:59:00Z",
+        .last_validation_at = "2026-03-14T11:22:33Z",
+        .last_validation_ok = true,
+    });
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    const json = try handleUpdate(allocator, 1, "{\"api_key\":\"new-key\"}", &s, paths);
+    defer allocator.free(json);
+
+    const provider = s.getSavedProvider(1).?;
+    try std.testing.expectEqualStrings("new-key", provider.api_key);
+    try std.testing.expectEqualStrings("", provider.validated_at);
+    try std.testing.expectEqualStrings("", provider.validated_with);
+    try std.testing.expect(provider.last_validation_at.len > 0);
+    try std.testing.expect(!std.mem.eql(u8, "2026-03-14T11:22:33Z", provider.last_validation_at));
+    try std.testing.expect(!provider.last_validation_ok);
 }
