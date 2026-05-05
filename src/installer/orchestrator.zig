@@ -15,6 +15,7 @@ const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const ui_modules_mod = @import("ui_modules.zig");
 const managed_skills = @import("../managed_skills.zig");
+const test_helpers = @import("../test_helpers.zig");
 const MAX_CONFIG_BYTES = 4 * 1024 * 1024;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -898,32 +899,28 @@ test "writeFile creates file with correct content" {
 
 test "directory creation succeeds in temp directory" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/test-orchestrator-dirs";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     // Create top-level dirs
-    try p.ensureDirs();
+    try fixture.paths.ensureDirs();
 
     // Create component dir
-    const comp_dir = try std.fs.path.join(allocator, &.{ p.root, "instances", "testcomp" });
+    const comp_dir = try std.fs.path.join(allocator, &.{ fixture.paths.root, "instances", "testcomp" });
     defer allocator.free(comp_dir);
     try std_compat.fs.makeDirAbsolute(comp_dir);
 
     // Create instance dir
-    const inst_dir = try p.instanceDir(allocator, "testcomp", "myinst");
+    const inst_dir = try fixture.paths.instanceDir(allocator, "testcomp", "myinst");
     defer allocator.free(inst_dir);
     try std_compat.fs.makeDirAbsolute(inst_dir);
 
     // Create data and logs subdirs
-    const data_dir = try p.instanceData(allocator, "testcomp", "myinst");
+    const data_dir = try fixture.paths.instanceData(allocator, "testcomp", "myinst");
     defer allocator.free(data_dir);
     try std_compat.fs.makeDirAbsolute(data_dir);
 
-    const logs_dir = try p.instanceLogs(allocator, "testcomp", "myinst");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "testcomp", "myinst");
     defer allocator.free(logs_dir);
     try std_compat.fs.makeDirAbsolute(logs_dir);
 

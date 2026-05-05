@@ -5,6 +5,7 @@ const health = @import("health.zig");
 const runtime_state = @import("runtime_state.zig");
 const paths_mod = @import("../core/paths.zig");
 const component_cli = @import("../core/component_cli.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 pub const Status = enum {
     stopped,
@@ -866,20 +867,16 @@ test "getStatus returns null for unknown instance" {
 
 test "logSupervisor appends diagnostics to nullhub.log" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/test-nullhub-mgr-log-supervisor";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     mgr.logSupervisor("nullclaw", "diag", "first diagnostic {d}", .{@as(u8, 1)});
     mgr.logSupervisor("nullclaw", "diag", "second diagnostic", .{});
 
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "diag");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "diag");
     defer allocator.free(logs_dir);
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
     defer allocator.free(log_path);
@@ -935,14 +932,12 @@ test "restart preserves launch args with spaces" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/test-nullhub-mgr-restart-argv";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_root);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const script_path = try std.fs.path.join(allocator, &.{ tmp_root, "capture-arg.sh" });
+    const script_path = try fixture.path(allocator, "capture-arg.sh");
     defer allocator.free(script_path);
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "captured.txt" });
+    const output_path = try fixture.path(allocator, "captured.txt");
     defer allocator.free(output_path);
 
     const script =
@@ -954,10 +949,7 @@ test "restart preserves launch args with spaces" {
     defer script_file.close();
     try script_file.writeAll(script);
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const launch_args = [_][]const u8{ script_path, "hello world", output_path };
