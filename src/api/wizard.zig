@@ -480,12 +480,7 @@ fn fetchLatestComponentBinary(allocator: std.mem.Allocator, component: []const u
     paths.ensureDirs() catch return null;
     const bin_path = paths.binary(allocator, component, release.value.tag_name) catch return null;
 
-    if (std_compat.fs.openFileAbsolute(bin_path, .{})) |f| {
-        f.close();
-        return bin_path;
-    } else |_| {}
-
-    downloader.download(allocator, asset.browser_download_url, bin_path) catch {
+    downloader.downloadIfMissing(allocator, asset.browser_download_url, bin_path) catch {
         allocator.free(bin_path);
         return null;
     };
