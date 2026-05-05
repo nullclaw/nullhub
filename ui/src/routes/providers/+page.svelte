@@ -1,29 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { PROVIDER_OPTIONS, OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, KNOWN_PROVIDER_VALUES } from "$lib/providers";
 
-  const PROVIDER_OPTIONS = [
-    { value: "openrouter", label: "OpenRouter (multi-provider, recommended)", recommended: true },
-    { value: "anthropic", label: "Anthropic" },
-    { value: "openai", label: "OpenAI" },
-    { value: "google", label: "Google AI" },
-    { value: "mistral", label: "Mistral" },
-    { value: "groq", label: "Groq" },
-    { value: "deepseek", label: "DeepSeek" },
-    { value: "cohere", label: "Cohere" },
-    { value: "together", label: "Together AI" },
-    { value: "fireworks", label: "Fireworks AI" },
-    { value: "perplexity", label: "Perplexity" },
-    { value: "xai", label: "xAI" },
-    { value: "ollama", label: "Ollama (local)" },
-    { value: "lm-studio", label: "LM Studio (local)" },
-    { value: "claude-cli", label: "Claude CLI (local)" },
-    { value: "codex-cli", label: "Codex CLI (local CLI)" },
-    { value: "openai-codex", label: "OpenAI Codex (ChatGPT login)" },
-    { value: "openai-compatible", label: "OpenAI Compatible (custom endpoint)" },
-  ];
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
-  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
   let providers = $state<any[]>([]);
   let loading = $state(true);
@@ -37,12 +16,19 @@
   let addForm = $state({ provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" });
   let addValidating = $state(false);
   let addError = $state("");
+  let addProbing = $state(false);
+  let addProbedModels = $state<string[]>([]);
+  let addProbeError = $state("");
 
   // Edit state
   let editingId = $state<string | null>(null);
   let editForm = $state({ name: "", api_key: "", model: "", base_url: "" });
+  let editRealApiKey = $state(""); // revealed key fetched on edit open; used by Fetch Models when form field is blank
   let editValidating = $state(false);
   let editError = $state("");
+  let editProbing = $state(false);
+  let editProbedModels = $state<string[]>([]);
+  let editProbeError = $state("");
 
   // Re-validate state
   let revalidatingId = $state<string | null>(null);
@@ -78,6 +64,45 @@
     }
   }
 
+  async function fetchAddModels() {
+    addProbing = true;
+    addProbeError = "";
+    addProbedModels = [];
+    try {
+      const result = await api.probeProviderModels(addForm.base_url.trim(), addForm.api_key.trim());
+      if (result.live_ok) {
+        addProbedModels = result.models;
+        if (!addProbedModels.length) addProbeError = "Connected, but no models returned.";
+      } else {
+        addProbeError = result.reason || "Could not reach endpoint.";
+      }
+    } catch (e) {
+      addProbeError = (e as Error).message;
+    } finally {
+      addProbing = false;
+    }
+  }
+
+  async function fetchEditModels() {
+    editProbing = true;
+    editProbeError = "";
+    editProbedModels = [];
+    try {
+      const keyToUse = editForm.api_key.trim() || editRealApiKey;
+      const result = await api.probeProviderModels(editForm.base_url.trim(), keyToUse);
+      if (result.live_ok) {
+        editProbedModels = result.models;
+        if (!editProbedModels.length) editProbeError = "Connected, but no models returned.";
+      } else {
+        editProbeError = result.reason || "Could not reach endpoint.";
+      }
+    } catch (e) {
+      editProbeError = (e as Error).message;
+    } finally {
+      editProbing = false;
+    }
+  }
+
   async function handleAdd() {
     addValidating = true;
     addError = "";
@@ -105,6 +130,8 @@
       });
       showAddForm = false;
       addForm = { provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" };
+      addProbedModels = [];
+      addProbeError = "";
       flashMessage("Provider saved");
       await loadProviders();
     } catch (e) {
@@ -117,6 +144,14 @@
   function startEdit(p: any) {
     editingId = p.id;
     editForm = { name: p.name, api_key: "", model: p.model, base_url: p.base_url || "" };
+    editRealApiKey = "";
+    editProbedModels = [];
+    editProbeError = "";
+    // Fetch the real (revealed) key so Fetch Models works without the user re-entering the key
+    api.getSavedProviders(true).then(data => {
+      const found = (data.providers || []).find((x: any) => x.id === p.id);
+      if (found) editRealApiKey = found.api_key || "";
+    }).catch(() => {});
   }
 
   function cancelEdit() {
@@ -171,8 +206,10 @@
     return LOCAL_PROVIDERS.includes(provider);
   }
 
-  function isOpenAiCompatible(p: any) {
-    return p.base_url && p.base_url.length > 0;
+  // A provider is "custom" if its type is not one of the built-in nullclaw-known providers.
+  // This determines whether the base_url / Fetch Models fields appear in edit form.
+  function isCustomProvider(p: any) {
+    return !KNOWN_PROVIDER_VALUES.has(p.provider);
   }
 
   function getProviderLabel(value: string) {
@@ -198,6 +235,14 @@
   function lastValidationAt(provider: any) {
     return provider.last_validation_at || provider.validated_at || "";
   }
+
+  $effect(() => {
+    // Clear probed models when the add form's base_url or api_key changes
+    addForm.base_url;
+    addForm.api_key;
+    addProbedModels = [];
+    addProbeError = "";
+  });
 </script>
 
 <div class="providers-page">
@@ -243,15 +288,46 @@
           <input id="add-api-key" type="password" bind:value={addForm.api_key} placeholder="Enter API key..." />
         </div>
       {/if}
-      <div class="field">
-        <label for="add-model">Model (optional)</label>
-        <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
-      </div>
+      {#if addForm.provider === OPENAI_COMPATIBLE_VALUE}
+        <div class="field">
+          <label for="add-model">Model</label>
+          <div class="model-input-row">
+            <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. gpt-4" />
+            <button
+              class="btn fetch-models-btn"
+              onclick={fetchAddModels}
+              disabled={addProbing || !addForm.base_url.trim()}
+              title="Fetch available models from this endpoint"
+            >
+              {addProbing ? "Fetching..." : "Fetch Models"}
+            </button>
+          </div>
+          {#if addProbeError}
+            <div class="probe-error">{addProbeError}</div>
+          {/if}
+          {#if addProbedModels.length > 0}
+            <div class="model-list">
+              {#each addProbedModels as m}
+                <button
+                  class="model-chip"
+                  class:selected={addForm.model === m}
+                  onclick={() => { addForm.model = m; }}
+                >{m}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <div class="field">
+          <label for="add-model">Model (optional)</label>
+          <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+        </div>
+      {/if}
       {#if addError}
         <div class="error-message">{addError}</div>
       {/if}
       <button class="primary-btn" onclick={handleAdd} disabled={addValidating}>
-        {addValidating ? "Validating..." : "Validate & Save"}
+        {addValidating ? "Validating..." : "Save"}
       </button>
     </div>
   {/if}
@@ -272,7 +348,7 @@
                 <label for="edit-name-{p.id}">Name</label>
                 <input id="edit-name-{p.id}" type="text" bind:value={editForm.name} />
               </div>
-              {#if isOpenAiCompatible(p)}
+              {#if isCustomProvider(p)}
                 <div class="field">
                   <label for="edit-base-url-{p.id}">Base URL</label>
                   <input id="edit-base-url-{p.id}" type="text" bind:value={editForm.base_url} placeholder="https://api.example.com/v1" />
@@ -286,7 +362,35 @@
               {/if}
               <div class="field">
                 <label for="edit-model-{p.id}">Model</label>
-                <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+                {#if isCustomProvider(p)}
+                  <div class="model-input-row">
+                    <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. gpt-4" />
+                    <button
+                      class="btn fetch-models-btn"
+                      onclick={fetchEditModels}
+                      disabled={editProbing || !editForm.base_url.trim()}
+                      title="Fetch available models from this endpoint"
+                    >
+                      {editProbing ? "Fetching..." : "Fetch Models"}
+                    </button>
+                  </div>
+                  {#if editProbeError}
+                    <div class="probe-error">{editProbeError}</div>
+                  {/if}
+                  {#if editProbedModels.length > 0}
+                    <div class="model-list">
+                      {#each editProbedModels as m}
+                        <button
+                          class="model-chip"
+                          class:selected={editForm.model === m}
+                          onclick={() => { editForm.model = m; }}
+                        >{m}</button>
+                      {/each}
+                    </div>
+                  {/if}
+                {:else}
+                  <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+                {/if}
               </div>
               {#if editError}
                 <div class="error-message">{editError}</div>
@@ -671,5 +775,57 @@
 
   .edit-form {
     padding: 0.5rem 0;
+  }
+
+  .model-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .model-input-row input {
+    flex: 1;
+  }
+
+  .fetch-models-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.5rem;
+  }
+
+  .model-chip {
+    padding: 0.25rem 0.625rem;
+    background: var(--bg-surface);
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .model-chip:hover {
+    border-color: var(--accent-dim);
+    color: var(--fg);
+  }
+
+  .model-chip.selected {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border-color: var(--accent);
+    color: var(--accent);
+    text-shadow: var(--text-glow);
+  }
+
+  .probe-error {
+    margin-top: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--error, #e55);
   }
 </style>

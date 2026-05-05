@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, mergeWithManifestOptions } from "$lib/providers";
+  import type { ProviderOption } from "$lib/providers";
 
   let {
     providers = [],
@@ -10,16 +12,11 @@
     validationResults = [] as Array<{ provider: string; live_ok: boolean; reason: string }>,
   } = $props();
 
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
   const MODEL_RESULTS_LIMIT = 80;
-  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
-  const OPENAI_COMPATIBLE_OPTION = { value: OPENAI_COMPATIBLE_VALUE, label: "OpenAI Compatible (custom endpoint)" };
 
-  type ProviderOption = {
-    value: string;
-    label: string;
-    recommended?: boolean;
-  };
+  // Merge the canonical list with whatever the manifest marks as recommended.
+  // This ensures openai-compatible always appears regardless of the manifest.
+  const effectiveProviders: ProviderOption[] = $derived(mergeWithManifestOptions(providers));
 
   type ProviderEntry = {
     provider: string;
@@ -38,18 +35,15 @@
   let modelLoadedByKey = $state<Record<string, boolean>>({});
   let modelOptionsByKey = $state<Record<string, string[]>>({});
   let modelErrorsByKey = $state<Record<string, string>>({});
-  let providerOptions = $derived(
-    providers.some((p: any) => p.value === OPENAI_COMPATIBLE_VALUE)
-      ? providers
-      : [...providers, OPENAI_COMPATIBLE_OPTION],
-  );
 
   const modelBlurTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
   onMount(async () => {
     try {
-      const data = await api.getSavedProviders();
+      // Fetch revealed keys upfront so the "Use Saved" dropdown is instant on click.
+      const data = await api.getSavedProviders(true);
       savedProviders = data.providers || [];
+      savedProvidersRevealed = true;
     } catch {}
   });
 
@@ -133,8 +127,8 @@
 
   function addEntry() {
     // Find recommended provider or first available
-    const rec = providerOptions.find((p: any) => p.recommended);
-    const defaultProvider = rec?.value || providerOptions[0]?.value || "";
+    const rec = effectiveProviders.find((p: any) => p.recommended);
+    const defaultProvider = rec?.value || effectiveProviders[0]?.value || "";
     entries = [
       ...entries,
       { provider: defaultProvider, api_key: "", model: "", base_url: "", provider_name: "" },
@@ -238,8 +232,10 @@
   }
 
   async function ensureModelOptions(entry: ProviderEntry) {
-    if (!component || !entry.provider) return;
-    if (entry.provider === OPENAI_COMPATIBLE_VALUE) return;
+    if (!entry.provider) return;
+    // openai-compatible requires a base_url to probe; skip until one is entered.
+    if (entry.provider === OPENAI_COMPATIBLE_VALUE && !entry.base_url) return;
+    if (entry.provider !== OPENAI_COMPATIBLE_VALUE && !component) return;
 
     const key = modelKey(entry);
     if (modelLoadingByKey[key] || modelLoadedByKey[key]) return;
@@ -248,12 +244,18 @@
     modelErrorsByKey = { ...modelErrorsByKey, [key]: "" };
 
     try {
-      const data = await api.getWizardModels(component, actualProvider(entry), entry.api_key || "");
-      const models = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.models)
-          ? data.models
-          : [];
+      let models: string[];
+      if (entry.provider === OPENAI_COMPATIBLE_VALUE && entry.base_url) {
+        const data = await api.probeProviderModels(entry.base_url, entry.api_key || "");
+        models = data.live_ok && Array.isArray(data.models) ? data.models : [];
+      } else {
+        const data = await api.getWizardModels(component, actualProvider(entry), entry.api_key || "");
+        models = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.models)
+            ? data.models
+            : [];
+      }
       const normalized = models.filter((model): model is string => typeof model === "string");
       modelOptionsByKey = { ...modelOptionsByKey, [key]: normalized };
       modelLoadedByKey = { ...modelLoadedByKey, [key]: true };
@@ -350,7 +352,7 @@
       return "Uses ChatGPT/Codex auth from ~/.codex/auth.json. No API key required here.";
     }
     if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
-      return "Type a model name manually.";
+      return "Click to load models from the endpoint, then filter as you type.";
     }
     return "Click to load models, then filter as you type.";
   }
@@ -376,7 +378,7 @@
           value={entry.provider}
           onchange={(e) => updateProvider(i, e.currentTarget.value)}
         >
-          {#each providerOptions as opt}
+          {#each effectiveProviders as opt}
             <option value={opt.value}
               >{formatRecommendedLabel(opt.label, opt.recommended)}</option
             >

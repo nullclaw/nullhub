@@ -3,6 +3,7 @@
   import ProviderList from "./ProviderList.svelte";
   import ChannelList from "./ChannelList.svelte";
   import { api } from "$lib/api/client";
+  import { OPENAI_COMPATIBLE_VALUE } from "$lib/providers";
 
   let {
     component = "",
@@ -23,7 +24,6 @@
   let selectedVersion = $state("latest");
   let channels = $state<Record<string, Record<string, Record<string, any>>>>({});
   const instanceNameId = "wizard-instance-name";
-  const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
   // Validation state
   let validating = $state(false);
@@ -214,19 +214,57 @@
     providerValidationResults = [];
 
     try {
-      const rawProviders = JSON.parse(answers["_providers"] || "[]");
+      const rawProviders: any[] = JSON.parse(answers["_providers"] || "[]");
       if (rawProviders.length === 0) {
         validationError = "Add at least one provider";
         return false;
       }
+
       const customError = customProviderError(rawProviders);
       if (customError) {
         validationError = customError;
         return false;
       }
+
       const providers = normalizeProviderEntries(rawProviders);
+      const customProbeResults: Array<{ provider: string; live_ok: boolean; reason: string }> = [];
+
+      for (const provider of providers) {
+        if (!provider.base_url) continue;
+        try {
+          const probe = await api.probeProviderModels(provider.base_url, provider.api_key || "");
+          customProbeResults.push({
+            provider: provider.provider,
+            live_ok: probe.live_ok,
+            reason: probe.reason || "",
+          });
+        } catch {
+          customProbeResults.push({
+            provider: provider.provider,
+            live_ok: false,
+            reason: "probe_request_failed",
+          });
+        }
+      }
+
+      if (customProbeResults.some((result) => !result.live_ok)) {
+        providerValidationResults = customProbeResults;
+        return false;
+      }
+
       const result = await api.validateProviders(component, providers);
-      providerValidationResults = result.results || [];
+      const backendResults = result.results || [];
+      const mergedResults = backendResults.map(
+        (backend: any) =>
+          customProbeResults.find((custom) => custom.provider === backend.provider) || backend,
+      );
+      for (const custom of customProbeResults) {
+        if (!mergedResults.some((entry: any) => entry.provider === custom.provider)) {
+          mergedResults.push(custom);
+        }
+      }
+
+      providerValidationResults = mergedResults;
       validationWarning = result.saved_providers_warning || "";
       return providerValidationResults.every((r: any) => r.live_ok);
     } catch (e) {
@@ -318,7 +356,9 @@
             payload.model = parsed[0].model || "";
             if (parsed[0].base_url) payload.base_url = parsed[0].base_url;
           }
-        } catch {}
+        } catch (e) {
+          throw e;
+        }
       }
       if (Object.keys(channels).length > 0) {
         payload.channels = channels;

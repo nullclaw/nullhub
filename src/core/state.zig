@@ -810,6 +810,7 @@ pub const State = struct {
         for (self.saved_channels.items) |sc| {
             if (std.mem.eql(u8, sc.channel_type, channel_type)) count += 1;
         }
+        if (count == 0) return std.fmt.allocPrint(self.allocator, "{s}", .{label});
         return std.fmt.allocPrint(self.allocator, "{s} #{d}", .{ label, count + 1 });
     }
 
@@ -827,6 +828,10 @@ pub const State = struct {
         for (self.saved_providers.items) |sp| {
             if (std.mem.eql(u8, sp.provider, provider)) count += 1;
         }
+        // Only append a numeric suffix when there is already at least one
+        // provider of this type — avoids the awkward "My Provider #1" for
+        // the common single-instance case.
+        if (count == 0) return std.fmt.allocPrint(self.allocator, "{s}", .{label});
         return std.fmt.allocPrint(self.allocator, "{s} #{d}", .{ label, count + 1 });
     }
 };
@@ -1182,7 +1187,7 @@ test "add saved provider, save, load, verify round-trip" {
         try std.testing.expectEqualStrings("openrouter", providers[0].provider);
         try std.testing.expectEqualStrings("sk-or-xxx", providers[0].api_key);
         try std.testing.expectEqualStrings("anthropic/claude-sonnet-4", providers[0].model);
-        try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+        try std.testing.expectEqualStrings("OpenRouter", providers[0].name);
         try std.testing.expectEqual(@as(u32, 1), providers[0].id);
 
         try s.save();
@@ -1196,7 +1201,7 @@ test "add saved provider, save, load, verify round-trip" {
         try std.testing.expectEqual(@as(usize, 1), providers.len);
         try std.testing.expectEqualStrings("openrouter", providers[0].provider);
         try std.testing.expectEqualStrings("sk-or-xxx", providers[0].api_key);
-        try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+        try std.testing.expectEqualStrings("OpenRouter", providers[0].name);
         try std.testing.expectEqual(@as(u32, 1), providers[0].id);
     }
 }
@@ -1216,9 +1221,9 @@ test "auto-generated name increments per provider type" {
 
     const providers = s.savedProviders();
     try std.testing.expectEqual(@as(usize, 3), providers.len);
-    try std.testing.expectEqualStrings("OpenRouter #1", providers[0].name);
+    try std.testing.expectEqualStrings("OpenRouter", providers[0].name);
     try std.testing.expectEqualStrings("OpenRouter #2", providers[1].name);
-    try std.testing.expectEqualStrings("Anthropic #1", providers[2].name);
+    try std.testing.expectEqualStrings("Anthropic", providers[2].name);
 }
 
 test "update saved provider name only" {
@@ -1408,19 +1413,19 @@ test "add saved provider with base_url, save, load, verify round-trip" {
         defer s.deinit();
 
         try s.addSavedProvider(.{
-            .provider = "infini-ai",
-            .api_key = "sk-cp-test",
-            .model = "minimax-m2.7",
-            .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+            .provider = "custom-llm",
+            .api_key = "sk-test-key",
+            .model = "test-model",
+            .base_url = "https://example.com/v1",
         });
 
         const providers = s.savedProviders();
         try std.testing.expectEqual(@as(usize, 1), providers.len);
-        try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
-        try std.testing.expectEqualStrings("sk-cp-test", providers[0].api_key);
-        try std.testing.expectEqualStrings("minimax-m2.7", providers[0].model);
-        try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
-        try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
+        try std.testing.expectEqualStrings("custom-llm", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-test-key", providers[0].api_key);
+        try std.testing.expectEqualStrings("test-model", providers[0].model);
+        try std.testing.expectEqualStrings("https://example.com/v1", providers[0].base_url);
+        try std.testing.expectEqualStrings("custom-llm #1", providers[0].name);
 
         try s.save();
     }
@@ -1431,11 +1436,11 @@ test "add saved provider with base_url, save, load, verify round-trip" {
 
         const providers = s.savedProviders();
         try std.testing.expectEqual(@as(usize, 1), providers.len);
-        try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
-        try std.testing.expectEqualStrings("sk-cp-test", providers[0].api_key);
-        try std.testing.expectEqualStrings("minimax-m2.7", providers[0].model);
-        try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
-        try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
+        try std.testing.expectEqualStrings("custom-llm", providers[0].provider);
+        try std.testing.expectEqualStrings("sk-test-key", providers[0].api_key);
+        try std.testing.expectEqualStrings("test-model", providers[0].model);
+        try std.testing.expectEqualStrings("https://example.com/v1", providers[0].base_url);
+        try std.testing.expectEqualStrings("custom-llm #1", providers[0].name);
     }
 }
 
@@ -1449,7 +1454,7 @@ test "update saved provider base_url" {
     defer s.deinit();
 
     try s.addSavedProvider(.{
-        .provider = "infini-ai",
+        .provider = "custom-llm",
         .api_key = "key1",
         .base_url = "https://old.example.com/v1",
     });
@@ -1472,9 +1477,9 @@ test "update saved provider clears base_url" {
     defer s.deinit();
 
     try s.addSavedProvider(.{
-        .provider = "infini-ai",
+        .provider = "custom-llm",
         .api_key = "key1",
-        .base_url = "https://cloud.infini-ai.com/v1",
+        .base_url = "https://example.com/v1",
     });
     const updated = try s.updateSavedProvider(1, .{ .base_url = "" });
     try std.testing.expect(updated);
@@ -1493,33 +1498,60 @@ test "multiple openai-compatible providers with different names" {
     defer s.deinit();
 
     try s.addSavedProvider(.{
-        .provider = "infini-ai",
+        .provider = "custom-llm",
         .api_key = "key1",
-        .model = "minimax-m2.7",
-        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+        .model = "test-model",
+        .base_url = "https://example.com/v1",
     });
     try s.addSavedProvider(.{
-        .provider = "infini-ai",
+        .provider = "custom-llm",
         .api_key = "key1",
         .model = "deepseek-v3",
-        .base_url = "https://cloud.infini-ai.com/maas/coding/v1",
+        .base_url = "https://example.com/v1",
     });
     try s.addSavedProvider(.{
-        .provider = "xiaomi-mimo",
+        .provider = "another-llm",
         .api_key = "key2",
-        .model = "mimo-7b",
-        .base_url = "https://api.xiaomi.com/v1",
+        .model = "another-model",
+        .base_url = "https://other.example.com/v1",
     });
 
     const providers = s.savedProviders();
     try std.testing.expectEqual(@as(usize, 3), providers.len);
-    try std.testing.expectEqualStrings("infini-ai #1", providers[0].name);
-    try std.testing.expectEqualStrings("infini-ai #2", providers[1].name);
-    try std.testing.expectEqualStrings("xiaomi-mimo #1", providers[2].name);
-    try std.testing.expectEqualStrings("infini-ai", providers[0].provider);
-    try std.testing.expectEqualStrings("xiaomi-mimo", providers[2].provider);
-    try std.testing.expectEqualStrings("https://cloud.infini-ai.com/maas/coding/v1", providers[0].base_url);
-    try std.testing.expectEqualStrings("https://api.xiaomi.com/v1", providers[2].base_url);
+    try std.testing.expectEqualStrings("custom-llm", providers[0].name);
+    try std.testing.expectEqualStrings("custom-llm #2", providers[1].name);
+    try std.testing.expectEqualStrings("another-llm", providers[2].name);
+    try std.testing.expectEqualStrings("custom-llm", providers[0].provider);
+    try std.testing.expectEqualStrings("another-llm", providers[2].provider);
+    try std.testing.expectEqualStrings("https://example.com/v1", providers[0].base_url);
+    try std.testing.expectEqualStrings("https://other.example.com/v1", providers[2].base_url);
+}
+
+test "find saved provider distinguishes base_url" {
+    const allocator = std.testing.allocator;
+    const path = try testPath(allocator, "state.json");
+    defer allocator.free(path);
+    defer cleanupTestDir();
+
+    var s = State.init(allocator, path);
+    defer s.deinit();
+
+    try s.addSavedProvider(.{
+        .provider = "custom-llm",
+        .api_key = "key1",
+        .model = "test-model",
+        .base_url = "https://one.example.com/v1",
+    });
+    try s.addSavedProvider(.{
+        .provider = "custom-llm",
+        .api_key = "key1",
+        .model = "test-model",
+        .base_url = "https://two.example.com/v1",
+    });
+
+    try std.testing.expectEqual(@as(?u32, 1), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://one.example.com/v1"));
+    try std.testing.expectEqual(@as(?u32, 2), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://two.example.com/v1"));
+    try std.testing.expectEqual(@as(?u32, null), s.findSavedProviderId("custom-llm", "key1", "test-model", "https://three.example.com/v1"));
 }
 
 test "openai-compatible provider base_url defaults to empty" {
@@ -1561,7 +1593,7 @@ test "add saved channel, save, load, verify round-trip" {
         try std.testing.expectEqualStrings("telegram", channels[0].channel_type);
         try std.testing.expectEqualStrings("@mybot", channels[0].account);
         try std.testing.expectEqualStrings("{\"token\":\"abc\"}", channels[0].config);
-        try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+        try std.testing.expectEqualStrings("Telegram", channels[0].name);
         try std.testing.expectEqual(@as(u32, 1), channels[0].id);
 
         try s.save();
@@ -1575,7 +1607,7 @@ test "add saved channel, save, load, verify round-trip" {
         try std.testing.expectEqual(@as(usize, 1), channels.len);
         try std.testing.expectEqualStrings("telegram", channels[0].channel_type);
         try std.testing.expectEqualStrings("@mybot", channels[0].account);
-        try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+        try std.testing.expectEqualStrings("Telegram", channels[0].name);
         try std.testing.expectEqual(@as(u32, 1), channels[0].id);
     }
 }
@@ -1595,9 +1627,9 @@ test "channel auto-generated name increments per type" {
 
     const channels = s.savedChannels();
     try std.testing.expectEqual(@as(usize, 3), channels.len);
-    try std.testing.expectEqualStrings("Telegram #1", channels[0].name);
+    try std.testing.expectEqualStrings("Telegram", channels[0].name);
     try std.testing.expectEqualStrings("Telegram #2", channels[1].name);
-    try std.testing.expectEqualStrings("Discord #1", channels[2].name);
+    try std.testing.expectEqualStrings("Discord", channels[2].name);
 }
 
 test "update saved channel name only" {
