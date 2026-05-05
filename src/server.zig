@@ -1586,7 +1586,7 @@ test "reconcileInstancesOnBoot terminates mismatched persisted runtime without r
         .health_endpoint = "/health",
         .binary_path = binary_path,
         .launch_command = "gateway",
-        .launch_args = &.{ "gateway" },
+        .launch_args = &.{"gateway"},
         .started_at = std_compat.time.milliTimestamp(),
         .starting_since = std_compat.time.milliTimestamp(),
     });
