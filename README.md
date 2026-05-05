@@ -121,6 +121,10 @@ optional `NULLTICKETS_TOKEN`.
 
 ## Development
 
+Testing strategy and roadmap:
+
+- `TESTING.md`
+
 Backend:
 
 ```bash
