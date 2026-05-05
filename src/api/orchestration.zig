@@ -166,6 +166,73 @@ fn mapStatus(code: u10) []const u8 {
     };
 }
 
+const TestUpstream = struct {
+    allocator: Allocator,
+    server: std_compat.net.Server,
+    thread: std.Thread,
+    stop_flag: std.atomic.Value(bool),
+
+    fn start(allocator: Allocator, response: []const u8) !TestUpstream {
+        const addr = try std_compat.net.Address.resolveIp("127.0.0.1", 0);
+        var server = try addr.listen(.{});
+        errdefer server.deinit();
+
+        const response_owned = try allocator.dupe(u8, response);
+        errdefer allocator.free(response_owned);
+
+        var upstream = TestUpstream{
+            .allocator = allocator,
+            .server = server,
+            .thread = undefined,
+            .stop_flag = std.atomic.Value(bool).init(false),
+        };
+
+        upstream.thread = try std.Thread.spawn(.{}, struct {
+            fn run(ctx: struct {
+                server: *std_compat.net.Server,
+                stop_flag: *std.atomic.Value(bool),
+                allocator: Allocator,
+                response: []u8,
+            }) void {
+                defer ctx.allocator.free(ctx.response);
+
+                while (!ctx.stop_flag.load(.acquire)) {
+                    var conn = ctx.server.accept() catch |err| switch (err) {
+                        error.WouldBlock => {
+                            std.time.sleep(10 * std.time.ns_per_ms);
+                            continue;
+                        },
+                        else => return,
+                    };
+                    defer conn.stream.close();
+
+                    var read_buf: [1024]u8 = undefined;
+                    _ = conn.stream.read(&read_buf) catch return;
+                    _ = conn.stream.write(ctx.response) catch return;
+                    return;
+                }
+            }
+        }.run, .{.{
+            .server = &upstream.server,
+            .stop_flag = &upstream.stop_flag,
+            .allocator = allocator,
+            .response = response_owned,
+        }});
+
+        return upstream;
+    }
+
+    fn deinit(self: *TestUpstream) void {
+        self.stop_flag.store(true, .release);
+        self.server.deinit();
+        self.thread.join();
+    }
+
+    fn baseUrl(self: *const TestUpstream, allocator: Allocator) ![]const u8 {
+        return std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{self.server.listen_address.in.getPort()});
+    }
+};
+
 test "isProxyPath matches orchestration namespace" {
     try std.testing.expect(isProxyPath("/api/orchestration"));
     try std.testing.expect(isProxyPath("/api/orchestration/runs"));
@@ -192,4 +259,39 @@ test "handle routes non-store paths to NullBoiler config" {
     });
     try std.testing.expectEqualStrings("503 Service Unavailable", resp.status);
     try std.testing.expectEqualStrings("{\"error\":\"NullBoiler not configured\"}", resp.body);
+}
+
+test "handle returns 404 for non-orchestration paths" {
+    const resp = handle(std.testing.allocator, "GET", "/api/status", "", .{});
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
+}
+
+test "handle rejects unsupported methods before fetch" {
+    const resp = handle(std.testing.allocator, "HEAD", "/api/orchestration/runs", "", .{
+        .boiler_url = "http://127.0.0.1:8080",
+    });
+    try std.testing.expectEqualStrings("405 Method Not Allowed", resp.status);
+    try std.testing.expectEqualStrings("{\"error\":\"method not allowed\"}", resp.body);
+}
+
+test "handle passes through upstream 409 status and body" {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var upstream = try TestUpstream.start(allocator,
+        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 19\r\n\r\n{\"error\":\"conflict\"}"
+    );
+    defer upstream.deinit();
+
+    const base_url = try upstream.baseUrl(allocator);
+    defer allocator.free(base_url);
+
+    const resp = handle(allocator, "GET", "/api/orchestration/runs", "", .{
+        .boiler_url = base_url,
+    });
+    defer allocator.free(resp.body);
+
+    try std.testing.expectEqualStrings("409 Conflict", resp.status);
+    try std.testing.expectEqualStrings("{\"error\":\"conflict\"}", resp.body);
 }
