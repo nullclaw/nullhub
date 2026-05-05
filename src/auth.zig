@@ -30,6 +30,7 @@ pub fn extractBearerToken(raw_request: []const u8) ?[]const u8 {
 /// Public paths: GET /health and any path not starting with /api/.
 pub fn isPublicPath(path: []const u8) bool {
     if (std.mem.eql(u8, path, "/health")) return true;
+    if (std.mem.eql(u8, path, "/api")) return false;
     if (!std.mem.startsWith(u8, path, "/api/")) return true;
     return false;
 }
@@ -78,4 +79,8 @@ test "isPublicPath returns true for static paths like /index.html" {
 
 test "isPublicPath returns false for /api/status" {
     try std.testing.expect(isPublicPath("/api/status") == false);
+}
+
+test "isPublicPath returns false for bare /api" {
+    try std.testing.expect(isPublicPath("/api") == false);
 }
