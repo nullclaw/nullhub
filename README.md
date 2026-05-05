@@ -127,6 +127,7 @@ Backend:
 
 ```bash
 zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
+zig build test-integration -Dembed-ui=false -Dbuild-ui=false --summary all
 ```
 
 Frontend:
@@ -140,6 +141,9 @@ End-to-end:
 ```bash
 ./tests/test_e2e.sh
 ```
+
+`zig build test-integration` runs structured backend HTTP integration tests
+against a real `nullhub` process started in a temporary home directory.
 
 ## Tech Stack
 
