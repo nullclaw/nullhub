@@ -384,7 +384,9 @@ fn captureStatusDetail(status: *const CaptureStatus) []const u8 {
 
 fn isSystemctlMissingDetail(detail: []const u8) bool {
     return std.ascii.indexOfIgnoreCase(detail, "command not found") != null or
-        std.ascii.indexOfIgnoreCase(detail, "not found") != null;
+        std.ascii.indexOfIgnoreCase(detail, "systemctl: not found") != null or
+        std.ascii.indexOfIgnoreCase(detail, "systemctl not found") != null or
+        std.ascii.indexOfIgnoreCase(detail, "systemctl: no such file or directory") != null;
 }
 
 fn isSystemdUnavailableDetail(detail: []const u8) bool {
@@ -407,4 +409,18 @@ test "preferredHomebrewShimPath resolves Linux Homebrew Cellar install" {
 
 test "preferredHomebrewShimPath ignores non-Cellar paths" {
     try std.testing.expect((try preferredHomebrewShimPath(std.testing.allocator, "/usr/local/bin/nullhub")) == null);
+}
+
+test "isSystemctlMissingDetail matches missing command output" {
+    try std.testing.expect(isSystemctlMissingDetail("systemctl: command not found"));
+    try std.testing.expect(isSystemctlMissingDetail("systemctl: not found"));
+}
+
+test "isSystemctlMissingDetail ignores missing unit output" {
+    try std.testing.expect(!isSystemctlMissingDetail("Unit nullhub.service could not be found."));
+}
+
+test "isSystemdUnavailableDetail matches user bus errors" {
+    try std.testing.expect(isSystemdUnavailableDetail("Failed to connect to bus: No medium found"));
+    try std.testing.expect(isSystemdUnavailableDetail("System has not been booted with systemd as init system (PID 1). Can't operate."));
 }
