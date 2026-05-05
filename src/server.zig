@@ -1527,6 +1527,88 @@ test "reconcileInstancesOnBoot restarts auto-start instance when persisted pid i
     try std.testing.expectEqualStrings("started\n", contents);
 }
 
+test "reconcileInstancesOnBoot terminates mismatched persisted runtime without respawn when auto_start is false" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const tmp_root = "/tmp/nullhub-test-server-reconcile-mismatch";
+    const tmp_state = "/tmp/nullhub-test-server-reconcile-mismatch-state.json";
+    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
+
+    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    defer allocator.free(output_path);
+
+    const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
+    defer allocator.free(binary_path);
+    {
+        const script = try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\nprintf 'started\\n' >> '{s}'\nsleep 60\n",
+            .{output_path},
+        );
+        defer allocator.free(script);
+
+        const file = try std_compat.fs.createFileAbsolute(binary_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(script);
+        try file.chmod(0o755);
+    }
+
+    try ctx.state.addInstance("nullclaw", "demo", .{
+        .version = "1.0.0",
+        .auto_start = false,
+        .launch_mode = "agent",
+    });
+
+    var launch = try launch_args_mod.resolve(allocator, "agent", false);
+    defer launch.deinit();
+
+    const spawned = try process_mod.spawn(allocator, .{
+        .binary = binary_path,
+        .argv = launch.argv,
+    });
+    defer _ = spawned.child.wait() catch {};
+
+    // Regression: if persisted runtime metadata no longer matches the desired
+    // launch config, boot reconciliation must terminate the old process,
+    // delete instance.json, and avoid an implicit respawn when auto_start=false.
+    try runtime_state_mod.write(allocator, ctx.paths, "nullclaw", "demo", .{
+        .pid = process_mod.persistedPidValue(spawned.pid).?,
+        .port = 0,
+        .health_endpoint = "/health",
+        .binary_path = binary_path,
+        .launch_command = "gateway",
+        .launch_args = &.{ "gateway" },
+        .started_at = std_compat.time.milliTimestamp(),
+        .starting_since = std_compat.time.milliTimestamp(),
+    });
+
+    ctx.reconcileInstancesOnBoot();
+
+    var attempts: usize = 0;
+    while (attempts < 20 and process_mod.isAlive(spawned.pid)) : (attempts += 1) {
+        std_compat.thread.sleep(50 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(!process_mod.isAlive(spawned.pid));
+    try std.testing.expect(ctx.manager.getStatus("nullclaw", "demo") == null);
+    try std.testing.expect((try runtime_state_mod.load(allocator, ctx.paths, "nullclaw", "demo")) == null);
+
+    const file = try std_compat.fs.openFileAbsolute(output_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 1024);
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("started\n", contents);
+}
+
 test "route GET /api/status returns version and platform" {
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
