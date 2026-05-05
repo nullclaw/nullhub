@@ -161,7 +161,7 @@ pub fn install(
                 resolved_version = allocator.dupe(u8, release.value.tag_name) catch return error.FetchFailed;
                 const bin_path = p.binary(allocator, opts.component, resolved_version.?) catch return error.DownloadFailed;
                 resolved_bin_path = bin_path;
-                downloader.download(allocator, asset.browser_download_url, bin_path) catch {
+                downloader.downloadIfMissing(allocator, asset.browser_download_url, bin_path) catch {
                     allocator.free(bin_path);
                     resolved_bin_path = null;
                     allocator.free(resolved_version.?);
@@ -919,10 +919,9 @@ fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component:
     const bin_path = p.binary(allocator, component, version) catch return null;
     errdefer allocator.free(bin_path);
 
-    if (std_compat.fs.openFileAbsolute(bin_path, .{})) |f| {
-        f.close();
+    if (downloader.fileExists(bin_path)) {
         return .{ .version = version, .bin_path = bin_path };
-    } else |_| {}
+    }
 
     std_compat.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
     if (comptime std_compat.fs.has_executable_bit) {
