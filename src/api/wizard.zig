@@ -750,9 +750,9 @@ fn probeProviderViaComponentBinary(
     model: []const u8,
 ) ProviderProbeResult {
     const args: []const []const u8 = if (model.len > 0)
-        &.{ "--probe-provider-health", "--provider", provider, "--model", model, "--timeout-secs", "10" }
+        &.{ "--probe-provider-health", "--provider", provider, "--model", model, "--timeout-secs", "30" }
     else
-        &.{ "--probe-provider-health", "--provider", provider, "--timeout-secs", "10" };
+        &.{ "--probe-provider-health", "--provider", provider, "--timeout-secs", "30" };
 
     const result = component_cli.runWithComponentHome(
         allocator,
