@@ -1,27 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
+  import { PROVIDER_OPTIONS, OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, KNOWN_PROVIDER_VALUES } from "$lib/providers";
 
-  const PROVIDER_OPTIONS = [
-    { value: "openrouter", label: "OpenRouter (multi-provider, recommended)", recommended: true },
-    { value: "anthropic", label: "Anthropic" },
-    { value: "openai", label: "OpenAI" },
-    { value: "google", label: "Google AI" },
-    { value: "mistral", label: "Mistral" },
-    { value: "groq", label: "Groq" },
-    { value: "deepseek", label: "DeepSeek" },
-    { value: "cohere", label: "Cohere" },
-    { value: "together", label: "Together AI" },
-    { value: "fireworks", label: "Fireworks AI" },
-    { value: "perplexity", label: "Perplexity" },
-    { value: "xai", label: "xAI" },
-    { value: "ollama", label: "Ollama (local)" },
-    { value: "lm-studio", label: "LM Studio (local)" },
-    { value: "claude-cli", label: "Claude CLI (local)" },
-    { value: "codex-cli", label: "Codex CLI (local CLI)" },
-    { value: "openai-codex", label: "OpenAI Codex (ChatGPT login)" },
-  ];
-  const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
 
   let providers = $state<any[]>([]);
   let loading = $state(true);
@@ -32,27 +13,28 @@
 
   // Add form state
   let showAddForm = $state(false);
-  let addForm = $state({ provider: "openrouter", api_key: "", model: "" });
+  let addForm = $state({ provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" });
   let addValidating = $state(false);
   let addError = $state("");
+  let addProbing = $state(false);
+  let addProbedModels = $state<string[]>([]);
+  let addProbeError = $state("");
 
   // Edit state
   let editingId = $state<string | null>(null);
-  let editForm = $state({ name: "", api_key: "", model: "" });
+  let editForm = $state({ name: "", api_key: "", model: "", base_url: "" });
+  let editRealApiKey = $state(""); // revealed key fetched on edit open; used by Fetch Models when form field is blank
   let editValidating = $state(false);
   let editError = $state("");
+  let editProbing = $state(false);
+  let editProbedModels = $state<string[]>([]);
+  let editProbeError = $state("");
 
   // Re-validate state
   let revalidatingId = $state<string | null>(null);
 
-  let hasComponents = $state(false);
-
   onMount(async () => {
     await loadProviders();
-    try {
-      const status = await api.getStatus();
-      hasComponents = Object.keys(status.instances || {}).length > 0;
-    } catch {}
   });
 
   onDestroy(() => {
@@ -82,17 +64,74 @@
     }
   }
 
+  async function fetchAddModels() {
+    addProbing = true;
+    addProbeError = "";
+    addProbedModels = [];
+    try {
+      const result = await api.probeProviderModels(addForm.base_url.trim(), addForm.api_key.trim());
+      if (result.live_ok) {
+        addProbedModels = result.models;
+        if (!addProbedModels.length) addProbeError = "Connected, but no models returned.";
+      } else {
+        addProbeError = result.reason || "Could not reach endpoint.";
+      }
+    } catch (e) {
+      addProbeError = (e as Error).message;
+    } finally {
+      addProbing = false;
+    }
+  }
+
+  async function fetchEditModels() {
+    editProbing = true;
+    editProbeError = "";
+    editProbedModels = [];
+    try {
+      const keyToUse = editForm.api_key.trim() || editRealApiKey;
+      const result = await api.probeProviderModels(editForm.base_url.trim(), keyToUse);
+      if (result.live_ok) {
+        editProbedModels = result.models;
+        if (!editProbedModels.length) editProbeError = "Connected, but no models returned.";
+      } else {
+        editProbeError = result.reason || "Could not reach endpoint.";
+      }
+    } catch (e) {
+      editProbeError = (e as Error).message;
+    } finally {
+      editProbing = false;
+    }
+  }
+
   async function handleAdd() {
     addValidating = true;
     addError = "";
     try {
+      const isCustom = addForm.provider === OPENAI_COMPATIBLE_VALUE;
+      const providerValue = addForm.provider === OPENAI_COMPATIBLE_VALUE
+        ? addForm.provider_name.trim()
+        : addForm.provider;
+      const baseUrl = addForm.base_url.trim();
+      if (isCustom && !providerValue) {
+        addError = "Provider name is required for OpenAI Compatible providers.";
+        addValidating = false;
+        return;
+      }
+      if (isCustom && !baseUrl) {
+        addError = "Base URL is required for OpenAI Compatible providers.";
+        addValidating = false;
+        return;
+      }
       await api.createSavedProvider({
-        provider: addForm.provider,
+        provider: providerValue,
         api_key: addForm.api_key,
         model: addForm.model || undefined,
+        base_url: isCustom ? baseUrl : undefined,
       });
       showAddForm = false;
-      addForm = { provider: "openrouter", api_key: "", model: "" };
+      addForm = { provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" };
+      addProbedModels = [];
+      addProbeError = "";
       flashMessage("Provider saved");
       await loadProviders();
     } catch (e) {
@@ -104,7 +143,15 @@
 
   function startEdit(p: any) {
     editingId = p.id;
-    editForm = { name: p.name, api_key: "", model: p.model };
+    editForm = { name: p.name, api_key: "", model: p.model, base_url: p.base_url || "" };
+    editRealApiKey = "";
+    editProbedModels = [];
+    editProbeError = "";
+    // Fetch the real (revealed) key so Fetch Models works without the user re-entering the key
+    api.getSavedProviders(true).then(data => {
+      const found = (data.providers || []).find((x: any) => x.id === p.id);
+      if (found) editRealApiKey = found.api_key || "";
+    }).catch(() => {});
   }
 
   function cancelEdit() {
@@ -119,6 +166,7 @@
       if (editForm.name) payload.name = editForm.name;
       if (editForm.api_key) payload.api_key = editForm.api_key;
       payload.model = editForm.model;
+      payload.base_url = editForm.base_url.trim();
       await api.updateSavedProvider(id, payload);
       editingId = null;
       flashMessage("Provider updated");
@@ -158,6 +206,12 @@
     return LOCAL_PROVIDERS.includes(provider);
   }
 
+  // A provider is "custom" if its type is not one of the built-in nullclaw-known providers.
+  // This determines whether the base_url / Fetch Models fields appear in edit form.
+  function isCustomProvider(p: any) {
+    return !KNOWN_PROVIDER_VALUES.has(p.provider);
+  }
+
   function getProviderLabel(value: string) {
     return PROVIDER_OPTIONS.find((p) => p.value === value)?.label || value;
   }
@@ -181,16 +235,22 @@
   function lastValidationAt(provider: any) {
     return provider.last_validation_at || provider.validated_at || "";
   }
+
+  $effect(() => {
+    // Clear probed models when the add form's base_url or api_key changes
+    addForm.base_url;
+    addForm.api_key;
+    addProbedModels = [];
+    addProbeError = "";
+  });
 </script>
 
 <div class="providers-page">
   <div class="page-header">
     <h1>Providers</h1>
-    {#if hasComponents}
-      <button class="primary-btn" onclick={() => (showAddForm = !showAddForm)}>
-        {showAddForm ? "Cancel" : "+ Add Provider"}
-      </button>
-    {/if}
+    <button class="primary-btn" onclick={() => (showAddForm = !showAddForm)}>
+      {showAddForm ? "Cancel" : "+ Add Provider"}
+    </button>
   </div>
 
   {#if message}
@@ -201,12 +261,7 @@
     <div class="error-message">{error}</div>
   {/if}
 
-  {#if !hasComponents}
-    <div class="empty-state">
-      <p>Install a component first to add providers.</p>
-      <a href="/install" class="link-btn">Install Component</a>
-    </div>
-  {:else if showAddForm}
+  {#if showAddForm}
     <div class="add-form">
       <h2>Add Provider</h2>
       <div class="field">
@@ -217,28 +272,69 @@
           {/each}
         </select>
       </div>
+      {#if addForm.provider === OPENAI_COMPATIBLE_VALUE}
+        <div class="field">
+          <label for="add-provider-name">Provider Name</label>
+          <input id="add-provider-name" type="text" bind:value={addForm.provider_name} placeholder="e.g. infini-ai, xiaomi-mimo" />
+        </div>
+        <div class="field">
+          <label for="add-base-url">Base URL</label>
+          <input id="add-base-url" type="text" bind:value={addForm.base_url} placeholder="https://api.example.com/v1" />
+        </div>
+      {/if}
       {#if !isLocal(addForm.provider)}
         <div class="field">
           <label for="add-api-key">API Key</label>
           <input id="add-api-key" type="password" bind:value={addForm.api_key} placeholder="Enter API key..." />
         </div>
       {/if}
-      <div class="field">
-        <label for="add-model">Model (optional)</label>
-        <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
-      </div>
+      {#if addForm.provider === OPENAI_COMPATIBLE_VALUE}
+        <div class="field">
+          <label for="add-model">Model</label>
+          <div class="model-input-row">
+            <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. gpt-4" />
+            <button
+              class="btn fetch-models-btn"
+              onclick={fetchAddModels}
+              disabled={addProbing || !addForm.base_url.trim()}
+              title="Fetch available models from this endpoint"
+            >
+              {addProbing ? "Fetching..." : "Fetch Models"}
+            </button>
+          </div>
+          {#if addProbeError}
+            <div class="probe-error">{addProbeError}</div>
+          {/if}
+          {#if addProbedModels.length > 0}
+            <div class="model-list">
+              {#each addProbedModels as m}
+                <button
+                  class="model-chip"
+                  class:selected={addForm.model === m}
+                  onclick={() => { addForm.model = m; }}
+                >{m}</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <div class="field">
+          <label for="add-model">Model (optional)</label>
+          <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+        </div>
+      {/if}
       {#if addError}
         <div class="error-message">{addError}</div>
       {/if}
       <button class="primary-btn" onclick={handleAdd} disabled={addValidating}>
-        {addValidating ? "Validating..." : "Validate & Save"}
+        {addValidating ? "Validating..." : "Save"}
       </button>
     </div>
   {/if}
 
   {#if loading}
     <p class="loading">Loading providers...</p>
-  {:else if providers.length === 0 && hasComponents}
+  {:else if providers.length === 0}
     <div class="empty-state">
       <p>No saved providers yet. Add one above or install a component — providers are saved automatically during setup.</p>
     </div>
@@ -252,6 +348,12 @@
                 <label for="edit-name-{p.id}">Name</label>
                 <input id="edit-name-{p.id}" type="text" bind:value={editForm.name} />
               </div>
+              {#if isCustomProvider(p)}
+                <div class="field">
+                  <label for="edit-base-url-{p.id}">Base URL</label>
+                  <input id="edit-base-url-{p.id}" type="text" bind:value={editForm.base_url} placeholder="https://api.example.com/v1" />
+                </div>
+              {/if}
               {#if !isLocal(p.provider)}
                 <div class="field">
                   <label for="edit-key-{p.id}">API Key (leave empty to keep current)</label>
@@ -260,7 +362,35 @@
               {/if}
               <div class="field">
                 <label for="edit-model-{p.id}">Model</label>
-                <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+                {#if isCustomProvider(p)}
+                  <div class="model-input-row">
+                    <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. gpt-4" />
+                    <button
+                      class="btn fetch-models-btn"
+                      onclick={fetchEditModels}
+                      disabled={editProbing || !editForm.base_url.trim()}
+                      title="Fetch available models from this endpoint"
+                    >
+                      {editProbing ? "Fetching..." : "Fetch Models"}
+                    </button>
+                  </div>
+                  {#if editProbeError}
+                    <div class="probe-error">{editProbeError}</div>
+                  {/if}
+                  {#if editProbedModels.length > 0}
+                    <div class="model-list">
+                      {#each editProbedModels as m}
+                        <button
+                          class="model-chip"
+                          class:selected={editForm.model === m}
+                          onclick={() => { editForm.model = m; }}
+                        >{m}</button>
+                      {/each}
+                    </div>
+                  {/if}
+                {:else}
+                  <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. anthropic/claude-sonnet-4" />
+                {/if}
               </div>
               {#if editError}
                 <div class="error-message">{editError}</div>
@@ -292,6 +422,12 @@
                 <span class="label">API Key</span>
                 <code>{p.api_key}</code>
               </div>
+              {#if p.base_url}
+                <div class="card-field">
+                  <span class="label">Base URL</span>
+                  <code>{p.base_url}</code>
+                </div>
+              {/if}
               <div class="card-field">
                 <span class="label">Model</span>
                 <code>{p.model || "No default model"}</code>
@@ -624,23 +760,6 @@
     font-family: var(--font-mono);
   }
 
-  .link-btn {
-    color: var(--accent);
-    text-decoration: none;
-    border: 1px solid var(--accent);
-    padding: 0.5rem 1.25rem;
-    border-radius: 2px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    font-size: 0.875rem;
-    transition: all 0.2s ease;
-  }
-
-  .link-btn:hover {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    box-shadow: 0 0 10px var(--border-glow);
-  }
-
   .loading {
     color: var(--fg-dim);
     font-family: var(--font-mono);
@@ -656,5 +775,57 @@
 
   .edit-form {
     padding: 0.5rem 0;
+  }
+
+  .model-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .model-input-row input {
+    flex: 1;
+  }
+
+  .fetch-models-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.5rem;
+  }
+
+  .model-chip {
+    padding: 0.25rem 0.625rem;
+    background: var(--bg-surface);
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .model-chip:hover {
+    border-color: var(--accent-dim);
+    color: var(--fg);
+  }
+
+  .model-chip.selected {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border-color: var(--accent);
+    color: var(--accent);
+    text-shadow: var(--text-glow);
+  }
+
+  .probe-error {
+    margin-top: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--error, #e55);
   }
 </style>

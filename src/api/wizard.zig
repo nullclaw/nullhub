@@ -592,22 +592,34 @@ pub fn handleValidateProviders(
 ) ?[]const u8 {
     if (registry.findKnownComponent(component_name) == null) return null;
 
+    const ProviderInput = struct {
+        provider: []const u8,
+        api_key: []const u8 = "",
+        model: []const u8 = "",
+        base_url: []const u8 = "",
+    };
     const parsed = std.json.parseFromSlice(struct {
-        providers: []const struct {
-            provider: []const u8,
-            api_key: []const u8 = "",
-            model: []const u8 = "",
-            base_url: []const u8 = "",
-        },
+        providers: []const ProviderInput,
     }, allocator, body, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
     }) catch return allocator.dupe(u8, "{\"error\":\"invalid JSON body\"}") catch null;
     defer parsed.deinit();
 
-    const bin_path = findOrFetchComponentBinary(allocator, component_name, paths) orelse
-        return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null;
-    defer allocator.free(bin_path);
+    var needs_probe = false;
+    for (parsed.value.providers) |prov| {
+        if (prov.provider.len > 0 and prov.base_url.len == 0) {
+            needs_probe = true;
+            break;
+        }
+    }
+
+    const bin_path = if (needs_probe)
+        findOrFetchComponentBinary(allocator, component_name, paths) orelse
+            return allocator.dupe(u8, "{\"error\":\"component binary not found\"}") catch null
+    else
+        null;
+    defer if (bin_path) |path| allocator.free(path);
 
     // Create temp directory for probes
     const tmp_dir = paths_mod.uniqueTempPathAlloc(allocator, "nullhub-wizard-validate", "") catch return null;
@@ -622,13 +634,25 @@ pub fn handleValidateProviders(
     buf.appendSlice("{\"results\":[") catch return null;
 
     // Track validation results for auto-save
-    const ProbeResult = struct { live_ok: bool };
-    var probe_results = std.array_list.Managed(ProbeResult).init(allocator);
+    const ValidationResult = struct { live_ok: bool, skipped_probe: bool = false };
+    var probe_results = std.array_list.Managed(ValidationResult).init(allocator);
     defer probe_results.deinit();
     var saved_providers_warning: ?[]const u8 = null;
 
     for (parsed.value.providers, 0..) |prov, idx| {
         if (idx > 0) buf.append(',') catch return null;
+
+        if (prov.provider.len == 0) {
+            appendProviderResult(&buf, prov.provider, false, "provider_required") catch return null;
+            probe_results.append(.{ .live_ok = false }) catch return null;
+            continue;
+        }
+
+        if (prov.base_url.len > 0) {
+            appendProviderResult(&buf, prov.provider, true, "custom_endpoint_validation_skipped") catch return null;
+            probe_results.append(.{ .live_ok = true, .skipped_probe = true }) catch return null;
+            continue;
+        }
 
         writeMinimalProviderConfig(allocator, tmp_dir, prov.provider, prov.api_key, prov.base_url) catch {
             appendProviderResult(&buf, prov.provider, false, "config_write_failed") catch return null;
@@ -636,7 +660,7 @@ pub fn handleValidateProviders(
             continue;
         };
 
-        const result = probeProviderViaComponentBinary(allocator, component_name, bin_path, tmp_dir, prov.provider, prov.model);
+        const result = probeProviderViaComponentBinary(allocator, component_name, bin_path.?, tmp_dir, prov.provider, prov.model);
         defer result.deinit(allocator);
         appendProviderResult(&buf, prov.provider, result.live_ok, result.reason) catch return null;
         probe_results.append(.{ .live_ok = result.live_ok }) catch return null;
@@ -644,50 +668,60 @@ pub fn handleValidateProviders(
 
     buf.appendSlice("]") catch return null;
 
-    // Auto-save validated providers
+    // Auto-save validated providers. Custom endpoints are saved, but they do
+    // not receive validation metadata because the live probe was intentionally
+    // skipped.
     var did_save = false;
     for (parsed.value.providers, 0..) |prov, idx| {
         if (idx < probe_results.items.len and probe_results.items[idx].live_ok) {
-            const now = providers_api.nowIso8601(allocator) catch "";
-            defer if (now.len > 0) allocator.free(now);
+            const is_custom = probe_results.items[idx].skipped_probe;
 
-            if (state.findSavedProviderId(prov.provider, prov.api_key, prov.model)) |existing_id| {
-                if (now.len > 0) {
-                    _ = state.updateSavedProvider(existing_id, .{
-                        .validated_at = now,
-                        .validated_with = component_name,
-                        .last_validation_at = now,
-                        .last_validation_ok = true,
-                    }) catch {
-                        saved_providers_warning = "validated providers could not be fully saved";
-                        continue;
-                    };
-                    did_save = true;
-                }
+            if (state.findSavedProviderId(prov.provider, prov.api_key, prov.model, prov.base_url)) |existing_id| {
+                if (is_custom) continue;
+
+                const now = providers_api.nowIso8601(allocator) catch "";
+                defer if (now.len > 0) allocator.free(now);
+                if (now.len == 0) continue;
+
+                _ = state.updateSavedProvider(existing_id, .{
+                    .validated_at = now,
+                    .validated_with = component_name,
+                    .last_validation_at = now,
+                    .last_validation_ok = true,
+                }) catch {
+                    saved_providers_warning = "validated providers could not be fully saved";
+                    continue;
+                };
+                did_save = true;
             } else {
                 state.addSavedProvider(.{
                     .provider = prov.provider,
                     .api_key = prov.api_key,
                     .model = prov.model,
-                    .validated_with = component_name,
+                    .base_url = prov.base_url,
+                    .validated_with = if (is_custom) "" else component_name,
                 }) catch {
                     saved_providers_warning = "validated providers could not be saved";
                     continue;
                 };
-                // Set both the last successful validation and the latest validation attempt.
-                const providers_list = state.savedProviders();
-                if (providers_list.len > 0) {
-                    const new_id = providers_list[providers_list.len - 1].id;
-                    if (now.len > 0) {
-                        _ = state.updateSavedProvider(new_id, .{
-                            .validated_at = now,
-                            .validated_with = component_name,
-                            .last_validation_at = now,
-                            .last_validation_ok = true,
-                        }) catch {
-                            saved_providers_warning = "validated providers could not be fully saved";
-                            continue;
-                        };
+                if (!is_custom) {
+                    // Set both the last successful validation and the latest validation attempt.
+                    const providers_list = state.savedProviders();
+                    if (providers_list.len > 0) {
+                        const new_id = providers_list[providers_list.len - 1].id;
+                        const now = providers_api.nowIso8601(allocator) catch "";
+                        defer if (now.len > 0) allocator.free(now);
+                        if (now.len > 0) {
+                            _ = state.updateSavedProvider(new_id, .{
+                                .validated_at = now,
+                                .validated_with = component_name,
+                                .last_validation_at = now,
+                                .last_validation_ok = true,
+                            }) catch {
+                                saved_providers_warning = "validated providers could not be fully saved";
+                                continue;
+                            };
+                        }
                     }
                 }
                 did_save = true;
@@ -749,9 +783,9 @@ fn probeProviderViaComponentBinary(
     model: []const u8,
 ) ProviderProbeResult {
     const args: []const []const u8 = if (model.len > 0)
-        &.{ "--probe-provider-health", "--provider", provider, "--model", model, "--timeout-secs", "10" }
+        &.{ "--probe-provider-health", "--provider", provider, "--model", model, "--timeout-secs", "30" }
     else
-        &.{ "--probe-provider-health", "--provider", provider, "--timeout-secs", "10" };
+        &.{ "--probe-provider-health", "--provider", provider, "--timeout-secs", "30" };
 
     const result = component_cli.runWithComponentHome(
         allocator,
@@ -1181,6 +1215,37 @@ test "extractComponentName parses validate-providers path" {
     const name = extractComponentName("/api/wizard/nullclaw/validate-providers");
     try std.testing.expect(name != null);
     try std.testing.expectEqualStrings("nullclaw", name.?);
+}
+
+test "handleValidateProviders skips probe for custom base_url and saves provider" {
+    const allocator = std.testing.allocator;
+    const tmp = "/tmp/nullhub-wizard-test-custom-provider";
+    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    std_compat.fs.makeDirAbsolute(tmp) catch {};
+    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+
+    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    defer allocator.free(state_path);
+
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
+    const body =
+        \\{"providers":[{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}]}
+    ;
+    const json = handleValidateProviders(allocator, "nullclaw", body, paths, &s) orelse @panic("expected response");
+    defer allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"live_ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "custom_endpoint_validation_skipped") != null);
+
+    const providers = s.savedProviders();
+    try std.testing.expectEqual(@as(usize, 1), providers.len);
+    try std.testing.expectEqualStrings("local-llm", providers[0].provider);
+    try std.testing.expectEqualStrings("http://127.0.0.1:5801/v1", providers[0].base_url);
+    try std.testing.expectEqualStrings("", providers[0].validated_at);
+    try std.testing.expectEqualStrings("", providers[0].last_validation_at);
 }
 
 test "extractComponentName parses validate-channels path" {
