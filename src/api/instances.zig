@@ -61,6 +61,34 @@ fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, comp
     }
 }
 
+fn refreshLocalDevBinary(
+    allocator: std.mem.Allocator,
+    paths: paths_mod.Paths,
+    component: []const u8,
+    version: []const u8,
+) void {
+    if (builtin.is_test) return;
+    if (!std.mem.eql(u8, version, "dev-local")) return;
+
+    const src_bin = local_binary.find(allocator, component) orelse return;
+    defer allocator.free(src_bin);
+
+    const dest_bin = paths.binary(allocator, component, version) catch return;
+    defer allocator.free(dest_bin);
+
+    std_compat.fs.deleteFileAbsolute(dest_bin) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return,
+    };
+    std_compat.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch return;
+    if (comptime std_compat.fs.has_executable_bit) {
+        if (std_compat.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
+            defer f.close();
+            f.chmod(0o755) catch {};
+        } else |_| {}
+    }
+}
+
 const FetchedJsonValue = struct {
     bytes: []u8,
     parsed: std.json.Parsed(std.json.Value),
@@ -1920,6 +1948,8 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
             if (pb.value.verbose) |verbose| launch_verbose = verbose;
         }
     }
+
+    refreshLocalDevBinary(allocator, paths, component, entry.version);
 
     // Resolve binary path
     const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();

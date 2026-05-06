@@ -919,10 +919,10 @@ fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component:
     const bin_path = p.binary(allocator, component, version) catch return null;
     errdefer allocator.free(bin_path);
 
-    if (downloader.fileExists(bin_path)) {
-        return .{ .version = version, .bin_path = bin_path };
-    }
-
+    std_compat.fs.deleteFileAbsolute(bin_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return null,
+    };
     std_compat.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
     if (comptime std_compat.fs.has_executable_bit) {
         if (std_compat.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
