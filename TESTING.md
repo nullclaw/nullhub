@@ -59,18 +59,18 @@ The snapshot below is based on the current `src/` tree and the committed test di
 
 The current backend suite is broad in file count but uneven in depth.
 
-Most heavily tested files on `main` currently are:
+Files that sit near the high end of the current distribution include:
 
-- `src/api/instances.zig` (90 tests)
-- `src/server.zig` (53 tests)
-- `src/api/providers.zig` (35 tests)
-- `src/core/state.zig` (34 tests)
-- `src/cli.zig` (28 tests)
-- `src/api/wizard.zig` (17 tests)
-- `src/api/logs.zig` (17 tests)
-- `src/installer/orchestrator.zig` (16 tests)
-- `src/supervisor/manager.zig` (15 tests)
-- `src/api/config.zig` (14 tests)
+- `src/api/instances.zig`
+- `src/server.zig`
+- `src/api/providers.zig`
+- `src/core/state.zig`
+- `src/cli.zig`
+- `src/api/wizard.zig`
+- `src/api/logs.zig`
+- `src/installer/orchestrator.zig`
+- `src/supervisor/manager.zig`
+- `src/api/config.zig`
 
 Refresh this snapshot with:
 
