@@ -6,6 +6,7 @@ const state_mod = @import("../core/state.zig");
 const helpers = @import("helpers.zig");
 const managed_cli = @import("managed_cli.zig");
 const query = @import("query.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const ApiResponse = helpers.ApiResponse;
 
@@ -260,34 +261,26 @@ test "isConfigPath detects config suffix" {
 
 test "handleGet returns 404 when no config file exists" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-get";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config");
+    const resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config");
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
     try std.testing.expectEqualStrings("{\"error\":\"config not found\"}", resp.body);
 }
 
 test "handlePut writes config file" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-put";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     const body = "{\"key\":\"value\"}";
-    const resp = handlePut(allocator, p, "nullclaw", "my-agent", body);
+    const resp = handlePut(allocator, fixture.paths, "nullclaw", "my-agent", body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("{\"status\":\"saved\"}", resp.body);
 
     // Verify the file was written.
-    const config_path = try p.instanceConfig(allocator, "nullclaw", "my-agent");
+    const config_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "my-agent");
     defer allocator.free(config_path);
 
     const file = try std_compat.fs.openFileAbsolute(config_path, .{});
@@ -299,18 +292,14 @@ test "handlePut writes config file" {
 
 test "handleGet reads written config" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-roundtrip";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     const body = "{\"port\":8080}";
-    const put_resp = handlePut(allocator, p, "nullclaw", "my-agent", body);
+    const put_resp = handlePut(allocator, fixture.paths, "nullclaw", "my-agent", body);
     try std.testing.expectEqualStrings("200 OK", put_resp.status);
 
-    const get_resp = handleGet(allocator, p, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config");
+    const get_resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config");
     defer allocator.free(get_resp.body);
     try std.testing.expectEqualStrings("200 OK", get_resp.status);
     try std.testing.expectEqualStrings(body, get_resp.body);
@@ -318,18 +307,14 @@ test "handleGet reads written config" {
 
 test "handleGet returns a single dotted-path value when path query is present" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-path";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     const body = "{\"gateway\":{\"port\":8080},\"default_provider\":\"openrouter\"}";
-    const put_resp = handlePut(allocator, p, "nullclaw", "my-agent", body);
+    const put_resp = handlePut(allocator, fixture.paths, "nullclaw", "my-agent", body);
     try std.testing.expectEqualStrings("200 OK", put_resp.status);
 
-    const get_resp = handleGet(allocator, p, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config?path=gateway.port");
+    const get_resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", "/api/instances/nullclaw/my-agent/config?path=gateway.port");
     defer allocator.free(get_resp.body);
     try std.testing.expectEqualStrings("200 OK", get_resp.status);
     try std.testing.expectEqualStrings("{\"path\":\"gateway.port\",\"value\":8080}", get_resp.body);
@@ -339,19 +324,17 @@ test "handleGetManaged prefers nullclaw CLI JSON when available" {
     if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-managed";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeManagedTestBinary(
         allocator,
-        p,
+        fixture.paths,
         "nullclaw",
         "1.0.0",
         \\#!/bin/sh
@@ -367,7 +350,7 @@ test "handleGetManaged prefers nullclaw CLI JSON when available" {
     const resp = handleGetManaged(
         allocator,
         &s,
-        p,
+        fixture.paths,
         "nullclaw",
         "my-agent",
         "/api/instances/nullclaw/my-agent/config?path=gateway.port",
@@ -381,19 +364,17 @@ test "handleGetManaged maps managed nullclaw config misses to 404" {
     if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-managed-not-found";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-not-found-state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1" });
     try writeManagedTestBinary(
         allocator,
-        p,
+        fixture.paths,
         "nullclaw",
         "1.0.1",
         \\#!/bin/sh
@@ -409,7 +390,7 @@ test "handleGetManaged maps managed nullclaw config misses to 404" {
     const resp = handleGetManaged(
         allocator,
         &s,
-        p,
+        fixture.paths,
         "nullclaw",
         "my-agent",
         "/api/instances/nullclaw/my-agent/config?path=missing.path",
@@ -423,19 +404,17 @@ test "handleGetManaged rejects malformed managed CLI JSON" {
     if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-managed-invalid-json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-config-api-managed-invalid-json-state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     try writeManagedTestBinary(
         allocator,
-        p,
+        fixture.paths,
         "nullclaw",
         "1.0.2",
         \\#!/bin/sh
@@ -451,7 +430,7 @@ test "handleGetManaged rejects malformed managed CLI JSON" {
     const resp = handleGetManaged(
         allocator,
         &s,
-        p,
+        fixture.paths,
         "nullclaw",
         "my-agent",
         "/api/instances/nullclaw/my-agent/config",
@@ -463,15 +442,11 @@ test "handleGetManaged rejects malformed managed CLI JSON" {
 
 test "handlePatch writes config (same as PUT for now)" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-config-api-patch";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     const body = "{\"updated\":true}";
-    const resp = handlePatch(allocator, p, "nullclaw", "my-agent", body);
+    const resp = handlePatch(allocator, fixture.paths, "nullclaw", "my-agent", body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("{\"status\":\"saved\"}", resp.body);
 }

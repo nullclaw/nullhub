@@ -1089,11 +1089,13 @@ fn writeFile(path: []const u8, content: []const u8) !void {
 
 test "install returns UnknownComponent for unknown component" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-orchestrator");
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/test-orchestrator/state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const result = install(allocator, .{
@@ -1101,17 +1103,19 @@ test "install returns UnknownComponent for unknown component" {
         .instance_name = "test",
         .version = "latest",
         .answers_json = "{}",
-    }, p, &s, &mgr);
+    }, fixture.paths, &s, &mgr);
     try std.testing.expectError(error.UnknownComponent, result);
 }
 
 test "install returns FetchFailed for known component (no network)" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-orchestrator-fetch");
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/test-orchestrator-fetch/state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const result = install(allocator, .{
@@ -1119,18 +1123,20 @@ test "install returns FetchFailed for known component (no network)" {
         .instance_name = "test",
         .version = "latest",
         .answers_json = "{}",
-    }, p, &s, &mgr);
+    }, fixture.paths, &s, &mgr);
     // In test env, GitHub fetch will fail
     try std.testing.expectError(error.FetchFailed, result);
 }
 
 test "install returns InstanceExists for duplicate instance name" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-orchestrator-duplicate");
-    defer p.deinit(allocator);
-    var s = state_mod.State.init(allocator, "/tmp/test-orchestrator-duplicate/state.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try s.addInstance("nullclaw", "instance-1", .{
@@ -1144,41 +1150,45 @@ test "install returns InstanceExists for duplicate instance name" {
         .instance_name = "instance-1",
         .version = "latest",
         .answers_json = "{}",
-    }, p, &s, &mgr);
+    }, fixture.paths, &s, &mgr);
     try std.testing.expectError(error.InstanceExists, result);
 }
 
 test "resolveConfiguredPort reads top-level port" {
-    var paths = try paths_mod.Paths.init(std.testing.allocator, "/tmp/test-orchestrator-port-top");
-    defer paths.deinit(std.testing.allocator);
-    var state = state_mod.State.init(std.testing.allocator, "/tmp/test-orchestrator-port-top-state.json");
+    const allocator = std.testing.allocator;
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
     defer state.deinit();
 
-    const port = resolveConfiguredPort(std.testing.allocator, "{\"port\":9001}", 8080, paths, &state);
+    const port = resolveConfiguredPort(allocator, "{\"port\":9001}", 8080, fixture.paths, &state);
     try std.testing.expectEqual(@as(u16, 9001), port);
 }
 
 test "resolveConfiguredPort reads nested answers port" {
-    var paths = try paths_mod.Paths.init(std.testing.allocator, "/tmp/test-orchestrator-port-nested");
-    defer paths.deinit(std.testing.allocator);
-    var state = state_mod.State.init(std.testing.allocator, "/tmp/test-orchestrator-port-nested-state.json");
+    const allocator = std.testing.allocator;
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
     defer state.deinit();
 
-    const port = resolveConfiguredPort(std.testing.allocator, "{\"answers\":{\"port\":9101}}", 8080, paths, &state);
+    const port = resolveConfiguredPort(allocator, "{\"answers\":{\"port\":9101}}", 8080, fixture.paths, &state);
     try std.testing.expectEqual(@as(u16, 9101), port);
 }
 
 test "resolveConfiguredPort skips configured instance ports" {
     const allocator = std.testing.allocator;
-    const root = "/tmp/test-orchestrator-port-used";
-    std_compat.fs.deleteTreeAbsolute(root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    try fixture.paths.ensureDirs();
 
-    var paths = try paths_mod.Paths.init(allocator, root);
-    defer paths.deinit(allocator);
-    try paths.ensureDirs();
-
-    var state = state_mod.State.init(allocator, "/tmp/test-orchestrator-port-used-state.json");
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
     defer state.deinit();
     try state.addInstance("nullclaw", "instance-1", .{
         .version = "v2026.3.8",
@@ -1186,24 +1196,24 @@ test "resolveConfiguredPort skips configured instance ports" {
         .launch_mode = "gateway",
     });
 
-    const comp_dir = try std.fs.path.join(allocator, &.{ root, "instances", "nullclaw" });
+    const comp_dir = try std.fs.path.join(allocator, &.{ fixture.paths.root, "instances", "nullclaw" });
     defer allocator.free(comp_dir);
     std_compat.fs.makeDirAbsolute(comp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-1");
+    const inst_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "instance-1");
     defer allocator.free(inst_dir);
     std_compat.fs.makeDirAbsolute(inst_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    const config_path = try paths.instanceConfig(allocator, "nullclaw", "instance-1");
+    const config_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "instance-1");
     defer allocator.free(config_path);
     try writeFile(config_path, "{\"gateway\":{\"port\":43000}}");
 
-    const port = resolveConfiguredPort(allocator, "{\"foo\":\"bar\"}", 43000, paths, &state);
+    const port = resolveConfiguredPort(allocator, "{\"foo\":\"bar\"}", 43000, fixture.paths, &state);
     try std.testing.expect(port > 43000);
 }
 
@@ -1246,12 +1256,10 @@ test "injectPortFields overwrites existing port fields when requested" {
 
 test "writeFile creates file with correct content" {
     const allocator = std.testing.allocator;
-    const tmp_dir = "/tmp/test-orchestrator-write";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const file_path = try std.fmt.allocPrint(allocator, "{s}/test.json", .{tmp_dir});
+    const file_path = try fixture.path(allocator, "test.json");
     defer allocator.free(file_path);
 
     try writeFile(file_path, "{\"hello\":\"world\"}");
@@ -1411,12 +1419,10 @@ test "extractCustomProviders neutralizes primary custom without dropping standar
 
 test "patchCustomProvidersIntoConfig restores custom fallback provider order" {
     const allocator = std.testing.allocator;
-    const tmp_dir = "/tmp/test-orchestrator-custom-fallback-patch";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const config_path = try std.fs.path.join(allocator, &.{ tmp_dir, "config.json" });
+    const config_path = try fixture.path(allocator, "config.json");
     defer allocator.free(config_path);
     try writeFile(config_path,
         \\{"models":{"providers":{"openrouter":{"api_key":"sk-or"},"openai":{"api_key":""}}},"agents":{"defaults":{"model":{"primary":"openrouter/openrouter-auto"}}},"reliability":{"fallback_providers":["openai"]}}
@@ -1458,12 +1464,10 @@ test "patchCustomProvidersIntoConfig restores custom fallback provider order" {
 
 test "patchCustomProvidersIntoConfig restores primary custom and keeps standard fallback" {
     const allocator = std.testing.allocator;
-    const tmp_dir = "/tmp/test-orchestrator-primary-custom-patch";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const config_path = try std.fs.path.join(allocator, &.{ tmp_dir, "config.json" });
+    const config_path = try fixture.path(allocator, "config.json");
     defer allocator.free(config_path);
     try writeFile(config_path,
         \\{"models":{"providers":{"openai":{"api_key":""},"openrouter":{"api_key":"sk-or"}}},"agents":{"defaults":{"model":{"primary":"openai/"}}},"reliability":{"fallback_providers":["openrouter"]}}

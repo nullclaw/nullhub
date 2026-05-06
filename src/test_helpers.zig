@@ -10,6 +10,8 @@ pub const TempPaths = struct {
 
     pub fn init(allocator: std.mem.Allocator) !TempPaths {
         const tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
         const root = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");
         errdefer allocator.free(root);
 
