@@ -14,6 +14,8 @@ const manifest_mod = @import("../core/manifest.zig");
 const managed_cli = @import("managed_cli.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const query_api = @import("query.zig");
+const test_helpers = @import("../test_helpers.zig");
+const instance_runtime = @import("instance_runtime.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -26,68 +28,6 @@ const default_tracker_prompt_template =
     "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Read a port value from an instance's config.json using a dot-separated key
-/// (e.g. "gateway.port" → config["gateway"]["port"]).
-fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8, dot_key: []const u8) ?u16 {
-    const config_path = paths.instanceConfig(allocator, component, name) catch return null;
-    defer allocator.free(config_path);
-
-    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
-    defer file.close();
-    const contents = file.readToEndAlloc(allocator, 4 * 1024 * 1024) catch return null;
-    defer allocator.free(contents);
-
-    // Parse as generic JSON and walk the dot-path
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{
-        .allocate = .alloc_always,
-    }) catch return null;
-    defer parsed.deinit();
-
-    var current = parsed.value;
-    var it = std.mem.splitScalar(u8, dot_key, '.');
-    while (it.next()) |segment| {
-        switch (current) {
-            .object => |obj| {
-                current = obj.get(segment) orelse return null;
-            },
-            else => return null,
-        }
-    }
-
-    switch (current) {
-        .integer => |v| return if (v >= 0 and v <= 65535) @intCast(v) else null,
-        else => return null,
-    }
-}
-
-fn refreshLocalDevBinary(
-    allocator: std.mem.Allocator,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    version: []const u8,
-) void {
-    if (builtin.is_test) return;
-    if (!std.mem.eql(u8, version, "dev-local")) return;
-
-    const src_bin = local_binary.find(allocator, component) orelse return;
-    defer allocator.free(src_bin);
-
-    const dest_bin = paths.binary(allocator, component, version) catch return;
-    defer allocator.free(dest_bin);
-
-    std_compat.fs.deleteFileAbsolute(dest_bin) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return,
-    };
-    std_compat.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch return;
-    if (comptime std_compat.fs.has_executable_bit) {
-        if (std_compat.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
-            defer f.close();
-            f.chmod(0o755) catch {};
-        } else |_| {}
-    }
-}
 
 const FetchedJsonValue = struct {
     bytes: []u8,
@@ -1800,8 +1740,8 @@ fn pidToU64(pid: std.process.Child.Id) u64 {
     };
 }
 
-fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, runtime_status: ?manager_mod.InstanceStatus) !void {
-    const status_str = if (runtime_status) |status| @tagName(status.status) else "stopped";
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, snapshot: instance_runtime.Snapshot) !void {
+    const status_str = @tagName(snapshot.status);
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
     try buf.appendSlice("\",\"auto_start\":");
@@ -1814,31 +1754,29 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.appendSlice(status_str);
     try buf.append('"');
 
-    if (runtime_status) |status| {
-        if (status.pid) |pid| {
-            try buf.appendSlice(",\"pid\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
-            try buf.appendSlice(text);
-        }
-        if (status.uptime_seconds) |uptime| {
-            try buf.appendSlice(",\"uptime_seconds\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
-            try buf.appendSlice(text);
-        }
-        if (status.restart_count > 0) {
-            try buf.appendSlice(",\"restart_count\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.restart_count});
-            try buf.appendSlice(text);
-        }
-        if (status.port > 0) {
-            try buf.appendSlice(",\"port\":");
-            var num_buf: [10]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{status.port});
-            try buf.appendSlice(text);
-        }
+    if (snapshot.pid) |pid| {
+        try buf.appendSlice(",\"pid\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
+        try buf.appendSlice(text);
+    }
+    if (snapshot.uptime_seconds) |uptime| {
+        try buf.appendSlice(",\"uptime_seconds\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
+        try buf.appendSlice(text);
+    }
+    if (snapshot.restart_count > 0) {
+        try buf.appendSlice(",\"restart_count\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.restart_count});
+        try buf.appendSlice(text);
+    }
+    if (snapshot.port > 0) {
+        try buf.appendSlice(",\"port\":");
+        var num_buf: [10]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.port});
+        try buf.appendSlice(text);
     }
 
     try buf.append('}');
@@ -1847,10 +1785,10 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/instances — list all instances grouped by component.
-pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager) ApiResponse {
+pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths) ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
 
-    buildListJson(&buf, s, manager) catch return .{
+    buildListJson(&buf, s, manager, paths) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -1859,7 +1797,7 @@ pub fn handleList(allocator: std.mem.Allocator, s: *state_mod.State, manager: *m
     return jsonOk(buf.items);
 }
 
-fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager) !void {
+fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths) !void {
     try buf.appendSlice("{\"instances\":{");
 
     var comp_it = s.instances.iterator();
@@ -1878,12 +1816,12 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
             if (!first_inst) try buf.append(',');
             first_inst = false;
 
-            const runtime_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
+            const snapshot = instance_runtime.resolve(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
 
             try buf.append('"');
             try appendEscaped(buf, inst_entry.key_ptr.*);
             try buf.appendSlice("\":");
-            try appendInstanceJson(buf, inst_entry.value_ptr.*, runtime_status);
+            try appendInstanceJson(buf, inst_entry.value_ptr.*, snapshot);
         }
 
         try buf.append('}');
@@ -1893,13 +1831,13 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
 }
 
 /// GET /api/instances/{component}/{name} — detail for one instance.
-pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, component: []const u8, name: []const u8) ApiResponse {
+pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    const runtime_status = manager.getStatus(component, name);
+    const snapshot = instance_runtime.resolve(allocator, paths, manager, component, name, entry);
 
     var buf = std.array_list.Managed(u8).init(allocator);
-    appendInstanceJson(&buf, entry, runtime_status) catch return .{
+    appendInstanceJson(&buf, entry, snapshot) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -1949,7 +1887,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         }
     }
 
-    refreshLocalDevBinary(allocator, paths, component, entry.version);
+    local_binary.refreshStagedDevLocal(allocator, paths, component, entry.version);
 
     // Resolve binary path
     const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
@@ -1974,7 +1912,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
 
     // Try to read actual port from instance config.json using port_from_config key
     if (port_from_config.len > 0) {
-        if (readPortFromConfig(allocator, paths, component, name, port_from_config)) |config_port| {
+        if (instance_runtime.readPortFromConfig(allocator, paths, component, name, port_from_config)) |config_port| {
             port = config_port;
         }
     }
@@ -2114,12 +2052,7 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
         configured = true;
     }
 
-    const running = blk: {
-        if (manager.getStatus(component, name)) |st| {
-            break :blk st.status == .running;
-        }
-        break :blk false;
-    };
+    const running = instance_runtime.resolve(allocator, paths, manager, component, name, entry).status == .running;
 
     var status: []const u8 = "unknown";
     var reason: []const u8 = "not_probed";
@@ -3209,23 +3142,11 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     std_compat.fs.deleteTreeAbsolute(inst_dir) catch {};
     std_compat.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
 
-    // 4. Stage binary — copy from local dev build or leave for download on start
+    // 4. Stage binary from local dev build or leave for download on start.
     const version = blk: {
-        if (local_binary.find(allocator, component)) |src_bin| {
-            defer allocator.free(src_bin);
-            const ver = "dev-local";
-            const dest_bin = paths.binary(allocator, component, ver) catch break :blk "standalone";
-            defer allocator.free(dest_bin);
-            std_compat.fs.deleteFileAbsolute(dest_bin) catch {};
-            std_compat.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
-            if (comptime std_compat.fs.has_executable_bit) {
-                // Make executable on platforms that support executable bits.
-                if (std_compat.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
-                    defer f.close();
-                    f.chmod(0o755) catch {};
-                } else |_| {}
-            }
-            break :blk ver;
+        if (local_binary.stageDevLocal(allocator, paths, component)) |dest_bin| {
+            allocator.free(dest_bin);
+            break :blk local_binary.dev_local_version;
         }
         break :blk "standalone";
     };
@@ -3681,7 +3602,7 @@ pub fn dispatch(
 ) ?ApiResponse {
     // Exact match for the collection endpoint.
     if (std.mem.eql(u8, stripQuery(target), "/api/instances")) {
-        if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager);
+        if (std.mem.eql(u8, method, "GET")) return handleList(allocator, s, manager, paths);
         return methodNotAllowed();
     }
 
@@ -3871,7 +3792,7 @@ pub fn dispatch(
     }
 
     // No action — CRUD on the instance itself.
-    if (std.mem.eql(u8, method, "GET")) return handleGet(allocator, s, manager, parsed.component, parsed.name);
+    if (std.mem.eql(u8, method, "GET")) return handleGet(allocator, s, manager, paths, parsed.component, parsed.name);
     if (std.mem.eql(u8, method, "DELETE")) return handleDelete(allocator, s, manager, paths, parsed.component, parsed.name);
     if (std.mem.eql(u8, method, "PATCH")) return handlePatch(s, parsed.component, parsed.name, body);
 
@@ -3881,22 +3802,25 @@ pub fn dispatch(
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 const TestManagerCtx = struct {
+    fixture: test_helpers.TempPaths,
     manager: manager_mod.Manager,
     mutex: std_compat.sync.Mutex = .{},
     paths: paths_mod.Paths,
 
     fn init(allocator: std.mem.Allocator) TestManagerCtx {
-        const p = paths_mod.Paths.init(allocator, "/tmp/nullhub-test-instances-api") catch @panic("Paths.init failed");
+        const fixture = test_helpers.TempPaths.init(allocator) catch @panic("TempPaths.init failed");
         return .{
-            .paths = p,
-            .manager = manager_mod.Manager.init(allocator, p),
+            .fixture = fixture,
+            .paths = fixture.paths,
+            .manager = manager_mod.Manager.init(allocator, fixture.paths),
             .mutex = .{},
         };
     }
 
     fn deinit(self: *TestManagerCtx, allocator: std.mem.Allocator) void {
+        _ = allocator;
         self.manager.deinit();
-        self.paths.deinit(allocator);
+        self.fixture.deinit();
     }
 };
 
@@ -4134,7 +4058,11 @@ test "parsePath: component only (no name) returns null" {
 
 test "handleList returns valid JSON structure" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4176,7 +4104,11 @@ test "handleList returns valid JSON structure" {
 
 test "handleGet returns 404 for missing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4188,7 +4120,11 @@ test "handleGet returns 404 for missing instance" {
 
 test "handleGet returns instance detail JSON" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4224,13 +4160,14 @@ test "handleInstanceStatus uses nullclaw CLI when available" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-cli.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestBinary(
@@ -4259,7 +4196,11 @@ test "handleInstanceStatus uses nullclaw CLI when available" {
 
 test "handleInstanceStatus returns gateway error when managed CLI is unavailable" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-fallback.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4275,7 +4216,11 @@ test "handleInstanceStatus returns gateway error when managed CLI is unavailable
 
 test "handleStart returns 404 for missing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4286,15 +4231,19 @@ test "handleStart returns 404 for missing instance" {
 
 test "handleStart returns 500 when binary does not exist" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
-    // Binary doesn't exist at /tmp/nullhub-test-instances-api/bin/nullclaw-1.0.0
-    // so startInstance will fail and handler returns 500.
+    // The binary is absent from the isolated test root, so startInstance
+    // will fail and the handler returns 500.
     const resp = handleStart(allocator, &s, &mctx.manager, mctx.paths, "nullclaw", "my-agent", "");
     try std.testing.expectEqualStrings("500 Internal Server Error", resp.status);
 }
@@ -4303,13 +4252,14 @@ test "handleStart keeps gateway instances on their HTTP health port" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-start-gateway.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .launch_mode = "gateway" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":43123}}");
@@ -4340,7 +4290,11 @@ test "handleStart keeps gateway instances on their HTTP health port" {
 
 test "handleStop returns 200 for existing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4354,7 +4308,11 @@ test "handleStop returns 200 for existing instance" {
 
 test "handleRestart returns 500 when binary does not exist" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4368,7 +4326,11 @@ test "handleRestart returns 500 when binary does not exist" {
 
 test "handleDelete removes instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4385,13 +4347,14 @@ test "handleDelete removes instance" {
 
 test "handleDelete removes instance directory from active path" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-delete-path.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
@@ -4411,20 +4374,16 @@ test "handleDelete removes instance directory from active path" {
 
 test "handleDelete restores instance when state save fails" {
     const allocator = std.testing.allocator;
-    const bad_state_root = "/tmp/nullhub-test-instances-api-delete-rollback";
-    std_compat.fs.deleteTreeAbsolute(bad_state_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(bad_state_root) catch {};
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
 
-    const bad_state_path = try std.fmt.allocPrint(allocator, "{s}/missing/state.json", .{bad_state_root});
+    const bad_state_path = try state_fixture.path(allocator, "missing/state.json");
     defer allocator.free(bad_state_path);
 
     var s = state_mod.State.init(allocator, bad_state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"gateway\":{\"port\":3000}}");
@@ -4440,7 +4399,11 @@ test "handleDelete restores instance when state save fails" {
 
 test "handleDelete returns 404 for missing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4451,7 +4414,11 @@ test "handleDelete returns 404 for missing instance" {
 
 test "handlePatch updates auto_start" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .auto_start = false });
@@ -4465,7 +4432,11 @@ test "handlePatch updates auto_start" {
 
 test "handlePatch returns 404 for missing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     const resp = handlePatch(&s, "nope", "nope", "{\"auto_start\":true}");
@@ -4474,7 +4445,11 @@ test "handlePatch returns 404 for missing instance" {
 
 test "handlePatch returns 400 for invalid JSON" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
@@ -4485,7 +4460,11 @@ test "handlePatch returns 400 for invalid JSON" {
 
 test "handlePatch updates launch_mode" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
@@ -4499,7 +4478,11 @@ test "handlePatch updates launch_mode" {
 
 test "handlePatch rejects invalid launch_mode" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
@@ -4513,7 +4496,11 @@ test "handlePatch rejects invalid launch_mode" {
 
 test "handlePatch updates verbose startup flag" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
@@ -4527,7 +4514,11 @@ test "handlePatch updates verbose startup flag" {
 
 test "handleGet includes launch_mode in JSON" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4543,7 +4534,11 @@ test "handleGet includes launch_mode in JSON" {
 
 test "handleGet includes verbose in JSON" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4559,7 +4554,11 @@ test "handleGet includes verbose in JSON" {
 
 test "dispatch routes GET /api/instances" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4575,7 +4574,11 @@ test "dispatch routes GET /api/instances" {
 
 test "dispatch routes POST start action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4589,7 +4592,11 @@ test "dispatch routes POST start action" {
 
 test "dispatch routes GET provider-health action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4605,13 +4612,14 @@ test "dispatch routes GET status action" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-status-dispatch.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestBinary(
@@ -4639,7 +4647,11 @@ test "dispatch routes GET status action" {
 
 test "dispatch routes GET models action returns gateway error when CLI is unavailable" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4657,13 +4669,14 @@ test "dispatch routes GET models action via nullclaw CLI when available" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-cli.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestBinary(
@@ -4694,13 +4707,14 @@ test "dispatch routes GET models action rejects malformed CLI JSON" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-models-invalid.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1-invalid" });
     try writeTestBinary(
@@ -4727,7 +4741,11 @@ test "dispatch routes GET models action rejects malformed CLI JSON" {
 
 test "dispatch routes GET cron action returns gateway error when CLI is unavailable" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -4745,13 +4763,14 @@ test "dispatch routes GET cron action via nullclaw CLI when available" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-cli.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestBinary(
@@ -4781,13 +4800,14 @@ test "dispatch routes POST cron create action" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-create.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     try writeTestBinary(
@@ -4829,12 +4849,14 @@ test "dispatch routes POST cron create action" {
 
 test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -4860,12 +4882,14 @@ test "handleOnboarding reports pending bootstrap for fresh nullclaw workspace" {
 
 test "handleOnboarding reports pending bootstrap from workspace state without disk bootstrap file" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -4875,10 +4899,10 @@ test "handleOnboarding reports pending bootstrap from workspace state without di
     defer allocator.free(workspace_dir);
     try ensurePath(workspace_dir);
 
-    const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
-    defer allocator.free(state_path);
-    try ensurePath(std.fs.path.dirname(state_path).?);
-    const state_file = try std_compat.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    const workspace_state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
+    defer allocator.free(workspace_state_path);
+    try ensurePath(std.fs.path.dirname(workspace_state_path).?);
+    const state_file = try std_compat.fs.createFileAbsolute(workspace_state_path, .{ .truncate = true });
     defer state_file.close();
     try state_file.writeAll(
         "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\"\n}\n",
@@ -4896,13 +4920,14 @@ test "handleOnboarding reports pending bootstrap from workspace state without di
 
 test "handleOnboarding falls back to CLI bootstrap memory for legacy sqlite workspace" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "legacy-agent", .{ .version = "1.0.3" });
     const script =
@@ -4939,13 +4964,14 @@ test "handleOnboarding falls back to CLI bootstrap memory for legacy sqlite work
 
 test "handleOnboarding stays idle when legacy sqlite bootstrap memory is absent" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "empty-agent", .{ .version = "1.0.4" });
     const script =
@@ -4978,12 +5004,14 @@ test "handleOnboarding stays idle when legacy sqlite bootstrap memory is absent"
 
 test "dispatch routes GET onboarding action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
 
@@ -4993,10 +5021,10 @@ test "dispatch routes GET onboarding action" {
     defer allocator.free(workspace_dir);
     try ensurePath(workspace_dir);
 
-    const state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
-    defer allocator.free(state_path);
-    try ensurePath(std.fs.path.dirname(state_path).?);
-    const state_file = try std_compat.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    const workspace_state_path = try nullclawWorkspaceStatePath(allocator, workspace_dir);
+    defer allocator.free(workspace_state_path);
+    try ensurePath(std.fs.path.dirname(workspace_state_path).?);
+    const state_file = try std_compat.fs.createFileAbsolute(workspace_state_path, .{ .truncate = true });
     defer state_file.close();
     try state_file.writeAll(
         "{\n  \"bootstrap_seeded_at\": \"2026-03-13T01:17:17Z\",\n  \"onboarding_completed_at\": \"2026-03-13T01:30:41Z\"\n}\n",
@@ -5011,12 +5039,14 @@ test "dispatch routes GET onboarding action" {
 
 test "dispatch routes GET integration action for linked nullboiler" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -5054,12 +5084,14 @@ test "dispatch routes GET integration action for linked nullboiler" {
 
 test "dispatch routes POST integration action for nullboiler" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -5116,12 +5148,14 @@ test "dispatch routes POST integration action for nullboiler" {
 
 test "dispatch integration relink preserves advanced tracker config and custom workflows" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nulltickets", "tracker-a", .{ .version = "1.0.0" });
     try s.addInstance("nullboiler", "boiler-a", .{ .version = "1.0.0" });
@@ -5236,7 +5270,11 @@ test "dispatch integration relink preserves advanced tracker config and custom w
 
 test "dispatch provider-health rejects POST" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5249,7 +5287,11 @@ test "dispatch provider-health rejects POST" {
 
 test "handleUsage aggregates provider/model rows" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5292,7 +5334,11 @@ test "handleUsage aggregates provider/model rows" {
 
 test "handleUsage refreshes cache immediately when ledger changes" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5343,7 +5389,11 @@ test "handleUsage refreshes cache immediately when ledger changes" {
 
 test "dispatch routes GET usage action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5358,13 +5408,14 @@ test "dispatch routes GET usage action" {
 
 test "handleHistory returns CLI JSON and passes instance home" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0" });
     const script =
@@ -5401,13 +5452,14 @@ test "handleHistory returns CLI JSON and passes instance home" {
 
 test "handleMemory wraps legacy CLI failures as JSON errors" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.1" });
     const script =
@@ -5427,13 +5479,14 @@ test "handleMemory wraps legacy CLI failures as JSON errors" {
 
 test "handleMemory forwards q alias session_id and include_internal" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-q" });
     const script =
@@ -5474,13 +5527,14 @@ test "handleMemory forwards q alias session_id and include_internal" {
 
 test "handleMemory get returns 404 when CLI reports null" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-null" });
     const script =
@@ -5501,13 +5555,14 @@ test "handleMemory get returns 404 when CLI reports null" {
 
 test "handleMemoryWrite maps missing update to 404" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-patch" });
     const script =
@@ -5539,13 +5594,14 @@ test "handleMemoryWrite maps missing update to 404" {
 
 test "dispatch routes memory maintenance actions" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-maint" });
     const script =
@@ -5577,13 +5633,14 @@ test "dispatch routes memory maintenance actions" {
 
 test "dispatch routes GET skills action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     const script =
@@ -5606,13 +5663,14 @@ test "dispatch routes GET skills action" {
 
 test "handleSkills returns 404 when CLI detail returns null" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-skill-null" });
     const script =
@@ -5633,13 +5691,14 @@ test "handleSkills returns 404 when CLI detail returns null" {
 
 test "dispatch routes GET channels action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     const script =
@@ -5665,13 +5724,14 @@ test "dispatch routes GET channel detail maps missing type to 404" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-channel-detail-missing.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-missing" });
     const script =
@@ -5696,13 +5756,14 @@ test "dispatch routes GET channel detail via nullclaw CLI when available" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-channel-detail-cli.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2-detail" });
     const script =
@@ -5727,7 +5788,11 @@ test "dispatch routes GET channel detail via nullclaw CLI when available" {
 
 test "dispatch routes GET skills catalog" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
@@ -5743,13 +5808,14 @@ test "dispatch routes GET skills catalog" {
 
 test "dispatch routes POST bundled skill install" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.2" });
     try writeTestInstanceConfig(allocator, mctx.paths, "nullclaw", "my-agent", "{\"autonomy\":{\"level\":\"supervised\"}}");
@@ -5786,13 +5852,14 @@ test "dispatch routes POST bundled skill install" {
 
 test "dispatch routes DELETE skills action" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.3" });
     const script =
@@ -5815,13 +5882,14 @@ test "dispatch routes DELETE skills action" {
 
 test "dispatch routes POST source install returns conflict on CLI failure" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.4" });
     const script =
@@ -5849,13 +5917,14 @@ test "dispatch routes POST source install returns conflict on CLI failure" {
 
 test "dispatch routes POST registry skill install alias" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.5" });
     const script =
@@ -5887,13 +5956,14 @@ test "dispatch routes POST registry skill install alias" {
 
 test "dispatch routes POST url skill install alias" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.6" });
     const script =
@@ -5927,13 +5997,14 @@ test "dispatch routes cron detail and lifecycle actions" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-cron-lifecycle.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.7" });
     try writeTestCronStore(
@@ -6059,13 +6130,14 @@ test "dispatch routes config mutation actions" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-config-actions.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.8" });
     const script =
@@ -6145,13 +6217,14 @@ test "dispatch routes doctor capabilities mcp and models detail" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-admin-read.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.9" });
     const script =
@@ -6216,13 +6289,14 @@ test "dispatch routes agent invoke stream and sessions" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-agent.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.10" });
     const script =
@@ -6287,13 +6361,14 @@ test "dispatch routes memory write read stats and search actions" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-memory-actions.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.11" });
     const script =
@@ -6382,13 +6457,14 @@ test "dispatch routes GET skill detail action" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api-skill-detail.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);
-
-    std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(mctx.paths.root) catch {};
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.12" });
     const script =
@@ -6412,7 +6488,11 @@ test "dispatch routes GET skill detail action" {
 
 test "dispatch returns null for non-matching path" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-instances-api.json");
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     var mctx = TestManagerCtx.init(allocator);
     defer mctx.deinit(allocator);

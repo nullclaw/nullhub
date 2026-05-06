@@ -2,6 +2,7 @@ const std = @import("std");
 const std_compat = @import("compat");
 const paths_mod = @import("paths.zig");
 const state_mod = @import("state.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const MAX_CONFIG_BYTES = 8 * 1024 * 1024;
 const DEFAULT_WEB_PORT_START: u16 = 32123;
@@ -260,15 +261,13 @@ fn writeAbsolute(path: []const u8, content: []const u8) !void {
 
 test "ensureNullclawWebChannelConfig injects web channel when missing" {
     const allocator = std.testing.allocator;
-    const root = "/tmp/nullhub-test-web-channel-missing";
-    std_compat.fs.deleteTreeAbsolute(root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    try fixture.paths.ensureDirs();
 
-    var paths = try paths_mod.Paths.init(allocator, root);
-    defer paths.deinit();
-    try paths.ensureDirs();
-
-    var state = state_mod.State.init(allocator, "/tmp/nullhub-test-web-channel-missing/state.json");
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
     defer state.deinit();
 
     try state.addInstance("nullclaw", "instance-1", .{
@@ -277,11 +276,11 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
         .launch_mode = "gateway",
     });
 
-    const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-1");
+    const inst_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "instance-1");
     defer allocator.free(inst_dir);
     try std_compat.fs.makeDirAbsolute(inst_dir);
 
-    const cfg_path = try paths.instanceConfig(allocator, "nullclaw", "instance-1");
+    const cfg_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "instance-1");
     defer allocator.free(cfg_path);
     try writeAbsolute(cfg_path,
         \\{
@@ -292,7 +291,7 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
         \\}
     );
 
-    const result = try ensureNullclawWebChannelConfig(allocator, paths, &state, "nullclaw", "instance-1");
+    const result = try ensureNullclawWebChannelConfig(allocator, fixture.paths, &state, "nullclaw", "instance-1");
     try std.testing.expect(result.changed);
     try std.testing.expect(result.web_port != null);
 
@@ -309,15 +308,13 @@ test "ensureNullclawWebChannelConfig injects web channel when missing" {
 
 test "ensureNullclawWebChannelConfig picks next free port among instances" {
     const allocator = std.testing.allocator;
-    const root = "/tmp/nullhub-test-web-channel-port-pick";
-    std_compat.fs.deleteTreeAbsolute(root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    try fixture.paths.ensureDirs();
 
-    var paths = try paths_mod.Paths.init(allocator, root);
-    defer paths.deinit();
-    try paths.ensureDirs();
-
-    var state = state_mod.State.init(allocator, "/tmp/nullhub-test-web-channel-port-pick/state.json");
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
     defer state.deinit();
 
     try state.addInstance("nullclaw", "default", .{
@@ -331,11 +328,11 @@ test "ensureNullclawWebChannelConfig picks next free port among instances" {
         .launch_mode = "gateway",
     });
 
-    const default_dir = try paths.instanceDir(allocator, "nullclaw", "default");
+    const default_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "default");
     defer allocator.free(default_dir);
     try std_compat.fs.makeDirAbsolute(default_dir);
 
-    const default_cfg = try paths.instanceConfig(allocator, "nullclaw", "default");
+    const default_cfg = try fixture.paths.instanceConfig(allocator, "nullclaw", "default");
     defer allocator.free(default_cfg);
     try writeAbsolute(default_cfg,
         \\{
@@ -351,11 +348,11 @@ test "ensureNullclawWebChannelConfig picks next free port among instances" {
         \\}
     );
 
-    const inst_dir = try paths.instanceDir(allocator, "nullclaw", "instance-2");
+    const inst_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "instance-2");
     defer allocator.free(inst_dir);
     try std_compat.fs.makeDirAbsolute(inst_dir);
 
-    const inst_cfg = try paths.instanceConfig(allocator, "nullclaw", "instance-2");
+    const inst_cfg = try fixture.paths.instanceConfig(allocator, "nullclaw", "instance-2");
     defer allocator.free(inst_cfg);
     try writeAbsolute(inst_cfg,
         \\{
@@ -365,7 +362,7 @@ test "ensureNullclawWebChannelConfig picks next free port among instances" {
         \\}
     );
 
-    const result = try ensureNullclawWebChannelConfig(allocator, paths, &state, "nullclaw", "instance-2");
+    const result = try ensureNullclawWebChannelConfig(allocator, fixture.paths, &state, "nullclaw", "instance-2");
     try std.testing.expect(result.changed);
     try std.testing.expectEqual(@as(?u16, 32124), result.web_port);
 }

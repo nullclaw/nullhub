@@ -10,7 +10,7 @@ const builtin = @import("builtin");
 /// ├── config.json
 /// ├── state.json
 /// ├── manifests/{component}@{version}.json
-/// ├── bin/{component}-{version}
+/// ├── bin/{component}-{version} (or bin/{component} for dev-local)
 /// ├── instances/{component}/{name}/
 /// │   ├── instance.json
 /// │   ├── config.json
@@ -245,6 +245,10 @@ test "paths resolve under custom root" {
     const bin = try p.binary(allocator, "nullclaw", "2026.3.1");
     defer allocator.free(bin);
     try std.testing.expectEqualStrings("/tmp/test-nullhub/bin/nullclaw-2026.3.1", bin);
+
+    const dev_bin = try p.binary(allocator, "nullclaw", "dev-local");
+    defer allocator.free(dev_bin);
+    try std.testing.expectEqualStrings("/tmp/test-nullhub/bin/nullclaw", dev_bin);
 
     const inst_dir = try p.instanceDir(allocator, "nullclaw", "my-agent");
     defer allocator.free(inst_dir);

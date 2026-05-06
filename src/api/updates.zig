@@ -9,6 +9,7 @@ const downloader = @import("../installer/downloader.zig");
 const launch_args_mod = @import("../core/launch_args.zig");
 const platform = @import("../core/platform.zig");
 const helpers = @import("helpers.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -286,7 +287,11 @@ fn buildApplyJson(buf: *std.array_list.Managed(u8), component: []const u8, name:
 
 test "handleCheckUpdates with empty state returns empty updates array" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-updates-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     const resp = handleCheckUpdates(allocator, &s);
@@ -299,7 +304,11 @@ test "handleCheckUpdates with empty state returns empty updates array" {
 
 test "handleCheckUpdates with instances returns correct structure" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-updates-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = true });
@@ -337,7 +346,11 @@ test "handleCheckUpdates with instances returns correct structure" {
 
 test "handleApplyUpdate returns 404 for missing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-updates-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     const resp = handleApplyUpdate(allocator, &s, "nonexistent", "nope");
@@ -347,7 +360,11 @@ test "handleApplyUpdate returns 404 for missing instance" {
 
 test "handleApplyUpdate returns success for existing instance" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-updates-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = false });

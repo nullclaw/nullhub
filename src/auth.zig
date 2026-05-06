@@ -26,12 +26,22 @@ pub fn extractBearerToken(raw_request: []const u8) ?[]const u8 {
     return null;
 }
 
+fn pathWithoutQuery(path: []const u8) []const u8 {
+    const query = std.mem.indexOfScalar(u8, path, '?') orelse return path;
+    return path[0..query];
+}
+
+pub fn isApiPath(path: []const u8) bool {
+    const clean_path = pathWithoutQuery(path);
+    return std.mem.eql(u8, clean_path, "/api") or
+        std.mem.startsWith(u8, clean_path, "/api/");
+}
+
 /// Returns true for paths that do not require authentication.
-/// Public paths: GET /health and any path not starting with /api/.
+/// Public paths: /health and any path outside the /api namespace.
 pub fn isPublicPath(path: []const u8) bool {
-    if (std.mem.eql(u8, path, "/health")) return true;
-    if (!std.mem.startsWith(u8, path, "/api/")) return true;
-    return false;
+    if (std.mem.eql(u8, pathWithoutQuery(path), "/health")) return true;
+    return !isApiPath(path);
 }
 
 // --- Tests ---
@@ -78,4 +88,21 @@ test "isPublicPath returns true for static paths like /index.html" {
 
 test "isPublicPath returns false for /api/status" {
     try std.testing.expect(isPublicPath("/api/status") == false);
+}
+
+test "isPublicPath returns false for bare /api" {
+    try std.testing.expect(isPublicPath("/api") == false);
+}
+
+test "isPublicPath returns false for bare /api with query string" {
+    try std.testing.expect(isPublicPath("/api?format=json") == false);
+}
+
+test "isApiPath only matches the api namespace" {
+    try std.testing.expect(isApiPath("/api"));
+    try std.testing.expect(isApiPath("/api?format=json"));
+    try std.testing.expect(isApiPath("/api/status"));
+    try std.testing.expect(isApiPath("/api/status?format=json"));
+    try std.testing.expect(!isApiPath("/apiary"));
+    try std.testing.expect(!isApiPath("/ui/api"));
 }
