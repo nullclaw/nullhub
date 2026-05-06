@@ -3,6 +3,7 @@ const std_compat = @import("compat");
 const registry = @import("registry.zig");
 const downloader = @import("downloader.zig");
 const prereqs = @import("prereqs.zig");
+const fs_compat = @import("../fs_compat.zig");
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -10,24 +11,6 @@ pub const UiModuleError = error{
     ExtractionFailed,
     AssetNotFound,
 };
-
-// ─── URL building ────────────────────────────────────────────────────────────
-
-/// Build the download URL for a UI module bundle asset from a GitHub release.
-/// The asset name follows the convention `{module-name}-bundle.tar.gz`.
-/// Caller owns the returned memory.
-pub fn buildBundleAssetUrl(
-    allocator: std.mem.Allocator,
-    repo: []const u8,
-    version: []const u8,
-    module_name: []const u8,
-) ![]const u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "https://github.com/{s}/releases/download/{s}/{s}-bundle.tar.gz",
-        .{ repo, version, module_name },
-    );
-}
 
 fn findUiModuleArchiveAsset(
     allocator: std.mem.Allocator,
@@ -43,12 +26,20 @@ fn findUiModuleArchiveAsset(
     if (registry.findAssetByName(release, release_archive)) |asset| return asset;
 
     for (release.assets) |asset| {
-        if (std.mem.startsWith(u8, asset.name, module_name) and std.mem.endsWith(u8, asset.name, ".tar.gz")) {
+        if (isUiModuleArchiveAssetName(asset.name, module_name)) {
             return asset;
         }
     }
 
     return null;
+}
+
+fn isUiModuleArchiveAssetName(asset_name: []const u8, module_name: []const u8) bool {
+    if (!std.mem.startsWith(u8, asset_name, module_name)) return false;
+    if (!std.mem.endsWith(u8, asset_name, ".tar.gz")) return false;
+
+    const suffix = asset_name[module_name.len..];
+    return std.mem.eql(u8, suffix, ".tar.gz") or std.mem.startsWith(u8, suffix, "-");
 }
 
 // ─── Extraction ──────────────────────────────────────────────────────────────
@@ -60,20 +51,7 @@ fn findUiModuleArchiveAsset(
 pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest_dir: []const u8) !void {
     prereqs.ensureTool(allocator, "tar") catch return error.ExtractionFailed;
 
-    // Create dest_dir if it doesn't exist.
-    std_compat.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.FileNotFound => {
-            // Parent directory missing — create the full path.
-            if (std.fs.path.dirnamePosix(dest_dir)) |parent| {
-                try std_compat.fs.makeDirAbsolute(parent);
-                try std_compat.fs.makeDirAbsolute(dest_dir);
-            } else {
-                return err;
-            }
-        },
-        else => return err,
-    };
+    try fs_compat.makePath(dest_dir);
 
     const result = std_compat.process.Child.run(.{
         .allocator = allocator,
@@ -92,42 +70,16 @@ pub fn extractTarGz(allocator: std.mem.Allocator, archive_path: []const u8, dest
 
 // ─── Module status ───────────────────────────────────────────────────────────
 
-/// Check whether a UI module is installed at the given directory.
+/// Check whether a UI module entrypoint is installed at the given directory.
 ///
-/// Returns `true` if `dest_dir` exists and is accessible as a directory.
+/// Returns `true` only when `module.js` exists where the frontend imports it.
 pub fn isModuleInstalled(dest_dir: []const u8) bool {
     var dir = std_compat.fs.openDirAbsolute(dest_dir, .{}) catch return false;
-    dir.close();
+    defer dir.close();
+
+    const file = dir.openFile("module.js", .{}) catch return false;
+    file.close();
     return true;
-}
-
-fn copyDirectoryContents(allocator: std.mem.Allocator, source_dir_path: []const u8, dest_dir_path: []const u8) !void {
-    try std_compat.fs.makeDirAbsolute(dest_dir_path);
-
-    var source_dir = try std_compat.fs.openDirAbsolute(source_dir_path, .{ .iterate = true });
-    defer source_dir.close();
-
-    var walker = try source_dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        const dest_path = try std.fs.path.join(allocator, &.{ dest_dir_path, entry.path });
-        defer allocator.free(dest_path);
-
-        switch (entry.kind) {
-            .directory => try std_compat.fs.makeDirAbsolute(dest_path),
-            .file => {
-                if (std.fs.path.dirname(dest_path)) |dest_parent| {
-                    try std_compat.fs.makeDirAbsolute(dest_parent);
-                }
-
-                const source_path = try std.fs.path.join(allocator, &.{ source_dir_path, entry.path });
-                defer allocator.free(source_path);
-                try std_compat.fs.copyFileAbsolute(source_path, dest_path, .{});
-            },
-            else => return error.UnsupportedFileKind,
-        }
-    }
 }
 
 fn resolveExtractedModuleRoot(allocator: std.mem.Allocator, extract_dir: []const u8) ![]const u8 {
@@ -155,17 +107,17 @@ fn installExtractedUiModule(allocator: std.mem.Allocator, extract_dir: []const u
     const source_root = try resolveExtractedModuleRoot(allocator, extract_dir);
     defer allocator.free(source_root);
 
-    try copyDirectoryContents(allocator, source_root, dest_dir);
+    try fs_compat.copyDirectoryContents(allocator, source_root, dest_dir);
 }
 
 // ─── Download ────────────────────────────────────────────────────────────────
 
-/// Download and extract a UI module bundle.
+/// Download and extract a UI module release archive.
 ///
-/// 1. Builds the GitHub release download URL for the module's tarball.
-/// 2. Downloads the tarball to a temporary path under `dest_dir`.
-/// 3. Extracts the tarball into `dest_dir`.
-/// 4. Removes the temporary tarball after extraction.
+/// 1. Resolves GitHub release metadata for `version`.
+/// 2. Selects a compatible `.tar.gz` release asset.
+/// 3. Downloads the tarball to a temporary path next to `dest_dir`.
+/// 4. Extracts and normalizes the archive layout into `dest_dir`.
 pub fn downloadUiModule(
     allocator: std.mem.Allocator,
     repo: []const u8,
@@ -181,23 +133,11 @@ pub fn downloadUiModule(
 
     const asset = findUiModuleArchiveAsset(allocator, release.value, module_name) orelse return error.AssetNotFound;
 
-    // Ensure dest_dir exists before downloading into it.
     std_compat.fs.deleteTreeAbsolute(dest_dir) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
-    std_compat.fs.makeDirAbsolute(dest_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.FileNotFound => {
-            if (std.fs.path.dirnamePosix(dest_dir)) |parent| {
-                try std_compat.fs.makeDirAbsolute(parent);
-                try std_compat.fs.makeDirAbsolute(dest_dir);
-            } else {
-                return err;
-            }
-        },
-        else => return err,
-    };
+    try fs_compat.makePath(dest_dir);
 
     const archive_path = try std.fmt.allocPrint(allocator, "{s}.download.tar.gz", .{dest_dir});
     defer allocator.free(archive_path);
@@ -218,26 +158,6 @@ pub fn downloadUiModule(
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
-
-test "buildBundleAssetUrl produces correct URL" {
-    const allocator = std.testing.allocator;
-    const url = try buildBundleAssetUrl(allocator, "nullclaw/chat-ui", "v1.2.0", "chat-ui");
-    defer allocator.free(url);
-    try std.testing.expectEqualStrings(
-        "https://github.com/nullclaw/chat-ui/releases/download/v1.2.0/chat-ui-bundle.tar.gz",
-        url,
-    );
-}
-
-test "buildBundleAssetUrl with different module" {
-    const allocator = std.testing.allocator;
-    const url = try buildBundleAssetUrl(allocator, "nullclaw/dashboard", "v3.0.0", "dashboard");
-    defer allocator.free(url);
-    try std.testing.expectEqualStrings(
-        "https://github.com/nullclaw/dashboard/releases/download/v3.0.0/dashboard-bundle.tar.gz",
-        url,
-    );
-}
 
 test "findUiModuleArchiveAsset prefers bundle asset" {
     const allocator = std.testing.allocator;
@@ -265,6 +185,18 @@ test "findUiModuleArchiveAsset falls back to versioned release tarball" {
 
     const asset = findUiModuleArchiveAsset(allocator, release, "nullclaw-chat-ui") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("nullclaw-chat-ui-v2026.3.4.tar.gz", asset.name);
+}
+
+test "findUiModuleArchiveAsset does not match a different module prefix" {
+    const allocator = std.testing.allocator;
+    const release = registry.ReleaseInfo{
+        .tag_name = "v2026.3.4",
+        .assets = &.{
+            .{ .name = "nullclaw-chat-uikit-v2026.3.4.tar.gz", .browser_download_url = "https://example.com/uikit.tar.gz" },
+        },
+    };
+
+    try std.testing.expect(findUiModuleArchiveAsset(allocator, release, "nullclaw-chat-ui") == null);
 }
 
 test "extractTarGz creates dest_dir and extracts contents" {
@@ -353,13 +285,30 @@ test "installExtractedUiModule flattens single top-level archive directory" {
     try std.testing.expectEqualStrings("export const ok = true;\n", buf[0..n]);
 }
 
-test "isModuleInstalled returns true for existing directory" {
+test "isModuleInstalled returns true when module entrypoint exists" {
     const tmp_dir = "/tmp/test-nullhub-ui-installed";
     std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
     try std_compat.fs.makeDirAbsolute(tmp_dir);
     defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
 
+    const module_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/module.js", .{tmp_dir});
+    defer std.testing.allocator.free(module_path);
+    {
+        var file = try std_compat.fs.createFileAbsolute(module_path, .{});
+        defer file.close();
+        try file.writeAll("export {};\n");
+    }
+
     try std.testing.expect(isModuleInstalled(tmp_dir));
+}
+
+test "isModuleInstalled returns false without module entrypoint" {
+    const tmp_dir = "/tmp/test-nullhub-ui-installed-no-entrypoint";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    try std.testing.expect(!isModuleInstalled(tmp_dir));
 }
 
 test "isModuleInstalled returns false for non-existing directory" {
