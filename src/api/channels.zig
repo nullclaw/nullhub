@@ -6,6 +6,7 @@ const helpers = @import("helpers.zig");
 const wizard_api = @import("wizard.zig");
 const providers_api = @import("providers.zig");
 const component_cli = @import("../core/component_cli.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const appendEscaped = helpers.appendEscaped;
 
@@ -537,7 +538,10 @@ test "hasRevealParam detects reveal query param" {
 
 test "handleList returns empty array for no channels" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-channel-test-list.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -548,7 +552,10 @@ test "handleList returns empty array for no channels" {
 
 test "handleList masks secrets in config" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-channel-test-mask.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -569,7 +576,10 @@ test "handleList masks secrets in config" {
 
 test "handleList reveals secrets when requested" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-channel-test-reveal.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -587,12 +597,9 @@ test "handleList reveals secrets when requested" {
 
 test "handleDelete removes channel" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-channel-test-delete";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
     defer allocator.free(path);
 
     var s = state_mod.State.init(allocator, path);
@@ -608,7 +615,10 @@ test "handleDelete removes channel" {
 
 test "handleDelete returns error for unknown id" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-channel-test-del-unknown.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -619,18 +629,18 @@ test "handleDelete returns error for unknown id" {
 
 test "handleCreate rejects non-object config" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-channel-test-create-invalid.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
-
-    var paths = try paths_mod.Paths.init(allocator, "/tmp/nullhub-channel-test-create-invalid-root");
-    defer paths.deinit(allocator);
 
     const json = try handleCreate(
         allocator,
         "{\"channel_type\":\"telegram\",\"account\":\"default\",\"config\":null}",
         &s,
-        paths,
+        fixture.paths,
     );
     defer allocator.free(json);
     try std.testing.expectEqualStrings("{\"error\":\"config must be an object\"}", json);
@@ -638,12 +648,9 @@ test "handleCreate rejects non-object config" {
 
 test "handleUpdate rejects non-object config" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-channel-test-update-invalid";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp);
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
     defer allocator.free(path);
 
     var s = state_mod.State.init(allocator, path);
@@ -654,15 +661,12 @@ test "handleUpdate rejects non-object config" {
         .config = "{\"bot_token\":\"abc\"}",
     });
 
-    var paths = try paths_mod.Paths.init(allocator, tmp);
-    defer paths.deinit(allocator);
-
     const json = try handleUpdate(
         allocator,
         1,
         "{\"config\":false}",
         &s,
-        paths,
+        fixture.paths,
     );
     defer allocator.free(json);
     try std.testing.expectEqualStrings("{\"error\":\"config must be an object\"}", json);
@@ -670,14 +674,12 @@ test "handleUpdate rejects non-object config" {
 
 test "writeChannelConfig escapes channel type and account" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-channel-test-config-escape";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp);
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    try writeChannelConfig(allocator, tmp, "telegram", "acct\"name\\slash", "{\"token\":\"abc\"}");
+    try writeChannelConfig(allocator, fixture.root, "telegram", "acct\"name\\slash", "{\"token\":\"abc\"}");
 
-    const config_path = try std.fmt.allocPrint(allocator, "{s}/config.json", .{tmp});
+    const config_path = try fixture.path(allocator, "config.json");
     defer allocator.free(config_path);
     const bytes = try std_compat.fs.cwd().readFileAlloc(allocator, config_path, 4096);
     defer allocator.free(bytes);
