@@ -304,19 +304,40 @@ pub fn install(
     defer launch.deinit();
     const effective_port = launch.effectiveHealthPort(runtime_port);
 
-    // 6. Register in state.json
-    s.addInstance(opts.component, opts.instance_name, .{
-        .version = version,
-        .auto_start = true,
-        .launch_mode = launch_command,
-        .verbose = false,
-    }) catch return error.StateError;
-    s.save() catch return error.StateError;
-
-    // 7. Start process via Manager
-    mgr.startInstance(
+    persistAndStartInstance(
+        s,
         opts.component,
         opts.instance_name,
+        version,
+        launch_command,
+        struct {
+            fn call(
+                ctx: *anyopaque,
+                component: []const u8,
+                name: []const u8,
+                binary_path: []const u8,
+                launch_args: []const []const u8,
+                port_arg: u16,
+                health: []const u8,
+                working_dir: []const u8,
+                config_path: []const u8,
+                primary_command: []const u8,
+            ) anyerror!void {
+                const manager: *manager_mod.Manager = @ptrCast(@alignCast(ctx));
+                return manager.startInstance(
+                    component,
+                    name,
+                    binary_path,
+                    launch_args,
+                    port_arg,
+                    health,
+                    working_dir,
+                    config_path,
+                    primary_command,
+                );
+            }
+        }.call,
+        @ptrCast(mgr),
         bin_path,
         launch.argv,
         effective_port,
@@ -324,7 +345,10 @@ pub fn install(
         inst_dir,
         "",
         launch.primary_command,
-    ) catch return error.StartFailed;
+    ) catch |err| switch (err) {
+        error.StateError => return error.StateError,
+        error.StartFailed => return error.StartFailed,
+    };
 
     return .{
         .version = version,
@@ -363,6 +387,62 @@ fn resolveConfiguredPort(
         if (a.gateway_port) |v| return v;
     }
     return findNextAvailablePort(allocator, default_port, paths, state);
+}
+
+fn persistAndStartInstance(
+    s: *state_mod.State,
+    component: []const u8,
+    name: []const u8,
+    version: []const u8,
+    launch_mode: []const u8,
+    startFn: *const fn (
+        ctx: *anyopaque,
+        component: []const u8,
+        name: []const u8,
+        binary_path: []const u8,
+        launch_args: []const []const u8,
+        port: u16,
+        health_endpoint: []const u8,
+        working_dir: []const u8,
+        config_path: []const u8,
+        primary_command: []const u8,
+    ) anyerror!void,
+    ctx: *anyopaque,
+    binary_path: []const u8,
+    launch_args: []const []const u8,
+    port: u16,
+    health_endpoint: []const u8,
+    working_dir: []const u8,
+    config_path: []const u8,
+    primary_command: []const u8,
+) error{ StateError, StartFailed }!void {
+    s.addInstance(component, name, .{
+        .version = version,
+        .auto_start = true,
+        .launch_mode = launch_mode,
+        .verbose = false,
+    }) catch return error.StateError;
+    s.save() catch {
+        _ = s.removeInstance(component, name);
+        return error.StateError;
+    };
+
+    startFn(
+        ctx,
+        component,
+        name,
+        binary_path,
+        launch_args,
+        port,
+        health_endpoint,
+        working_dir,
+        config_path,
+        primary_command,
+    ) catch {
+        _ = s.removeInstance(component, name);
+        s.save() catch return error.StateError;
+        return error.StartFailed;
+    };
 }
 
 fn findNextAvailablePort(
@@ -1362,6 +1442,60 @@ test "injectHomeField adds home to JSON object" {
     defer allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"home\":\"/tmp/inst\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"provider\":\"openrouter\"") != null);
+}
+
+test "persistAndStartInstance rolls back state entry when start fails" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    const binary_path = try fixture.path(allocator, "fake-binary");
+    defer allocator.free(binary_path);
+    var dummy_ctx: u8 = 0;
+
+    const start_result = persistAndStartInstance(
+        &s,
+        "nullclaw",
+        "demo",
+        "1.0.0",
+        "gateway",
+        struct {
+            fn call(
+                _: *anyopaque,
+                _: []const u8,
+                _: []const u8,
+                _: []const u8,
+                _: []const []const u8,
+                _: u16,
+                _: []const u8,
+                _: []const u8,
+                _: []const u8,
+                _: []const u8,
+            ) anyerror!void {
+                return error.SpawnFailed;
+            }
+        }.call,
+        @ptrCast(&dummy_ctx),
+        binary_path,
+        &.{"--help"},
+        0,
+        "/health",
+        fixture.root,
+        "",
+        "gateway",
+    );
+    try std.testing.expectError(error.StartFailed, start_result);
+
+    try std.testing.expect(s.getInstance("nullclaw", "demo") == null);
+
+    var reloaded = try state_mod.State.load(allocator, state_path);
+    defer reloaded.deinit();
+    try std.testing.expect(reloaded.getInstance("nullclaw", "demo") == null);
 }
 
 test "extractCustomProviders neutralizes custom fallback while preserving standard primary" {
