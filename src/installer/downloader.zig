@@ -32,6 +32,12 @@ pub fn computeSha256(allocator: std.mem.Allocator, file_path: []const u8) ![64]u
 
 // ─── Download ────────────────────────────────────────────────────────────────
 
+pub fn fileExists(file_path: []const u8) bool {
+    const file = std_compat.fs.openFileAbsolute(file_path, .{}) catch return false;
+    file.close();
+    return true;
+}
+
 /// Download a file from `url` to `dest_path` using curl.
 ///
 /// Uses an atomic write pattern: downloads to `dest_path.tmp`, then renames
@@ -74,6 +80,12 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []cons
             f.chmod(0o755) catch {};
         } else |_| {}
     }
+}
+
+/// Download a file only when `dest_path` is not already present.
+pub fn downloadIfMissing(allocator: std.mem.Allocator, url: []const u8, dest_path: []const u8) !void {
+    if (fileExists(dest_path)) return;
+    try download(allocator, url, dest_path);
 }
 
 /// Download a file and verify its SHA256 checksum.
@@ -174,6 +186,42 @@ test "download performs atomic rename and sets executable bit" {
         // Check owner execute bit.
         try std.testing.expect(perms.unixHas(.user, .execute));
     }
+}
+
+test "downloadIfMissing keeps an existing destination" {
+    const allocator = std.testing.allocator;
+
+    const tmp_dir = "/tmp/test-nullhub-downloader-skip-existing";
+    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    try std_compat.fs.makeDirAbsolute(tmp_dir);
+    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    const src_path = try std.fmt.allocPrint(allocator, "{s}/source.txt", .{tmp_dir});
+    defer allocator.free(src_path);
+    const dest_path = try std.fmt.allocPrint(allocator, "{s}/binary", .{tmp_dir});
+    defer allocator.free(dest_path);
+
+    {
+        var file = try std_compat.fs.createFileAbsolute(src_path, .{});
+        defer file.close();
+        try file.writeAll("fresh content");
+    }
+    {
+        var file = try std_compat.fs.createFileAbsolute(dest_path, .{});
+        defer file.close();
+        try file.writeAll("cached content");
+    }
+
+    const file_url = try std.fmt.allocPrint(allocator, "file://{s}", .{src_path});
+    defer allocator.free(file_url);
+
+    try downloadIfMissing(allocator, file_url, dest_path);
+
+    var file = try std_compat.fs.openFileAbsolute(dest_path, .{});
+    defer file.close();
+    var buf: [256]u8 = undefined;
+    const n = try file.readAll(&buf);
+    try std.testing.expectEqualStrings("cached content", buf[0..n]);
 }
 
 test "downloadWithSha256 detects checksum mismatch" {

@@ -55,7 +55,10 @@ pub const Server = struct {
         defer allocator.free(state_path);
 
         const state = try allocator.create(state_mod.State);
-        state.* = state_mod.State.load(allocator, state_path) catch state_mod.State.init(allocator, state_path);
+        state.* = state_mod.State.load(allocator, state_path) catch |err| blk: {
+            std.log.err("state.json load failed ({s}): starting with empty state — YOUR DATA MAY BE AT RISK", .{@errorName(err)});
+            break :blk state_mod.State.init(allocator, state_path);
+        };
 
         orchestrator.syncLocalUiModules(allocator, paths);
 
@@ -912,6 +915,26 @@ pub const Server = struct {
                 if (std.mem.eql(u8, method, "POST")) {
                     if (providers_api.handleCreate(allocator, body, self.state, self.paths)) |json| {
                         const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "422 Unprocessable Entity" else "201 Created";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+            }
+            // /api/providers/probe-models — probe a custom endpoint before saving
+            if (providers_api.isProbeModelsPath(target)) {
+                if (std.mem.eql(u8, method, "GET")) {
+                    if (providers_api.handleProbeModels(allocator, target)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "400 Bad Request" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                if (std.mem.eql(u8, method, "POST")) {
+                    if (providers_api.handleProbeModelsBody(allocator, body)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "400 Bad Request" else "200 OK";
                         return .{ .status = status, .content_type = "application/json", .body = json };
                     } else |_| {
                         return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };

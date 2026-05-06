@@ -174,7 +174,7 @@ pub fn handleApplyUpdateRuntime(
     const new_bin_path = paths.binary(allocator, component, latest_tag) catch return serverError();
     defer allocator.free(new_bin_path);
 
-    downloader.download(allocator, asset.browser_download_url, new_bin_path) catch return .{
+    downloader.downloadIfMissing(allocator, asset.browser_download_url, new_bin_path) catch return .{
         .status = "502 Bad Gateway",
         .content_type = "application/json",
         .body = "{\"error\":\"failed to download latest binary\"}",
