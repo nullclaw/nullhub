@@ -8,6 +8,7 @@ const helpers = @import("helpers.zig");
 const access = @import("../access.zig");
 const version = @import("../version.zig");
 const test_helpers = @import("../test_helpers.zig");
+const instance_runtime = @import("instance_runtime.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -143,10 +144,10 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/status — aggregated dashboard data.
-pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) ApiResponse {
+pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) ApiResponse {
     var buf = std.array_list.Managed(u8).init(allocator);
 
-    buildStatusJson(&buf, s, manager, uptime_seconds, host, port, access_options) catch return .{
+    buildStatusJson(&buf, s, manager, paths, uptime_seconds, host, port, access_options) catch return .{
         .status = "500 Internal Server Error",
         .content_type = "application/json",
         .body = "{\"error\":\"internal error\"}",
@@ -155,7 +156,7 @@ pub fn handleStatus(allocator: std.mem.Allocator, s: *state_mod.State, manager: 
     return .{ .status = "200 OK", .content_type = "application/json", .body = buf.items };
 }
 
-fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) !void {
+fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, uptime_seconds: u64, host: []const u8, port: u16, access_options: access.Options) !void {
     var urls = try access.buildAccessUrlsWithOptions(buf.allocator, host, port, access_options);
     defer urls.deinit(buf.allocator);
     var component_rollups = std.StringHashMap(ComponentRollup).init(buf.allocator);
@@ -172,8 +173,8 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
         var rollup = ComponentRollup{};
         var inst_it = comp_entry.value_ptr.iterator();
         while (inst_it.next()) |inst_entry| {
-            const mgr_status = manager.getStatus(comp_entry.key_ptr.*, inst_entry.key_ptr.*);
-            const runtime_status = if (mgr_status) |st| st.status else manager_mod.Status.stopped;
+            const snapshot = instance_runtime.resolve(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
+            const runtime_status = snapshot.status;
             rollup.total += 1;
             if (inst_entry.value_ptr.auto_start) rollup.auto_start += 1;
             observeStatus(&rollup, runtime_status);
@@ -258,12 +259,12 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
 
             const comp_name = comp_entry.key_ptr.*;
             const inst_name = inst_entry.key_ptr.*;
-            const mgr_status = manager.getStatus(comp_name, inst_name);
-            const status_str = if (mgr_status) |st| @tagName(st.status) else "stopped";
-            const pid = if (mgr_status) |st| st.pid else null;
-            const instance_uptime = if (mgr_status) |st| st.uptime_seconds else null;
-            const restart_count: u32 = if (mgr_status) |st| st.restart_count else 0;
-            const instance_port: u16 = if (mgr_status) |st| st.port else 0;
+            const snapshot = instance_runtime.resolve(buf.allocator, paths, manager, comp_name, inst_name, inst_entry.value_ptr.*);
+            const status_str = @tagName(snapshot.status);
+            const pid = snapshot.pid;
+            const instance_uptime = snapshot.uptime_seconds;
+            const restart_count: u32 = snapshot.restart_count;
+            const instance_port: u16 = snapshot.port;
 
             try buf.append('"');
             try appendEscaped(buf, inst_name);
@@ -292,7 +293,7 @@ test "handleStatus returns valid JSON with hub version" {
     var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
-    const resp = handleStatus(allocator, &s, &mgr, 3600, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 3600, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -361,7 +362,7 @@ test "handleStatus includes instances" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = true });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -434,7 +435,7 @@ test "handleStatus overall_status becomes error when a component has failed inst
         .status = .failed,
     });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"overall_status\":\"error\"") != null);
@@ -456,7 +457,7 @@ test "handleStatus includes launch_mode" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .launch_mode = "agent" });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -476,7 +477,7 @@ test "handleStatus includes verbose flag" {
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .verbose = true });
 
-    const resp = handleStatus(allocator, &s, &mgr, 0, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 0, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -494,7 +495,7 @@ test "handleStatus with empty state returns empty instances" {
     var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
-    const resp = handleStatus(allocator, &s, &mgr, 42, access.default_bind_host, access.default_port, .{});
+    const resp = handleStatus(allocator, &s, &mgr, fixture.paths, 42, access.default_bind_host, access.default_port, .{});
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
