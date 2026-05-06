@@ -5,6 +5,7 @@ const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
 const wizard_api = @import("wizard.zig");
 const query_mod = @import("query.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const appendEscaped = helpers.appendEscaped;
 
@@ -770,7 +771,10 @@ test "hasRevealParam detects reveal query param" {
 
 test "handleList returns empty array for no providers" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-list.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -781,7 +785,10 @@ test "handleList returns empty array for no providers" {
 
 test "handleList masks api_key by default" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-mask.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -796,7 +803,10 @@ test "handleList masks api_key by default" {
 
 test "handleList reveals api_key when requested" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-reveal.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -809,7 +819,10 @@ test "handleList reveals api_key when requested" {
 
 test "handleList includes base_url for openai-compatible provider" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-baseurl.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -828,7 +841,10 @@ test "handleList includes base_url for openai-compatible provider" {
 
 test "handleList includes empty base_url for standard provider" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-baseurl-empty.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -841,7 +857,10 @@ test "handleList includes empty base_url for standard provider" {
 
 test "findProviderProbeComponent prefers installed nullclaw" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-probe-component.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -854,7 +873,10 @@ test "findProviderProbeComponent prefers installed nullclaw" {
 
 test "findProviderProbeComponent returns null without nullclaw instances" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-probe-component-empty.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -865,12 +887,9 @@ test "findProviderProbeComponent returns null without nullclaw instances" {
 
 test "handleDelete removes provider" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-delete";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
     defer allocator.free(path);
 
     var s = state_mod.State.init(allocator, path);
@@ -886,7 +905,10 @@ test "handleDelete removes provider" {
 
 test "handleDelete returns error for unknown id" {
     const allocator = std.testing.allocator;
-    const path = "/tmp/nullhub-provider-test-del-unknown.json";
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.paths.state(allocator);
+    defer allocator.free(path);
     var s = state_mod.State.init(allocator, path);
     defer s.deinit();
 
@@ -928,24 +950,19 @@ test "handleCreate with base_url saves without requiring nullclaw probe" {
     // nullclaw probe — the probe is designed for known providers and can
     // misclassify valid responses from arbitrary OpenAI-compatible endpoints.
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-custom-create";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     // No nullclaw instance installed — would normally block standard providers
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-
     const body =
         \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:19999/v1"}
     ;
-    const json = try handleCreate(allocator, body, &s, paths);
+    const json = try handleCreate(allocator, body, &s, fixture.paths);
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
@@ -956,23 +973,19 @@ test "handleCreate with base_url saves without requiring nullclaw probe" {
 
 test "handleCreate with base_url persists custom provider" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-custom-create-persist";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     {
         var s = state_mod.State.init(allocator, state_path);
         defer s.deinit();
 
-        const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
         const body =
             \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:5801/v1"}
         ;
-        const json = try handleCreate(allocator, body, &s, paths);
+        const json = try handleCreate(allocator, body, &s, fixture.paths);
         defer allocator.free(json);
 
         try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") == null);
@@ -991,24 +1004,19 @@ test "handleCreate without base_url requires nullclaw instance" {
     // Standard providers (no base_url) must require an installed nullclaw
     // instance to run the probe.
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-standard-create";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     // No nullclaw instance installed
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-
     const body =
         \\{"provider":"openrouter","api_key":"sk-or-test"}
     ;
-    const json = try handleCreate(allocator, body, &s, paths);
+    const json = try handleCreate(allocator, body, &s, fixture.paths);
     defer allocator.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"error\"") != null);
@@ -1021,12 +1029,9 @@ test "handleValidate for custom provider uses models probe (not nullclaw)" {
     // (no server at 19999) but the key point is we get a live_ok + reason response,
     // NOT the old "custom endpoint — validation via /models not yet available" placeholder.
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-validate-custom";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     var s = state_mod.State.init(allocator, state_path);
@@ -1038,8 +1043,7 @@ test "handleValidate for custom provider uses models probe (not nullclaw)" {
         .base_url = "http://127.0.0.1:19999/v1",
     });
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-    const json = try handleValidate(allocator, 1, &s, paths);
+    const json = try handleValidate(allocator, 1, &s, fixture.paths);
     defer allocator.free(json);
 
     // Must return a probe result (live_ok present), never the old placeholder string.
@@ -1133,23 +1137,18 @@ test "handleCreate custom provider records last_validation_at after probe attemp
     // When a custom provider is created, a /models probe is attempted. Even if it
     // fails (no server), last_validation_at must be set in the saved state.
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-custom-create-ts";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-
     const body =
         \\{"provider":"local-llm","api_key":"sk-test","model":"llama3","base_url":"http://127.0.0.1:19998/v1"}
     ;
-    const json = try handleCreate(allocator, body, &s, paths);
+    const json = try handleCreate(allocator, body, &s, fixture.paths);
     defer allocator.free(json);
 
     // Must save successfully (no error)
@@ -1177,21 +1176,19 @@ fn makeInstanceDir(tmp: []const u8) !void {
 
 test "syncProviderToInstances writes provider creds into instance config" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-sync-test-write";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
 
-    try makeInstanceDir(tmp);
+    try makeInstanceDir(fixture.root);
 
     // Write an existing config with an unrelated key
-    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    const config_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "default");
     defer allocator.free(config_path);
     {
         const f = try std_compat.fs.createFileAbsolute(config_path, .{});
@@ -1199,8 +1196,7 @@ test "syncProviderToInstances writes provider creds into instance config" {
         try f.writeAll("{\"port\":9100}\n");
     }
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-    syncProviderToInstances(allocator, &s, paths, "custom-llm", "sk-abc123", "https://example.com/v1");
+    syncProviderToInstances(allocator, &s, fixture.paths, "custom-llm", "sk-abc123", "https://example.com/v1");
 
     // Read back and verify credentials are present
     const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
@@ -1217,20 +1213,18 @@ test "syncProviderToInstances writes provider creds into instance config" {
 
 test "syncProviderToInstances omits base_url when empty" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-sync-test-no-baseurl";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
 
-    try makeInstanceDir(tmp);
+    try makeInstanceDir(fixture.root);
 
-    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    const config_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "default");
     defer allocator.free(config_path);
     {
         const f = try std_compat.fs.createFileAbsolute(config_path, .{});
@@ -1238,8 +1232,7 @@ test "syncProviderToInstances omits base_url when empty" {
         try f.writeAll("{}\n");
     }
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-or-key", "");
+    syncProviderToInstances(allocator, &s, fixture.paths, "openrouter", "sk-or-key", "");
 
     const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
     defer f2.close();
@@ -1254,20 +1247,18 @@ test "syncProviderToInstances omits base_url when empty" {
 
 test "syncProviderToInstances removes stale base_url when empty" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-sync-test-clear-baseurl";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     try s.addInstance("nullclaw", "default", .{ .version = "v2026.1.0" });
 
-    try makeInstanceDir(tmp);
+    try makeInstanceDir(fixture.root);
 
-    const config_path = try std.fmt.allocPrint(allocator, "{s}/instances/nullclaw/default/config.json", .{tmp});
+    const config_path = try fixture.paths.instanceConfig(allocator, "nullclaw", "default");
     defer allocator.free(config_path);
     {
         const f = try std_compat.fs.createFileAbsolute(config_path, .{});
@@ -1275,8 +1266,7 @@ test "syncProviderToInstances removes stale base_url when empty" {
         try f.writeAll("{\"models\":{\"providers\":{\"openrouter\":{\"api_key\":\"old\",\"base_url\":\"https://old.example.com/v1\"}}}}\n");
     }
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-or-key", "");
+    syncProviderToInstances(allocator, &s, fixture.paths, "openrouter", "sk-or-key", "");
 
     const f2 = try std_compat.fs.openFileAbsolute(config_path, .{});
     defer f2.close();
@@ -1290,30 +1280,24 @@ test "syncProviderToInstances removes stale base_url when empty" {
 
 test "syncProviderToInstances is no-op when no nullclaw instances" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-sync-test-noop";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
     var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
     // No nullclaw instances registered
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
     // Should not panic or error when there are no instances
-    syncProviderToInstances(allocator, &s, paths, "openrouter", "sk-key", "");
+    syncProviderToInstances(allocator, &s, fixture.paths, "openrouter", "sk-key", "");
 }
 
 test "handleUpdate custom provider clears stale validation metadata" {
     const allocator = std.testing.allocator;
-    const tmp = "/tmp/nullhub-provider-test-update-custom-clears-validation";
-    std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-    std_compat.fs.makeDirAbsolute(tmp) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp) catch {};
-
-    const state_path = try std.fmt.allocPrint(allocator, "{s}/state.json", .{tmp});
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
     defer allocator.free(state_path);
 
     var s = state_mod.State.init(allocator, state_path);
@@ -1331,8 +1315,7 @@ test "handleUpdate custom provider clears stale validation metadata" {
         .last_validation_ok = true,
     });
 
-    const paths = paths_mod.Paths.init(allocator, tmp) catch @panic("Paths.init");
-    const json = try handleUpdate(allocator, 1, "{\"api_key\":\"new-key\"}", &s, paths);
+    const json = try handleUpdate(allocator, 1, "{\"api_key\":\"new-key\"}", &s, fixture.paths);
     defer allocator.free(json);
 
     const provider = s.getSavedProvider(1).?;

@@ -30,6 +30,7 @@ const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
 const ui_assets = @import("ui_assets");
 const version = @import("version.zig");
+const test_helpers = @import("test_helpers.zig");
 
 const max_request_size: usize = 65_536;
 
@@ -1124,7 +1125,7 @@ pub const Server = struct {
         }
 
         // Serve UI module files from data directory (~/.nullhub/ui/{name}@{version}/...)
-        if (!std.mem.startsWith(u8, target, "/api/") and std.mem.startsWith(u8, target, "/ui/")) {
+        if (!auth.isApiPath(target) and std.mem.startsWith(u8, target, "/ui/")) {
             // Check if this looks like a module path: /ui/{name}@{version}/...
             if (target.len > 4) {
                 const after_ui = target[4..]; // after "/ui/"
@@ -1135,7 +1136,7 @@ pub const Server = struct {
         }
 
         // For non-API paths, attempt to serve static files from the embedded UI bundle.
-        if (!std.mem.startsWith(u8, target, "/api/")) {
+        if (!auth.isApiPath(target)) {
             return serveStaticFile(allocator, target);
         }
 
@@ -1241,7 +1242,7 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
 }
 
 fn requestOriginAllowed(raw_request: []const u8, target: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) bool {
-    if (!std.mem.startsWith(u8, target, "/api/")) return true;
+    if (!auth.isApiPath(target)) return true;
     const origin = extractHeader(raw_request, "Origin") orelse return true;
     return isAllowedCorsOrigin(origin, bind_host, port, extra_origins);
 }
@@ -1360,6 +1361,7 @@ fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
 // --- Test helpers ---
 
 const TestContext = struct {
+    fixture: test_helpers.TempPaths,
     state: *state_mod.State,
     paths: paths_mod.Paths,
     manager: manager_mod.Manager,
@@ -1367,19 +1369,18 @@ const TestContext = struct {
     server: Server,
 
     fn init(allocator: std.mem.Allocator) TestContext {
-        return initAtRoot(allocator, "/tmp/nullhub-test-server", "/tmp/nullhub-test-server-state.json");
-    }
-
-    fn initAtRoot(allocator: std.mem.Allocator, root: []const u8, state_path: []const u8) TestContext {
+        const fixture = test_helpers.TempPaths.init(allocator) catch @panic("TempPaths.init failed");
+        const state_path = fixture.paths.state(allocator) catch @panic("state path failed");
+        defer allocator.free(state_path);
         const state = allocator.create(state_mod.State) catch @panic("OOM");
         state.* = state_mod.State.init(allocator, state_path);
-        const paths = paths_mod.Paths.init(allocator, root) catch @panic("Paths.init failed");
         var ctx: TestContext = undefined;
+        ctx.fixture = fixture;
         ctx.state = state;
-        ctx.paths = paths;
-        ctx.manager = manager_mod.Manager.init(allocator, paths);
+        ctx.paths = fixture.paths;
+        ctx.manager = manager_mod.Manager.init(allocator, fixture.paths);
         ctx.mutex = .{};
-        ctx.server = Server.initWithState(allocator, state, paths, &ctx.manager, &ctx.mutex);
+        ctx.server = Server.initWithState(allocator, state, fixture.paths, &ctx.manager, &ctx.mutex);
         return ctx;
     }
 
@@ -1387,7 +1388,7 @@ const TestContext = struct {
         self.manager.deinit();
         self.state.deinit();
         allocator.destroy(self.state);
-        self.paths.deinit(allocator);
+        self.fixture.deinit();
     }
 
     fn route(self: *TestContext, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -1412,18 +1413,11 @@ test "reconcileInstancesOnBoot adopts persisted managed instance without respawn
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-server-reconcile";
-    const tmp_state = "/tmp/nullhub-test-server-reconcile-state.json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-
-    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
     try ctx.paths.ensureDirs();
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
     defer allocator.free(output_path);
 
     const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
@@ -1487,18 +1481,11 @@ test "reconcileInstancesOnBoot restarts auto-start instance when persisted pid i
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-server-reconcile-stale";
-    const tmp_state = "/tmp/nullhub-test-server-reconcile-stale-state.json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-
-    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
     try ctx.paths.ensureDirs();
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
     defer allocator.free(output_path);
 
     const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
@@ -1542,6 +1529,84 @@ test "reconcileInstancesOnBoot restarts auto-start instance when persisted pid i
 
     const status = ctx.manager.getStatus("nullclaw", "demo").?;
     try std.testing.expectEqual(manager_mod.Status.running, status.status);
+
+    const file = try std_compat.fs.openFileAbsolute(output_path, .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(allocator, 1024);
+    defer allocator.free(contents);
+    try std.testing.expectEqualStrings("started\n", contents);
+}
+
+test "reconcileInstancesOnBoot terminates mismatched persisted runtime without respawn when auto_start is false" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var ctx = TestContext.init(allocator);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
+    defer allocator.free(output_path);
+
+    const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
+    defer allocator.free(binary_path);
+    {
+        const script = try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\nprintf 'started\\n' >> '{s}'\nsleep 60\n",
+            .{output_path},
+        );
+        defer allocator.free(script);
+
+        const file = try std_compat.fs.createFileAbsolute(binary_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(script);
+        try file.chmod(0o755);
+    }
+
+    try ctx.state.addInstance("nullclaw", "demo", .{
+        .version = "1.0.0",
+        .auto_start = false,
+        .launch_mode = "agent",
+    });
+
+    var launch = try launch_args_mod.resolve(allocator, "agent", false);
+    defer launch.deinit();
+
+    const spawned = try process_mod.spawn(allocator, .{
+        .binary = binary_path,
+        .argv = launch.argv,
+    });
+    defer {
+        if (process_mod.isAlive(spawned.pid)) process_mod.forceKill(spawned.pid) catch {};
+        _ = spawned.child.wait() catch {};
+    }
+
+    // Regression: if persisted runtime metadata no longer matches the desired
+    // launch config, boot reconciliation must terminate the old process,
+    // delete instance.json, and avoid an implicit respawn when auto_start=false.
+    try runtime_state_mod.write(allocator, ctx.paths, "nullclaw", "demo", .{
+        .pid = process_mod.persistedPidValue(spawned.pid).?,
+        .port = 0,
+        .health_endpoint = "/health",
+        .binary_path = binary_path,
+        .launch_command = "gateway",
+        .launch_args = &.{"gateway"},
+        .started_at = std_compat.time.milliTimestamp(),
+        .starting_since = std_compat.time.milliTimestamp(),
+    });
+
+    ctx.reconcileInstancesOnBoot();
+
+    var attempts: usize = 0;
+    while (attempts < 20 and process_mod.isAlive(spawned.pid)) : (attempts += 1) {
+        std_compat.thread.sleep(50 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(!process_mod.isAlive(spawned.pid));
+    try std.testing.expect(ctx.manager.getStatus("nullclaw", "demo") == null);
+    try std.testing.expect((try runtime_state_mod.load(allocator, ctx.paths, "nullclaw", "demo")) == null);
 
     const file = try std_compat.fs.openFileAbsolute(output_path, .{});
     defer file.close();
@@ -1614,6 +1679,26 @@ test "route unknown API path returns JSON 404" {
     defer ctx.deinit(std.testing.allocator);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/api/nonexistent", "");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
+}
+
+test "route bare API root returns JSON 404 instead of static fallback" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api", "");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
+}
+
+test "route bare API root with query returns JSON 404 instead of static fallback" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api?format=json", "");
     try std.testing.expectEqualStrings("404 Not Found", resp.status);
     try std.testing.expectEqualStrings("application/json", resp.content_type);
     try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
@@ -1726,6 +1811,14 @@ test "requestOriginAllowed rejects foreign API origins" {
         "Host: 127.0.0.1:19800\r\n" ++
         "Origin: http://nullhub.localhost:19800\r\n\r\n";
     try std.testing.expect(requestOriginAllowed(local_raw, "/api/status", "127.0.0.1", 19800, &.{}));
+}
+
+test "requestOriginAllowed treats bare API root with query as API" {
+    const evil_raw =
+        "GET /api?format=json HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:19800\r\n" ++
+        "Origin: http://evil.example:19800\r\n\r\n";
+    try std.testing.expect(!requestOriginAllowed(evil_raw, "/api?format=json", "127.0.0.1", 19800, &.{}));
 }
 
 test "requestOriginAllowed honors configured extra origins" {

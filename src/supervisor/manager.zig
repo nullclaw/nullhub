@@ -5,6 +5,7 @@ const health = @import("health.zig");
 const runtime_state = @import("runtime_state.zig");
 const paths_mod = @import("../core/paths.zig");
 const component_cli = @import("../core/component_cli.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 pub const Status = enum {
     stopped,
@@ -817,10 +818,10 @@ pub const Manager = struct {
 
 test "Manager init and deinit (no leaks)" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 }
 
@@ -829,10 +830,10 @@ test "Manager deinit terminates tracked child processes" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-deinit-kill");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
 
     const spawned = try process.spawn(allocator, .{
         .binary = "/bin/sleep",
@@ -855,10 +856,10 @@ test "Manager deinit terminates tracked child processes" {
 
 test "getStatus returns null for unknown instance" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try std.testing.expect(mgr.getStatus("foo", "bar") == null);
@@ -866,20 +867,16 @@ test "getStatus returns null for unknown instance" {
 
 test "logSupervisor appends diagnostics to nullhub.log" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/test-nullhub-mgr-log-supervisor";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     mgr.logSupervisor("nullclaw", "diag", "first diagnostic {d}", .{@as(u8, 1)});
     mgr.logSupervisor("nullclaw", "diag", "second diagnostic", .{});
 
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "diag");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "diag");
     defer allocator.free(logs_dir);
     const log_path = try std.fs.path.join(allocator, &.{ logs_dir, "nullhub.log" });
     defer allocator.free(log_path);
@@ -897,10 +894,10 @@ test "logSupervisor appends diagnostics to nullhub.log" {
 
 test "status reporting for manually-added instance" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "mycomp", "myinst" });
@@ -935,14 +932,12 @@ test "restart preserves launch args with spaces" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/test-nullhub-mgr-restart-argv";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_root);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    const script_path = try std.fs.path.join(allocator, &.{ tmp_root, "capture-arg.sh" });
+    const script_path = try fixture.path(allocator, "capture-arg.sh");
     defer allocator.free(script_path);
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "captured.txt" });
+    const output_path = try fixture.path(allocator, "captured.txt");
     defer allocator.free(output_path);
 
     const script =
@@ -954,10 +949,7 @@ test "restart preserves launch args with spaces" {
     defer script_file.close();
     try script_file.writeAll(script);
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const launch_args = [_][]const u8{ script_path, "hello world", output_path };
@@ -998,10 +990,10 @@ test "restart preserves launch args with spaces" {
 
 test "getAllStatuses returns correct list" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     // Add two instances manually
@@ -1046,10 +1038,10 @@ test "getAllStatuses returns correct list" {
 
 test "tick: restarting with max_restarts exceeded transitions to failed" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "inst" });
@@ -1070,10 +1062,10 @@ test "tick: restarting with max_restarts exceeded transitions to failed" {
 
 test "tick: restarting with restarts remaining transitions to failed (no binary)" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "inst" });
@@ -1096,10 +1088,10 @@ test "tick: restarting with restarts remaining transitions to failed (no binary)
 
 test "tick: stopped and failed instances are not modified" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key1 = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "stopped-inst" });
@@ -1129,10 +1121,10 @@ test "tick: stopped and failed instances are not modified" {
 
 test "tick: starting instance without pid transitions to restarting" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     // An instance in .starting with a non-existent PID should go to .failed
@@ -1156,10 +1148,10 @@ test "tick: startup timeout transitions to restarting" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-start-timeout");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const spawned = try process.spawn(allocator, .{
@@ -1195,10 +1187,10 @@ test "tick: health failure threshold transitions to restarting" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr-health-restart");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const spawned = try process.spawn(allocator, .{
@@ -1236,10 +1228,10 @@ test "tick: restarting with binary_path spawns new process" {
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "restartable" });
@@ -1272,10 +1264,10 @@ test "tick: restarting with binary_path spawns new process" {
 
 test "tick: running instance with dead pid transitions to restarting" {
     const allocator = std.testing.allocator;
-    var p = try paths_mod.Paths.init(allocator, "/tmp/test-nullhub-mgr");
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var mgr = Manager.init(allocator, p);
+    var mgr = Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "comp", "crashed" });
