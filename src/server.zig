@@ -239,6 +239,10 @@ pub const Server = struct {
             const mod_version = entry.name[at_idx + 1 ..];
             if (mod_name.len == 0 or mod_version.len == 0) continue;
 
+            const module_dir = std.fs.path.join(allocator, &.{ ui_path, entry.name }) catch continue;
+            defer allocator.free(module_dir);
+            if (!ui_modules.isModuleInstalled(module_dir)) continue;
+
             var existing_index: ?usize = null;
             for (modules.items, 0..) |existing, index| {
                 if (std.mem.eql(u8, existing.name, mod_name)) {
@@ -1396,6 +1400,15 @@ const TestContext = struct {
     }
 };
 
+fn writeUiModuleEntrypoint(allocator: std.mem.Allocator, module_dir: []const u8) !void {
+    const module_path = try std.fs.path.join(allocator, &.{ module_dir, "module.js" });
+    defer allocator.free(module_path);
+
+    var file = try std_compat.fs.createFileAbsolute(module_path, .{});
+    defer file.close();
+    try file.writeAll("export {};\n");
+}
+
 // --- Tests ---
 
 test "route GET /health returns 200 OK" {
@@ -1874,14 +1887,21 @@ test "route GET /api/ui-modules prefers dev-local and deduplicates module versio
     const release_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "v2026.3.1");
     defer std.testing.allocator.free(release_dir);
     try std_compat.fs.makeDirAbsolute(release_dir);
+    try writeUiModuleEntrypoint(std.testing.allocator, release_dir);
 
     const dev_local_dir = try ctx.paths.uiModule(std.testing.allocator, "nullclaw-chat-ui", "dev-local");
     defer std.testing.allocator.free(dev_local_dir);
     try std_compat.fs.makeDirAbsolute(dev_local_dir);
+    try writeUiModuleEntrypoint(std.testing.allocator, dev_local_dir);
 
     const other_release_dir = try ctx.paths.uiModule(std.testing.allocator, "other-ui", "v1.0.0");
     defer std.testing.allocator.free(other_release_dir);
     try std_compat.fs.makeDirAbsolute(other_release_dir);
+    try writeUiModuleEntrypoint(std.testing.allocator, other_release_dir);
+
+    const broken_release_dir = try ctx.paths.uiModule(std.testing.allocator, "broken-ui", "v1.0.0");
+    defer std.testing.allocator.free(broken_release_dir);
+    try std_compat.fs.makeDirAbsolute(broken_release_dir);
 
     const resp = ctx.route(std.testing.allocator, "GET", "/api/ui-modules", "");
     defer std.testing.allocator.free(resp.body);
@@ -1890,6 +1910,7 @@ test "route GET /api/ui-modules prefers dev-local and deduplicates module versio
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"nullclaw-chat-ui\":\"dev-local\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"nullclaw-chat-ui\":\"v2026.3.1\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"other-ui\":\"v1.0.0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "\"broken-ui\"") == null);
 }
 
 test "route POST /api/instances/{component}/{name}/start returns 500 without binary" {

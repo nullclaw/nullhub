@@ -1082,35 +1082,6 @@ fn npmCommand() []const u8 {
     return if (builtin.os.tag == .windows) "npm.cmd" else "npm";
 }
 
-fn copyDirectoryContents(allocator: std.mem.Allocator, source_dir_path: []const u8, dest_dir_path: []const u8) !void {
-    try fs_compat.makePath(dest_dir_path);
-
-    var source_dir = try std_compat.fs.openDirAbsolute(source_dir_path, .{ .iterate = true });
-    defer source_dir.close();
-
-    var walker = try source_dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        const dest_path = try std.fs.path.join(allocator, &.{ dest_dir_path, entry.path });
-        defer allocator.free(dest_path);
-
-        switch (entry.kind) {
-            .directory => try fs_compat.makePath(dest_path),
-            .file => {
-                if (std.fs.path.dirname(dest_path)) |dest_parent| {
-                    try fs_compat.makePath(dest_parent);
-                }
-
-                const source_path = try std.fs.path.join(allocator, &.{ source_dir_path, entry.path });
-                defer allocator.free(source_path);
-                try std_compat.fs.copyFileAbsolute(source_path, dest_path, .{});
-            },
-            else => return error.UnsupportedFileKind,
-        }
-    }
-}
-
 fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u8, dest_dir: []const u8) bool {
     std.debug.print("Building UI module from local source: {s}\n", .{module_dir});
 
@@ -1138,7 +1109,7 @@ fn buildLocalUiModuleFromDir(allocator: std.mem.Allocator, module_dir: []const u
     const dist_path = std.fs.path.join(allocator, &.{ module_dir, "dist" }) catch return false;
     defer allocator.free(dist_path);
 
-    copyDirectoryContents(allocator, dist_path, dest_dir) catch |err| {
+    fs_compat.copyDirectoryContents(allocator, dist_path, dest_dir) catch |err| {
         std.debug.print("UI module copy failed ({s})\n", .{@errorName(err)});
         return false;
     };
@@ -1420,7 +1391,7 @@ test "copyDirectoryContents recursively copies nested files" {
     try writeFile(top_level_file, "console.log('root');");
     try writeFile(nested_file, "console.log('nested');");
 
-    try copyDirectoryContents(allocator, source_dir, dest_dir);
+    try fs_compat.copyDirectoryContents(allocator, source_dir, dest_dir);
 
     const copied_top_level = try std.fs.path.join(allocator, &.{ dest_dir, "index.js" });
     defer allocator.free(copied_top_level);
