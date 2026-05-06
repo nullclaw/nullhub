@@ -7,7 +7,7 @@ Management hub for the nullclaw ecosystem.
 
 `NullHub` is a single Zig binary with an embedded Svelte web UI for installing,
 configuring, monitoring, and updating ecosystem components (NullClaw, NullBoiler,
-NullTickets).
+NullTickets, NullWatch).
 
 ## Features
 
@@ -22,6 +22,7 @@ NullTickets).
 - **Web UI + CLI** -- browser dashboard for humans, CLI for automation
 - **Managed instance admin API** -- instance-scoped status, config, models, cron, channels, and skills routes for managed NullClaw installs
 - **Orchestration UI** -- workflow editor, poll-based run monitoring, checkpoint forking, encoded workflow/run/store links, and key-value store browser (proxied to NullTickets through NullHub)
+- **Observability cockpit** -- local NullWatch run summaries, span timelines, eval results, token usage, cost, and error context through a NullHub proxy
 
 ## Quick Start
 
@@ -119,6 +120,22 @@ to the local orchestration stack. Most routes go to NullBoiler's REST API via
 `/api/orchestration/store/*` is proxied to NullTickets via `NULLTICKETS_URL` and
 optional `NULLTICKETS_TOKEN`.
 
+**Observability proxy** -- requests to `/api/observability/*` are reverse-proxied
+to a local NullWatch instance via `NULLWATCH_URL` (for example
+`http://localhost:7710`) and optional `NULLWATCH_TOKEN`. The built-in
+Observability page uses this proxy to display run summaries, spans, evals,
+latency, cost, and failure context without sending data to hosted services.
+
+### Observability Screenshots
+
+Flight Recorder overview:
+
+![NullHub Observability overview](docs/screenshots/nullhub-observability-overview.png)
+
+Failure detail with tool-call error context:
+
+![NullHub Observability failure detail](docs/screenshots/nullhub-observability-failure.png)
+
 ## Development
 
 Backend:
@@ -157,12 +174,14 @@ src/
   auth.zig              # Optional bearer token auth
   api/                  # REST endpoints (components, instances, wizard, ...)
     orchestration.zig   # Reverse proxy to NullBoiler orchestration API
+    observability.zig   # Reverse proxy to NullWatch tracing/eval API
   core/                 # Manifest parser, state, platform, paths
   installer/            # Download, build, UI module fetching
   supervisor/           # Process spawn, health checks, manager
 ui/src/
   routes/               # SvelteKit pages
     orchestration/      # Orchestration pages (dashboard, workflows, runs, store)
+    observability/      # NullWatch flight recorder page
   lib/components/       # Reusable Svelte components
     orchestration/      # GraphViewer, StateInspector, RunEventLog, InterruptPanel,
                         # CheckpointTimeline, WorkflowJsonEditor, NodeCard, SendProgressBar

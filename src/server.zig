@@ -24,6 +24,7 @@ const channels_api = @import("api/channels.zig");
 const usage_api = @import("api/usage.zig");
 const report_api = @import("api/report.zig");
 const orchestration_api = @import("api/orchestration.zig");
+const observability_api = @import("api/observability.zig");
 const launch_args_mod = @import("core/launch_args.zig");
 const ui_modules = @import("installer/ui_modules.zig");
 const orchestrator = @import("installer/orchestrator.zig");
@@ -519,6 +520,10 @@ pub const Server = struct {
             "NULLTICKETS_URL"
         else if (std.mem.eql(u8, name, "NULLTICKETS_TOKEN"))
             "NULLTICKETS_TOKEN"
+        else if (std.mem.eql(u8, name, "NULLWATCH_URL"))
+            "NULLWATCH_URL"
+        else if (std.mem.eql(u8, name, "NULLWATCH_TOKEN"))
+            "NULLWATCH_TOKEN"
         else
             return null;
         return if (std.c.getenv(name_z)) |value| std.mem.span(value) else null;
@@ -544,8 +549,20 @@ pub const Server = struct {
         return getEnv("NULLTICKETS_TOKEN");
     }
 
+    fn getWatchUrl(self: *Server) ?[]const u8 {
+        _ = self;
+        return getEnv("NULLWATCH_URL");
+    }
+
+    fn getWatchToken(self: *Server) ?[]const u8 {
+        _ = self;
+        return getEnv("NULLWATCH_TOKEN");
+    }
+
     fn routeWithoutServerMutex(target: []const u8) bool {
-        return instances_api.isIntegrationPath(target) or orchestration_api.isProxyPath(target);
+        return instances_api.isIntegrationPath(target) or
+            orchestration_api.isProxyPath(target) or
+            observability_api.isProxyPath(target);
     }
 
     fn route(self: *Server, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -1119,6 +1136,14 @@ pub const Server = struct {
                 .boiler_token = self.getBoilerToken(),
                 .tickets_url = self.getTicketsUrl(),
                 .tickets_token = self.getTicketsToken(),
+            });
+            return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
+        }
+
+        if (observability_api.isProxyPath(target)) {
+            const resp = observability_api.handle(allocator, method, target, body, .{
+                .watch_url = self.getWatchUrl(),
+                .watch_token = self.getWatchToken(),
             });
             return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
         }
@@ -1747,6 +1772,7 @@ test "routeWithoutServerMutex keeps orchestration proxy requests off global lock
     try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration"));
     try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration/runs"));
     try std.testing.expect(Server.routeWithoutServerMutex("/api/orchestration/store/search"));
+    try std.testing.expect(Server.routeWithoutServerMutex("/api/observability/v1/runs"));
     try std.testing.expect(Server.routeWithoutServerMutex("/api/instances/nullclaw/demo/logs"));
     try std.testing.expect(!Server.routeWithoutServerMutex("/api/components"));
 }
