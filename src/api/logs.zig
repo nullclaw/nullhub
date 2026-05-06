@@ -4,6 +4,7 @@ const fs_compat = @import("../fs_compat.zig");
 const paths_mod = @import("../core/paths.zig");
 const helpers = @import("helpers.zig");
 const query = @import("query.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -410,14 +411,10 @@ test "parseSource reads nullhub source" {
 
 test "handleGet returns empty lines when no log file" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-empty";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
+    const resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", 100, .instance);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("{\"lines\":[]}", resp.body);
@@ -425,15 +422,11 @@ test "handleGet returns empty lines when no log file" {
 
 test "handleGet reads actual log content" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-read";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
     // Create the logs directory and write a log file.
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
 
     // Create directories recursively.
@@ -448,7 +441,7 @@ test "handleGet reads actual log content" {
         try file.writeAll("line1\nline2\nline3\n");
     }
 
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
+    const resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", 100, .instance);
     defer allocator.free(resp.body);
 
     try std.testing.expectEqualStrings("200 OK", resp.status);
@@ -471,14 +464,10 @@ test "handleGet reads actual log content" {
 
 test "handleGet tails last N lines" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-tail";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
     fs_compat.makePath(logs_dir) catch unreachable;
 
@@ -491,7 +480,7 @@ test "handleGet tails last N lines" {
         try file.writeAll("a\nb\nc\nd\ne\n");
     }
 
-    const resp = handleGet(allocator, p, "nullclaw", "my-agent", 2, .instance);
+    const resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", 2, .instance);
     defer allocator.free(resp.body);
 
     const parsed = try std.json.parseFromSlice(
@@ -509,14 +498,10 @@ test "handleGet tails last N lines" {
 
 test "handleStream returns SSE snapshot" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-stream";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
     fs_compat.makePath(logs_dir) catch unreachable;
 
@@ -529,7 +514,7 @@ test "handleStream returns SSE snapshot" {
         try file.writeAll("line-a\nline-b\n");
     }
 
-    const resp = handleStream(allocator, p, "nullclaw", "my-agent", 50, .instance);
+    const resp = handleStream(allocator, fixture.paths, "nullclaw", "my-agent", 50, .instance);
     defer allocator.free(resp.body);
     try std.testing.expectEqualStrings("200 OK", resp.status);
     try std.testing.expectEqualStrings("text/event-stream", resp.content_type);
@@ -540,14 +525,10 @@ test "handleStream returns SSE snapshot" {
 
 test "handleGet separates legacy stdout and nullhub logs by source" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-sources";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
     fs_compat.makePath(logs_dir) catch unreachable;
 
@@ -567,7 +548,7 @@ test "handleGet separates legacy stdout and nullhub logs by source" {
         try file.writeAll("[nullhub/supervisor][2] new diag\n");
     }
 
-    const instance_resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .instance);
+    const instance_resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", 100, .instance);
     defer allocator.free(instance_resp.body);
     const instance_parsed = try std.json.parseFromSlice(
         struct { lines: [][]const u8 },
@@ -580,7 +561,7 @@ test "handleGet separates legacy stdout and nullhub logs by source" {
     try std.testing.expectEqualStrings("app line 1", instance_parsed.value.lines[0]);
     try std.testing.expectEqualStrings("app line 2", instance_parsed.value.lines[1]);
 
-    const nullhub_resp = handleGet(allocator, p, "nullclaw", "my-agent", 100, .nullhub);
+    const nullhub_resp = handleGet(allocator, fixture.paths, "nullclaw", "my-agent", 100, .nullhub);
     defer allocator.free(nullhub_resp.body);
     const nullhub_parsed = try std.json.parseFromSlice(
         struct { lines: [][]const u8 },
@@ -596,14 +577,10 @@ test "handleGet separates legacy stdout and nullhub logs by source" {
 
 test "handleDelete clears selected source while preserving the other" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-logs-api-clear-source";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var p = try paths_mod.Paths.init(allocator, tmp_root);
-    defer p.deinit(allocator);
-
-    const logs_dir = try p.instanceLogs(allocator, "nullclaw", "my-agent");
+    const logs_dir = try fixture.paths.instanceLogs(allocator, "nullclaw", "my-agent");
     defer allocator.free(logs_dir);
     fs_compat.makePath(logs_dir) catch unreachable;
 
@@ -623,7 +600,7 @@ test "handleDelete clears selected source while preserving the other" {
         try file.writeAll("[nullhub/supervisor][2] dedicated diag\n");
     }
 
-    const clear_nullhub = handleDelete(allocator, p, "nullclaw", "my-agent", .nullhub);
+    const clear_nullhub = handleDelete(allocator, fixture.paths, "nullclaw", "my-agent", .nullhub);
     try std.testing.expectEqualStrings("200 OK", clear_nullhub.status);
 
     {

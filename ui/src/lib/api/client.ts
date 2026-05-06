@@ -191,14 +191,19 @@ export const api = {
   // Saved providers
   getSavedProviders: (reveal = false) =>
     request<any>(`/providers${reveal ? '?reveal=true' : ''}`),
-  createSavedProvider: (data: { provider: string; api_key: string; model?: string }) =>
+  createSavedProvider: (data: { provider: string; api_key: string; model?: string; base_url?: string }) =>
     request<any>('/providers', { method: 'POST', body: JSON.stringify(data) }),
-  updateSavedProvider: (id: string, data: { name?: string; api_key?: string; model?: string }) =>
+  updateSavedProvider: (id: string, data: { name?: string; api_key?: string; model?: string; base_url?: string }) =>
     request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteSavedProvider: (id: string) =>
     request<any>(`/providers/${id.replace('sp_', '')}`, { method: 'DELETE' }),
   revalidateSavedProvider: (id: string) =>
     request<any>(`/providers/${id.replace('sp_', '')}/validate`, { method: 'POST' }),
+  probeProviderModels: (baseUrl: string, apiKey: string) =>
+    request<{ live_ok: boolean; reason: string; models: string[] }>('/providers/probe-models', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+    }),
 
   // Saved channels
   getSavedChannels: (reveal = false) =>

@@ -53,10 +53,18 @@
       (providerHealthCurrent ? Boolean(providerHealthCurrent.live_ok) : providerStatus.configured),
   );
   let providerCardWarn = $derived(
-    providerHealthCurrent ? !providerDotOk : !providerStatus.configured,
+    instance?.status === "running"
+      ? (providerHealthCurrent ? !providerDotOk : !providerStatus.configured)
+      : !providerStatus.configured,
   );
   let providerHintText = $derived(
-    buildProviderHint(providerStatus, providerHealthCurrent, providerHealthLoading),
+    buildProviderHint(
+      providerStatus,
+      // Only surface live-probe errors when the instance is actually running —
+      // otherwise the result is stale/irrelevant (probe ran while starting).
+      instance?.status === "running" ? providerHealthCurrent : null,
+      providerHealthLoading,
+    ),
   );
   let chatModuleName = $derived(
     uiModules["nullclaw-chat-ui"] ? "nullclaw-chat-ui" : "",
@@ -483,6 +491,7 @@
   }
 
   async function refresh(loadProviderHealth = false, forceUsage = false) {
+    const prevStatus = instance?.status;
     try {
       const status = await api.getStatus();
       const instances = status.instances || {};
@@ -492,6 +501,8 @@
     } catch (e) {
       console.error(e);
     }
+    // Re-fetch provider health when the instance just became running (stale probe from boot)
+    const justBecameRunning = instance?.status === "running" && prevStatus !== "running";
     // Fetch config (best-effort)
     let loadedConfig: any = null;
     try {
@@ -510,7 +521,7 @@
     } else {
       onboardingStatus = null;
     }
-    if (loadProviderHealth) {
+    if (loadProviderHealth || justBecameRunning) {
       await refreshProviderHealth(loadedConfig);
     }
     await refreshUsage(forceUsage);

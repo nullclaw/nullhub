@@ -113,7 +113,7 @@ fn ensureUiBuildReady(b: *std.Build) void {
 
 fn ensureUiBuildExists() void {
     if (!pathExists("ui/build")) {
-        std.debug.panic("embedded UI assets are missing; run `npm --prefix ui run build` or build with -Dbuild-ui=true", .{});
+        std.debug.panic("embedded UI assets are missing; run `npm --prefix ui run build`, build with -Dbuild-ui=true, or disable embedding with -Dembed-ui=false for backend-only tests", .{});
     }
 }
 
