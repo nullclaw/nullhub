@@ -31,4 +31,5 @@ jobs:
         npm --prefix ui ci --no-audit --no-fund
         npm --prefix ui run build
       build_args: -Dbuild-ui=false
+      e2e_target: linux-x86_64
       e2e_command: bash tests/test_e2e.sh
