@@ -15,6 +15,7 @@ const managed_cli = @import("managed_cli.zig");
 const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const query_api = @import("query.zig");
 const test_helpers = @import("../test_helpers.zig");
+const instance_runtime = @import("instance_runtime.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -27,101 +28,6 @@ const default_tracker_prompt_template =
     "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Read a port value from an instance's config.json using a dot-separated key
-/// (e.g. "gateway.port" → config["gateway"]["port"]).
-fn readPortFromConfig(allocator: std.mem.Allocator, paths: paths_mod.Paths, component: []const u8, name: []const u8, dot_key: []const u8) ?u16 {
-    const config_path = paths.instanceConfig(allocator, component, name) catch return null;
-    defer allocator.free(config_path);
-
-    const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return null;
-    defer file.close();
-    const contents = file.readToEndAlloc(allocator, 4 * 1024 * 1024) catch return null;
-    defer allocator.free(contents);
-
-    // Parse as generic JSON and walk the dot-path
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{
-        .allocate = .alloc_always,
-    }) catch return null;
-    defer parsed.deinit();
-
-    var current = parsed.value;
-    var it = std.mem.splitScalar(u8, dot_key, '.');
-    while (it.next()) |segment| {
-        switch (current) {
-            .object => |obj| {
-                current = obj.get(segment) orelse return null;
-            },
-            else => return null,
-        }
-    }
-
-    switch (current) {
-        .integer => |v| return if (v >= 0 and v <= 65535) @intCast(v) else null,
-        else => return null,
-    }
-}
-
-const InstanceSnapshot = struct {
-    status: manager_mod.Status,
-    pid: ?std.process.Child.Id = null,
-    uptime_seconds: ?u64 = null,
-    restart_count: u32 = 0,
-    port: u16 = 0,
-};
-
-fn deriveStandaloneSnapshot(
-    allocator: std.mem.Allocator,
-    paths: paths_mod.Paths,
-    component: []const u8,
-    name: []const u8,
-    entry: state_mod.InstanceEntry,
-) ?InstanceSnapshot {
-    if (!std.mem.eql(u8, component, "nullclaw")) return null;
-
-    const inst_dir = paths.instanceDir(allocator, component, name) catch return null;
-    defer allocator.free(inst_dir);
-    const real_dir = std_compat.fs.realpathAlloc(allocator, inst_dir) catch return null;
-    defer allocator.free(real_dir);
-
-    const home = std_compat.process.getEnvVarOwned(allocator, "HOME") catch return null;
-    defer allocator.free(home);
-    const standalone_root = std.fmt.allocPrint(allocator, "{s}/.{s}", .{ home, component }) catch return null;
-    defer allocator.free(standalone_root);
-
-    if (!std.mem.eql(u8, real_dir, standalone_root)) return null;
-    if (!std.mem.eql(u8, entry.launch_mode, "gateway")) return null;
-
-    const port = readPortFromConfig(allocator, paths, component, name, "gateway.port") orelse 0;
-    if (port == 0) return null;
-
-    const health = @import("../supervisor/health.zig").check(allocator, "127.0.0.1", port, "/health");
-    return .{
-        .status = if (health.ok) .running else .stopped,
-        .port = port,
-    };
-}
-
-fn resolveInstanceSnapshot(
-    allocator: std.mem.Allocator,
-    paths: paths_mod.Paths,
-    manager: *manager_mod.Manager,
-    component: []const u8,
-    name: []const u8,
-    entry: state_mod.InstanceEntry,
-) InstanceSnapshot {
-    if (manager.getStatus(component, name)) |st| {
-        return .{
-            .status = st.status,
-            .pid = st.pid,
-            .uptime_seconds = st.uptime_seconds,
-            .restart_count = st.restart_count,
-            .port = st.port,
-        };
-    }
-    if (deriveStandaloneSnapshot(allocator, paths, component, name, entry)) |snapshot| return snapshot;
-    return .{ .status = .stopped };
-}
 
 const FetchedJsonValue = struct {
     bytes: []u8,
@@ -1834,7 +1740,7 @@ fn pidToU64(pid: std.process.Child.Id) u64 {
     };
 }
 
-fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, snapshot: InstanceSnapshot) !void {
+fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.InstanceEntry, snapshot: instance_runtime.Snapshot) !void {
     const status_str = @tagName(snapshot.status);
     try buf.appendSlice("{\"version\":\"");
     try appendEscaped(buf, entry.version);
@@ -1849,28 +1755,28 @@ fn appendInstanceJson(buf: *std.array_list.Managed(u8), entry: state_mod.Instanc
     try buf.append('"');
 
     if (snapshot.pid) |pid| {
-            try buf.appendSlice(",\"pid\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
-            try buf.appendSlice(text);
+        try buf.appendSlice(",\"pid\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{pidToU64(pid)});
+        try buf.appendSlice(text);
     }
     if (snapshot.uptime_seconds) |uptime| {
-            try buf.appendSlice(",\"uptime_seconds\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
-            try buf.appendSlice(text);
+        try buf.appendSlice(",\"uptime_seconds\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{uptime});
+        try buf.appendSlice(text);
     }
     if (snapshot.restart_count > 0) {
-            try buf.appendSlice(",\"restart_count\":");
-            var num_buf: [20]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.restart_count});
-            try buf.appendSlice(text);
+        try buf.appendSlice(",\"restart_count\":");
+        var num_buf: [20]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.restart_count});
+        try buf.appendSlice(text);
     }
     if (snapshot.port > 0) {
-            try buf.appendSlice(",\"port\":");
-            var num_buf: [10]u8 = undefined;
-            const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.port});
-            try buf.appendSlice(text);
+        try buf.appendSlice(",\"port\":");
+        var num_buf: [10]u8 = undefined;
+        const text = try std.fmt.bufPrint(&num_buf, "{d}", .{snapshot.port});
+        try buf.appendSlice(text);
     }
 
     try buf.append('}');
@@ -1910,7 +1816,7 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
             if (!first_inst) try buf.append(',');
             first_inst = false;
 
-            const snapshot = resolveInstanceSnapshot(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
+            const snapshot = instance_runtime.resolve(buf.allocator, paths, manager, comp_entry.key_ptr.*, inst_entry.key_ptr.*, inst_entry.value_ptr.*);
 
             try buf.append('"');
             try appendEscaped(buf, inst_entry.key_ptr.*);
@@ -1928,7 +1834,7 @@ fn buildListJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manager:
 pub fn handleGet(allocator: std.mem.Allocator, s: *state_mod.State, manager: *manager_mod.Manager, paths: paths_mod.Paths, component: []const u8, name: []const u8) ApiResponse {
     const entry = s.getInstance(component, name) orelse return notFound();
 
-    const snapshot = resolveInstanceSnapshot(allocator, paths, manager, component, name, entry);
+    const snapshot = instance_runtime.resolve(allocator, paths, manager, component, name, entry);
 
     var buf = std.array_list.Managed(u8).init(allocator);
     appendInstanceJson(&buf, entry, snapshot) catch return .{
@@ -2004,7 +1910,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
 
     // Try to read actual port from instance config.json using port_from_config key
     if (port_from_config.len > 0) {
-        if (readPortFromConfig(allocator, paths, component, name, port_from_config)) |config_port| {
+        if (instance_runtime.readPortFromConfig(allocator, paths, component, name, port_from_config)) |config_port| {
             port = config_port;
         }
     }
@@ -2144,12 +2050,7 @@ pub fn handleProviderHealth(allocator: std.mem.Allocator, s: *state_mod.State, m
         configured = true;
     }
 
-    const running = blk: {
-        if (manager.getStatus(component, name)) |st| {
-            break :blk st.status == .running;
-        }
-        break :blk false;
-    };
+    const running = instance_runtime.resolve(allocator, paths, manager, component, name, entry).status == .running;
 
     var status: []const u8 = "unknown";
     var reason: []const u8 = "not_probed";

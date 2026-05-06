@@ -5,34 +5,24 @@ const windows = std.os.windows;
 
 const darwin = if (builtin.os.tag == .macos) struct {
     const extern_structs = struct {
-        pub const ProcBsdInfo = extern struct {
-            proc_pid: u32,
-            proc_ppid: u32,
-            proc_pgid: u32,
-            proc_status: u32,
-            proc_comm: [17]u8,
-            proc_name: [33]u8,
-            proc_nice: i32,
-            proc_flag: u32,
-            proc_uid: u32,
-            proc_ruid: u32,
-            proc_svuid: u32,
-            proc_rgid: u32,
-            proc_svgid: u32,
-            rfu_1: u32,
-            proc_comm2: [17]u8,
-            proc_xstatus: u32,
-            proc_acflag: u32,
-            proc_pctcpu: u32,
-            proc_estcpu: u32,
-            proc_slptime: u32,
-            proc_realtimer: u64,
-            proc_start_tvsec: u64,
-            proc_start_tvusec: u64,
+        pub const ProcBsdShortInfo = extern struct {
+            pbsi_pid: u32,
+            pbsi_ppid: u32,
+            pbsi_pgid: u32,
+            pbsi_status: u32,
+            pbsi_comm: [16]u8,
+            pbsi_flags: u32,
+            pbsi_uid: u32,
+            pbsi_gid: u32,
+            pbsi_ruid: u32,
+            pbsi_rgid: u32,
+            pbsi_svuid: u32,
+            pbsi_svgid: u32,
+            pbsi_rfu: u32,
         };
     };
 
-    const PROC_PIDTBSDINFO: i32 = 3;
+    const PROC_PIDT_SHORTBSDINFO: i32 = 13;
     const SZOMB: u32 = 5;
 
     extern "c" fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: ?*anyopaque, buffersize: i32) c_int;
@@ -256,16 +246,16 @@ pub fn isAlive(pid: std_compat.process.Child.Id) bool {
 }
 
 fn isDarwinZombie(pid: std_compat.process.Child.Id) bool {
-    var info: darwin.extern_structs.ProcBsdInfo = undefined;
+    var info: darwin.extern_structs.ProcBsdShortInfo = undefined;
     const size = darwin.proc_pidinfo(
         @intCast(pid),
-        darwin.PROC_PIDTBSDINFO,
+        darwin.PROC_PIDT_SHORTBSDINFO,
         0,
         @ptrCast(&info),
-        @sizeOf(darwin.extern_structs.ProcBsdInfo),
+        @sizeOf(darwin.extern_structs.ProcBsdShortInfo),
     );
-    if (size != @sizeOf(darwin.extern_structs.ProcBsdInfo)) return false;
-    return info.proc_status == darwin.SZOMB;
+    if (size != @sizeOf(darwin.extern_structs.ProcBsdShortInfo)) return false;
+    return info.pbsi_status == darwin.SZOMB;
 }
 
 pub fn persistedPidValue(pid: std_compat.process.Child.Id) ?u64 {
