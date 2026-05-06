@@ -6,7 +6,7 @@
 
 **Architecture:** Core logic lives in `report.zig` (enums, system data collection, issue body formatting, submission fallback chain). CLI interactive flow in `report_cli.zig`. API handlers in `api/report.zig`. Svelte form page at `ui/src/routes/report/`. Wired into existing CLI parser, server router, sidebar nav, and API client.
 
-**Tech Stack:** Zig 0.15.2, Svelte 5 + SvelteKit, GitHub API via `gh` CLI / curl fallback
+**Tech Stack:** Zig 0.16.0, Svelte 5 + SvelteKit, GitHub API via `gh` CLI / curl fallback
 
 **Spec:** `docs/superpowers/specs/2026-03-18-report-command-design.md`
 
@@ -251,7 +251,7 @@ test "ReportOptions defaults" {
 
 - [ ] **Step 8: Run tests to verify**
 
-Run: `zig build test 2>&1 | head -20`
+Run: `zig build test --summary all 2>&1 | head -20`
 Expected: all tests pass
 
 - [ ] **Step 9: Commit**
@@ -765,7 +765,7 @@ test "writeJsonEscaped" {
 
 - [ ] **Step 2: Run tests**
 
-Run: `zig build test 2>&1 | head -20`
+Run: `zig build test --summary all 2>&1 | head -20`
 Expected: all tests pass
 
 - [ ] **Step 3: Commit**
@@ -793,7 +793,7 @@ Add `_ = report;` in the test block after `_ = registry;`.
 
 - [ ] **Step 2: Run build and tests**
 
-Run: `zig build test 2>&1 | head -20`
+Run: `zig build test --summary all 2>&1 | head -20`
 Expected: all tests pass
 
 - [ ] **Step 3: Commit**
@@ -1061,7 +1061,7 @@ Add before `.help =>` in the switch:
 
 - [ ] **Step 3: Run build and tests**
 
-Run: `zig build test 2>&1 | head -20`
+Run: `zig build test --summary all 2>&1 | head -20`
 Expected: builds and tests pass
 
 - [ ] **Step 4: Commit**
@@ -1324,7 +1324,7 @@ Add `_ = report_api;` in test block.
 
 - [ ] **Step 4: Run build and tests**
 
-Run: `zig build test 2>&1 | head -20`
+Run: `zig build test --summary all 2>&1 | head -20`
 Expected: all tests pass
 
 - [ ] **Step 5: Commit**
@@ -1876,7 +1876,7 @@ Expected: 3 labels shown
 
 - [ ] **Step 1: Run full test suite**
 
-Run: `zig build test 2>&1`
+Run: `zig build test --summary all 2>&1`
 Expected: all tests pass
 
 - [ ] **Step 2: Build the binary**
