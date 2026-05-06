@@ -9,6 +9,7 @@ const health_mod = @import("../supervisor/health.zig");
 const helpers = @import("helpers.zig");
 const access = @import("../access.zig");
 const version = @import("../version.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -374,11 +375,13 @@ fn buildStatusJson(buf: *std.array_list.Managed(u8), s: *state_mod.State, manage
 
 test "handleStatus returns valid JSON with hub version" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const resp = handleStatus(allocator, &s, &mgr, p, 3600, access.default_bind_host, access.default_port, .{});
@@ -439,11 +442,13 @@ test "handleStatus returns valid JSON with hub version" {
 
 test "handleStatus includes instances" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "2026.3.1", .auto_start = true });
@@ -504,11 +509,13 @@ test "handleStatus includes instances" {
 
 test "handleStatus overall_status becomes error when a component has failed instances" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try s.addInstance("nullclaw", "broken", .{ .version = "1.0.0" });
@@ -530,11 +537,13 @@ test "handleStatus overall_status becomes error when a component has failed inst
 
 test "handleStatus includes launch_mode" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .launch_mode = "agent" });
@@ -548,11 +557,13 @@ test "handleStatus includes launch_mode" {
 
 test "handleStatus includes verbose flag" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     try s.addInstance("nullclaw", "my-agent", .{ .version = "1.0.0", .verbose = true });
@@ -566,11 +577,13 @@ test "handleStatus includes verbose flag" {
 
 test "handleStatus with empty state returns empty instances" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-status-api.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
-    var p = try paths_mod.Paths.init(allocator, "/tmp/nullhub-test-status-api");
-    defer p.deinit(allocator);
-    var mgr = manager_mod.Manager.init(allocator, p);
+    var mgr = manager_mod.Manager.init(allocator, fixture.paths);
     defer mgr.deinit();
 
     const resp = handleStatus(allocator, &s, &mgr, p, 42, access.default_bind_host, access.default_port, .{});

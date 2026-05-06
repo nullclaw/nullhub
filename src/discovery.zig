@@ -1,6 +1,7 @@
 const std = @import("std");
 const manifest_mod = @import("core/manifest.zig");
 const state_mod = @import("core/state.zig");
+const test_helpers = @import("test_helpers.zig");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -140,7 +141,11 @@ test "findConnections: empty state returns empty list" {
     };
     const m = testManifest(&specs);
 
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-discovery-test.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     const connections = try findConnections(allocator, m, &s);
@@ -157,7 +162,11 @@ test "findConnections: matching instance returns connection" {
     };
     const m = testManifest(&specs);
 
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-discovery-test.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     try s.addInstance("nullboiler", "default", .{ .version = "1.0.0" });
@@ -179,7 +188,11 @@ test "findConnections: no matching component returns empty" {
     };
     const m = testManifest(&specs);
 
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-discovery-test.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     // Add an instance of a different component.
