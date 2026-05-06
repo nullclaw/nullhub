@@ -97,6 +97,7 @@
   let supportsAgentData = $derived(component === "nullclaw");
   let supportsVerboseStartup = $derived(component === "nullclaw");
   let instanceRouteKey = $derived(`${component}/${name}`);
+  let initializedRouteKey = $state("");
   let queueSummary = $derived(summarizeQueue(integration?.queue));
   let linkedBoilers = $derived(integration?.linked_boilers || []);
   let trackerOptions = $derived(integration?.available_trackers || []);
@@ -580,8 +581,9 @@
   });
 
   $effect(() => {
-    instanceRouteKey;
     if (!component || !name) return;
+    if (initializedRouteKey === instanceRouteKey) return;
+    initializedRouteKey = instanceRouteKey;
     instance = null;
     config = null;
     providerHealth = null;
