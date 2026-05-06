@@ -155,6 +155,7 @@
         <!-- Dynamic provider API keys -->
         {#each providers as provider}
           {@const apiKeyId = fieldId(`models.providers.${provider}.api_key`)}
+          {@const baseUrlId = fieldId(`models.providers.${provider}.base_url`)}
           <div class="provider-row">
             <div class="provider-name">{provider}</div>
             <div class="field">
@@ -166,6 +167,17 @@
                 oninput={(e) => updateField(`models.providers.${provider}.api_key`, e.currentTarget.value)}
               />
             </div>
+            {#if getPath(config, `models.providers.${provider}.base_url`)}
+              <div class="field">
+                <label for={baseUrlId}>Base URL</label>
+                <input
+                  id={baseUrlId}
+                  type="text"
+                  value={getPath(config, `models.providers.${provider}.base_url`) ?? ''}
+                  oninput={(e) => updateField(`models.providers.${provider}.base_url`, e.currentTarget.value)}
+                />
+              </div>
+            {/if}
           </div>
         {/each}
 
