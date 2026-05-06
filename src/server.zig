@@ -1125,7 +1125,7 @@ pub const Server = struct {
         }
 
         // Serve UI module files from data directory (~/.nullhub/ui/{name}@{version}/...)
-        if (!std.mem.startsWith(u8, target, "/api/") and std.mem.startsWith(u8, target, "/ui/")) {
+        if (!auth.isApiPath(target) and std.mem.startsWith(u8, target, "/ui/")) {
             // Check if this looks like a module path: /ui/{name}@{version}/...
             if (target.len > 4) {
                 const after_ui = target[4..]; // after "/ui/"
@@ -1136,7 +1136,7 @@ pub const Server = struct {
         }
 
         // For non-API paths, attempt to serve static files from the embedded UI bundle.
-        if (!std.mem.startsWith(u8, target, "/api/")) {
+        if (!auth.isApiPath(target)) {
             return serveStaticFile(allocator, target);
         }
 
@@ -1242,7 +1242,7 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
 }
 
 fn requestOriginAllowed(raw_request: []const u8, target: []const u8, bind_host: []const u8, port: u16, extra_origins: []const []const u8) bool {
-    if (!std.mem.startsWith(u8, target, "/api/")) return true;
+    if (!auth.isApiPath(target)) return true;
     const origin = extractHeader(raw_request, "Origin") orelse return true;
     return isAllowedCorsOrigin(origin, bind_host, port, extra_origins);
 }
@@ -1684,6 +1684,26 @@ test "route unknown API path returns JSON 404" {
     try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
 }
 
+test "route bare API root returns JSON 404 instead of static fallback" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api", "");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
+}
+
+test "route bare API root with query returns JSON 404 instead of static fallback" {
+    var ctx = TestContext.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const resp = ctx.route(std.testing.allocator, "GET", "/api?format=json", "");
+    try std.testing.expectEqualStrings("404 Not Found", resp.status);
+    try std.testing.expectEqualStrings("application/json", resp.content_type);
+    try std.testing.expectEqualStrings("{\"error\":\"not found\"}", resp.body);
+}
+
 test "route GET /api/components returns component list" {
     var ctx = TestContext.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -1791,6 +1811,14 @@ test "requestOriginAllowed rejects foreign API origins" {
         "Host: 127.0.0.1:19800\r\n" ++
         "Origin: http://nullhub.localhost:19800\r\n\r\n";
     try std.testing.expect(requestOriginAllowed(local_raw, "/api/status", "127.0.0.1", 19800, &.{}));
+}
+
+test "requestOriginAllowed treats bare API root with query as API" {
+    const evil_raw =
+        "GET /api?format=json HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:19800\r\n" ++
+        "Origin: http://evil.example:19800\r\n\r\n";
+    try std.testing.expect(!requestOriginAllowed(evil_raw, "/api?format=json", "127.0.0.1", 19800, &.{}));
 }
 
 test "requestOriginAllowed honors configured extra origins" {
