@@ -1887,6 +1887,8 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         }
     }
 
+    local_binary.refreshStagedDevLocal(allocator, paths, component, entry.version);
+
     // Resolve binary path
     const bin_path = paths.binary(allocator, component, entry.version) catch return helpers.serverError();
     defer allocator.free(bin_path);
@@ -3140,23 +3142,11 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     std_compat.fs.deleteTreeAbsolute(inst_dir) catch {};
     std_compat.fs.symLinkAbsolute(dot_dir, inst_dir, .{ .is_directory = true }) catch return helpers.serverError();
 
-    // 4. Stage binary — copy from local dev build or leave for download on start
+    // 4. Stage binary from local dev build or leave for download on start.
     const version = blk: {
-        if (local_binary.find(allocator, component)) |src_bin| {
-            defer allocator.free(src_bin);
-            const ver = "dev-local";
-            const dest_bin = paths.binary(allocator, component, ver) catch break :blk "standalone";
-            defer allocator.free(dest_bin);
-            std_compat.fs.deleteFileAbsolute(dest_bin) catch {};
-            std_compat.fs.copyFileAbsolute(src_bin, dest_bin, .{}) catch break :blk "standalone";
-            if (comptime std_compat.fs.has_executable_bit) {
-                // Make executable on platforms that support executable bits.
-                if (std_compat.fs.openFileAbsolute(dest_bin, .{ .mode = .read_only })) |f| {
-                    defer f.close();
-                    f.chmod(0o755) catch {};
-                } else |_| {}
-            }
-            break :blk ver;
+        if (local_binary.stageDevLocal(allocator, paths, component)) |dest_bin| {
+            allocator.free(dest_bin);
+            break :blk local_binary.dev_local_version;
         }
         break :blk "standalone";
     };

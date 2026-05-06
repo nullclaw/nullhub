@@ -991,26 +991,11 @@ fn ensureObjectInMap(
 }
 
 fn stageLocalBinary(allocator: std.mem.Allocator, p: paths_mod.Paths, component: []const u8) ?struct { version: []const u8, bin_path: []const u8 } {
-    if (builtin.is_test) return null;
-    const local_path = local_binary.find(allocator, component) orelse return null;
-    defer allocator.free(local_path);
-
-    const version = allocator.dupe(u8, "dev-local") catch return null;
-    errdefer allocator.free(version);
-    const bin_path = p.binary(allocator, component, version) catch return null;
-    errdefer allocator.free(bin_path);
-
-    if (downloader.fileExists(bin_path)) {
-        return .{ .version = version, .bin_path = bin_path };
-    }
-
-    std_compat.fs.copyFileAbsolute(local_path, bin_path, .{}) catch return null;
-    if (comptime std_compat.fs.has_executable_bit) {
-        if (std_compat.fs.openFileAbsolute(bin_path, .{ .mode = .read_only })) |f| {
-            defer f.close();
-            f.chmod(0o755) catch {};
-        } else |_| {}
-    }
+    const bin_path = local_binary.stageDevLocal(allocator, p, component) orelse return null;
+    const version = allocator.dupe(u8, local_binary.dev_local_version) catch {
+        allocator.free(bin_path);
+        return null;
+    };
 
     return .{ .version = version, .bin_path = bin_path };
 }

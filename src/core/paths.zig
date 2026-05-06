@@ -10,7 +10,7 @@ const builtin = @import("builtin");
 /// ├── config.json
 /// ├── state.json
 /// ├── manifests/{component}@{version}.json
-/// ├── bin/{component}-{version}
+/// ├── bin/{component}-{version} (or bin/{component} for dev-local)
 /// ├── instances/{component}/{name}/
 /// │   ├── instance.json
 /// │   ├── config.json
@@ -62,9 +62,16 @@ pub const Paths = struct {
         return std.fs.path.join(allocator, &.{ self.root, "manifests", filename });
     }
 
-    /// `{root}/bin/{component}-{version}` (or `.exe` on Windows)
+    /// `{root}/bin/{component}-{version}` (or `.exe` on Windows).
+    /// For `dev-local`, use the canonical component basename instead so locally
+    /// staged binaries behave the same as the original executable.
     pub fn binary(self: Paths, allocator: std.mem.Allocator, component: []const u8, version: []const u8) ![]const u8 {
-        const filename = if (builtin.os.tag == .windows)
+        const filename = if (std.mem.eql(u8, version, "dev-local"))
+            if (builtin.os.tag == .windows)
+                try std.fmt.allocPrint(allocator, "{s}.exe", .{component})
+            else
+                try allocator.dupe(u8, component)
+        else if (builtin.os.tag == .windows)
             try std.fmt.allocPrint(allocator, "{s}-{s}.exe", .{ component, version })
         else
             try std.fmt.allocPrint(allocator, "{s}-{s}", .{ component, version });
@@ -238,6 +245,10 @@ test "paths resolve under custom root" {
     const bin = try p.binary(allocator, "nullclaw", "2026.3.1");
     defer allocator.free(bin);
     try std.testing.expectEqualStrings("/tmp/test-nullhub/bin/nullclaw-2026.3.1", bin);
+
+    const dev_bin = try p.binary(allocator, "nullclaw", "dev-local");
+    defer allocator.free(dev_bin);
+    try std.testing.expectEqualStrings("/tmp/test-nullhub/bin/nullclaw", dev_bin);
 
     const inst_dir = try p.instanceDir(allocator, "nullclaw", "my-agent");
     defer allocator.free(inst_dir);
