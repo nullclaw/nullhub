@@ -96,14 +96,10 @@ Use for:
 Primary local command:
 
 ```bash
-zig build test --summary all
+zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
 ```
 
-CI-style command after `ui/build` has already been generated:
-
-```bash
-zig build test -Dbuild-ui=false --summary all
-```
+This backend-only test entrypoint does not require prebuilt UI assets.
 
 ### 2. Backend Integration Tests
 
@@ -352,19 +348,13 @@ git diff --check
 Backend code changes:
 
 ```bash
-zig build test --summary all
-```
-
-CI-style rerun after `ui/build` already exists:
-
-```bash
-zig build test -Dbuild-ui=false --summary all
+zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
 ```
 
 Smoke or lifecycle changes:
 
 ```bash
-zig build test --summary all
+zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
 bash tests/test_e2e.sh
 ```
 
@@ -372,7 +362,7 @@ Future UI test changes after the harness exists:
 
 ```bash
 npm --prefix ui test -- --run
-zig build test --summary all
+zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
 ```
 
 If any validation is skipped, the PR description should say exactly what was skipped and why.
