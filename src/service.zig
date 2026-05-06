@@ -361,7 +361,7 @@ fn runCaptureStatus(allocator: std.mem.Allocator, argv: []const []const u8) !Cap
             return .{
                 .success = false,
                 .stdout = try allocator.dupe(u8, ""),
-                .stderr = try allocator.dupe(u8, "command not found"),
+                .stderr = try std.fmt.allocPrint(allocator, "{s}: command not found", .{argv[0]}),
             };
         },
         else => return err,
@@ -383,7 +383,7 @@ fn captureStatusDetail(status: *const CaptureStatus) []const u8 {
 }
 
 fn isSystemctlMissingDetail(detail: []const u8) bool {
-    return std.ascii.indexOfIgnoreCase(detail, "command not found") != null or
+    return std.ascii.indexOfIgnoreCase(detail, "systemctl: command not found") != null or
         std.ascii.indexOfIgnoreCase(detail, "systemctl: not found") != null or
         std.ascii.indexOfIgnoreCase(detail, "systemctl not found") != null or
         std.ascii.indexOfIgnoreCase(detail, "systemctl: no such file or directory") != null;
@@ -414,13 +414,26 @@ test "preferredHomebrewShimPath ignores non-Cellar paths" {
 test "isSystemctlMissingDetail matches missing command output" {
     try std.testing.expect(isSystemctlMissingDetail("systemctl: command not found"));
     try std.testing.expect(isSystemctlMissingDetail("systemctl: not found"));
+    try std.testing.expect(isSystemctlMissingDetail("systemctl not found"));
+    try std.testing.expect(isSystemctlMissingDetail("systemctl: no such file or directory"));
 }
 
-test "isSystemctlMissingDetail ignores missing unit output" {
+test "isSystemctlMissingDetail ignores unrelated missing output" {
+    try std.testing.expect(!isSystemctlMissingDetail("command not found"));
     try std.testing.expect(!isSystemctlMissingDetail("Unit nullhub.service could not be found."));
 }
 
 test "isSystemdUnavailableDetail matches user bus errors" {
     try std.testing.expect(isSystemdUnavailableDetail("Failed to connect to bus: No medium found"));
     try std.testing.expect(isSystemdUnavailableDetail("System has not been booted with systemd as init system (PID 1). Can't operate."));
+}
+
+test "runCaptureStatus includes executable name for missing commands" {
+    const status = try runCaptureStatus(std.testing.allocator, &.{"nullhub-command-that-should-not-exist"});
+    defer std.testing.allocator.free(status.stdout);
+    defer std.testing.allocator.free(status.stderr);
+
+    try std.testing.expect(!status.success);
+    try std.testing.expectEqualStrings("", status.stdout);
+    try std.testing.expectEqualStrings("nullhub-command-that-should-not-exist: command not found", status.stderr);
 }
