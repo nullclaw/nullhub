@@ -17,64 +17,18 @@ jobs:
     with:
       binary_name: nullhub
       artifact_prefix: nullhub
+      node_version: "22"
+      node_cache_dependency_path: ui/package-lock.json
+      targets_json: >-
+        [
+          {"os":"ubuntu-latest","target":"linux-x86_64","zig_target":"x86_64-linux-musl"},
+          {"os":"ubuntu-latest","target":"linux-aarch64","zig_target":"aarch64-linux-musl"},
+          {"os":"macos-latest","target":"macos-aarch64","zig_target":"aarch64-macos"},
+          {"os":"windows-latest","target":"windows-x86_64","zig_target":"x86_64-windows"}
+        ]
       test_command: zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
-
-  e2e:
-    name: E2E (ubuntu-latest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Zig
-        uses: nullclaw/nullbuilder/.github/actions/setup-zig@v1
-        with:
-          version: 0.16.0
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Build embedded UI assets
-        run: |
-          npm --prefix ui ci --no-audit --no-fund
-          npm --prefix ui run build
-
-      - name: Run E2E tests
-        run: bash tests/test_e2e.sh
-
-  linux-aarch64:
-    name: Cross-compile linux-aarch64 (ubuntu-latest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Zig
-        uses: nullclaw/nullbuilder/.github/actions/setup-zig@v1
-        with:
-          version: 0.16.0
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Build embedded UI assets
-        run: |
-          npm --prefix ui ci --no-audit --no-fund
-          npm --prefix ui run build
-
-      - name: Build ReleaseSmall
-        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall -Dbuild-ui=false
+      pre_build_command: |
+        npm --prefix ui ci --no-audit --no-fund
+        npm --prefix ui run build
+      build_args: -Dbuild-ui=false
+      e2e_command: bash tests/test_e2e.sh
