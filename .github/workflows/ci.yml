@@ -6,96 +6,31 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-x86_64
-            zig_target: x86_64-linux-musl
-          - os: macos-latest
-            target: macos-aarch64
-            zig_target: aarch64-macos
-          - os: windows-latest
-            target: windows-x86_64
-            zig_target: x86_64-windows
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Zig 0.16.0
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Cache .zig-cache
-        uses: actions/cache@v4
-        with:
-          path: .zig-cache
-          key: zig-${{ matrix.target }}-${{ hashFiles('src/**/*.zig', 'build.zig') }}
-          restore-keys: zig-${{ matrix.target }}-
-
-      - name: Build embedded UI assets
-        run: |
-          npm --prefix ui ci --no-audit --no-fund
-          npm --prefix ui run build
-
-      - name: Run unit tests
-        run: zig build test -Dbuild-ui=false --summary all 2>&1 | tee test-output.txt
-
-      - name: Run E2E tests
-        if: runner.os == 'Linux'
-        run: bash tests/test_e2e.sh
-
-      - name: Build ReleaseSmall
-        run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSmall -Dbuild-ui=false
-
-      - name: Cross-compile linux-aarch64 (Termux/ARM)
-        if: runner.os == 'Linux'
-        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall -Dbuild-ui=false
-
-      - name: Job summary
-        if: always()
-        run: |
-          echo "## nullHub CI - ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-
-          if [ -f test-output.txt ]; then
-            TESTS=$(grep -o '[0-9]*/[0-9]* tests passed' test-output.txt | head -1 || true)
-            RSS=$(grep 'run test' test-output.txt | grep -o 'MaxRSS:[^ ]*' | head -1 | cut -d: -f2 || true)
-            echo "| Tests | ${TESTS:-n/a} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Test MaxRSS | ${RSS:-n/a} |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          BIN="zig-out/bin/nullhub"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            BIN="zig-out/bin/nullhub.exe"
-          fi
-          if [ -f "$BIN" ]; then
-            SIZE=$(wc -c < "$BIN" | tr -d ' ')
-            SIZE_HR=$(awk "BEGIN {printf \"%.1f MB\", $SIZE / 1048576}")
-            echo "| Binary (ReleaseSmall) | ${SIZE_HR} (${SIZE} bytes) |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload binary
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nullhub-${{ matrix.target }}
-          path: zig-out/bin/nullhub${{ runner.os == 'Windows' && '.exe' || '' }}
+  zig:
+    uses: nullclaw/nullbuilder/.github/workflows/zig-ci.yml@v1
+    permissions:
+      contents: read
+    with:
+      binary_name: nullhub
+      artifact_prefix: nullhub
+      node_version: "22"
+      node_cache_dependency_path: ui/package-lock.json
+      targets_json: >-
+        [
+          {"os":"ubuntu-latest","target":"linux-x86_64","zig_target":"x86_64-linux-musl"},
+          {"os":"ubuntu-latest","target":"linux-aarch64","zig_target":"aarch64-linux-musl"},
+          {"os":"macos-latest","target":"macos-aarch64","zig_target":"aarch64-macos"},
+          {"os":"windows-latest","target":"windows-x86_64","zig_target":"x86_64-windows"}
+        ]
+      test_command: zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
+      pre_build_command: |
+        npm --prefix ui ci --no-audit --no-fund
+        npm --prefix ui run build
+      build_args: -Dbuild-ui=false
+      # E2E runs only on the native Linux target.
+      e2e_target: linux-x86_64
+      e2e_command: bash tests/test_e2e.sh
