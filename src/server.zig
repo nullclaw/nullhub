@@ -30,6 +30,7 @@ const orchestrator = @import("installer/orchestrator.zig");
 const registry = @import("installer/registry.zig");
 const ui_assets = @import("ui_assets");
 const version = @import("version.zig");
+const test_helpers = @import("test_helpers.zig");
 
 const max_request_size: usize = 65_536;
 
@@ -55,7 +56,10 @@ pub const Server = struct {
         defer allocator.free(state_path);
 
         const state = try allocator.create(state_mod.State);
-        state.* = state_mod.State.load(allocator, state_path) catch state_mod.State.init(allocator, state_path);
+        state.* = state_mod.State.load(allocator, state_path) catch |err| blk: {
+            std.log.err("state.json load failed ({s}): starting with empty state — YOUR DATA MAY BE AT RISK", .{@errorName(err)});
+            break :blk state_mod.State.init(allocator, state_path);
+        };
 
         orchestrator.syncLocalUiModules(allocator, paths);
 
@@ -919,6 +923,26 @@ pub const Server = struct {
                 }
                 return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
             }
+            // /api/providers/probe-models — probe a custom endpoint before saving
+            if (providers_api.isProbeModelsPath(target)) {
+                if (std.mem.eql(u8, method, "GET")) {
+                    if (providers_api.handleProbeModels(allocator, target)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "400 Bad Request" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                if (std.mem.eql(u8, method, "POST")) {
+                    if (providers_api.handleProbeModelsBody(allocator, body)) |json| {
+                        const status = if (std.mem.indexOf(u8, json, "\"error\"") != null) "400 Bad Request" else "200 OK";
+                        return .{ .status = status, .content_type = "application/json", .body = json };
+                    } else |_| {
+                        return .{ .status = "500 Internal Server Error", .content_type = "application/json", .body = "{\"error\":\"internal error\"}" };
+                    }
+                }
+                return .{ .status = "405 Method Not Allowed", .content_type = "application/json", .body = "{\"error\":\"method not allowed\"}" };
+            }
             // Routes with ID: /api/providers/{id} and /api/providers/{id}/validate
             if (providers_api.extractProviderId(target)) |id| {
                 if (providers_api.isValidatePath(target)) {
@@ -1337,6 +1361,7 @@ fn serveStaticFile(allocator: std.mem.Allocator, target: []const u8) Response {
 // --- Test helpers ---
 
 const TestContext = struct {
+    fixture: test_helpers.TempPaths,
     state: *state_mod.State,
     paths: paths_mod.Paths,
     manager: manager_mod.Manager,
@@ -1344,19 +1369,18 @@ const TestContext = struct {
     server: Server,
 
     fn init(allocator: std.mem.Allocator) TestContext {
-        return initAtRoot(allocator, "/tmp/nullhub-test-server", "/tmp/nullhub-test-server-state.json");
-    }
-
-    fn initAtRoot(allocator: std.mem.Allocator, root: []const u8, state_path: []const u8) TestContext {
+        const fixture = test_helpers.TempPaths.init(allocator) catch @panic("TempPaths.init failed");
+        const state_path = fixture.paths.state(allocator) catch @panic("state path failed");
+        defer allocator.free(state_path);
         const state = allocator.create(state_mod.State) catch @panic("OOM");
         state.* = state_mod.State.init(allocator, state_path);
-        const paths = paths_mod.Paths.init(allocator, root) catch @panic("Paths.init failed");
         var ctx: TestContext = undefined;
+        ctx.fixture = fixture;
         ctx.state = state;
-        ctx.paths = paths;
-        ctx.manager = manager_mod.Manager.init(allocator, paths);
+        ctx.paths = fixture.paths;
+        ctx.manager = manager_mod.Manager.init(allocator, fixture.paths);
         ctx.mutex = .{};
-        ctx.server = Server.initWithState(allocator, state, paths, &ctx.manager, &ctx.mutex);
+        ctx.server = Server.initWithState(allocator, state, fixture.paths, &ctx.manager, &ctx.mutex);
         return ctx;
     }
 
@@ -1364,7 +1388,7 @@ const TestContext = struct {
         self.manager.deinit();
         self.state.deinit();
         allocator.destroy(self.state);
-        self.paths.deinit(allocator);
+        self.fixture.deinit();
     }
 
     fn route(self: *TestContext, allocator: std.mem.Allocator, method: []const u8, target: []const u8, body: []const u8) Response {
@@ -1389,18 +1413,11 @@ test "reconcileInstancesOnBoot adopts persisted managed instance without respawn
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-server-reconcile";
-    const tmp_state = "/tmp/nullhub-test-server-reconcile-state.json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-
-    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
     try ctx.paths.ensureDirs();
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
     defer allocator.free(output_path);
 
     const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
@@ -1464,18 +1481,11 @@ test "reconcileInstancesOnBoot restarts auto-start instance when persisted pid i
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-server-reconcile-stale";
-    const tmp_state = "/tmp/nullhub-test-server-reconcile-stale-state.json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-
-    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
     try ctx.paths.ensureDirs();
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
     defer allocator.free(output_path);
 
     const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");

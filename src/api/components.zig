@@ -3,6 +3,7 @@ const std_compat = @import("compat");
 const registry = @import("../installer/registry.zig");
 const paths_mod = @import("../core/paths.zig");
 const state_mod = @import("../core/state.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 // ─── Display name derivation ─────────────────────────────────────────────────
 
@@ -177,7 +178,11 @@ test "deriveDisplayName capitalizes first letter" {
 
 test "handleList returns valid JSON with all 3 known components" {
     const allocator = std.testing.allocator;
-    var s = state_mod.State.init(allocator, "/tmp/nullhub-test-components.json");
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
     defer s.deinit();
 
     const json = try handleList(allocator, &s);

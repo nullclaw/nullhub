@@ -3,6 +3,7 @@
   import ProviderList from "./ProviderList.svelte";
   import ChannelList from "./ChannelList.svelte";
   import { api } from "$lib/api/client";
+  import { OPENAI_COMPATIBLE_VALUE } from "$lib/providers";
 
   let {
     component = "",
@@ -107,7 +108,7 @@
         const defaultProvider =
           rec?.value || providerStep.options?.[0]?.value || "";
         answers["_providers"] = JSON.stringify([
-          { provider: defaultProvider, api_key: "", model: "" },
+          { provider: defaultProvider, api_key: "", model: "", base_url: "", provider_name: "" },
         ]);
       }
     }
@@ -176,6 +177,36 @@
     showAdvanced = false;
   });
 
+  function customProviderError(entries: any[]) {
+    for (const entry of entries) {
+      if (entry.provider !== OPENAI_COMPATIBLE_VALUE) continue;
+      if (!(entry.provider_name || "").trim()) {
+        return "Provider name is required for OpenAI Compatible providers.";
+      }
+      if (!(entry.base_url || "").trim()) {
+        return "Base URL is required for OpenAI Compatible providers.";
+      }
+    }
+    return "";
+  }
+
+  function normalizeProviderEntries(entries: any[]) {
+    return entries.map((entry: any) => {
+      if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+        const { provider_name, ...rest } = entry;
+        return {
+          ...rest,
+          provider: (provider_name || "").trim(),
+          base_url: (entry.base_url || "").trim(),
+        };
+      }
+      const rest = { ...entry };
+      delete rest.provider_name;
+      delete rest.base_url;
+      return rest;
+    });
+  }
+
   async function validateProviders(): Promise<boolean> {
     validating = true;
     validationError = "";
@@ -183,13 +214,57 @@
     providerValidationResults = [];
 
     try {
-      const providers = JSON.parse(answers["_providers"] || "[]");
-      if (providers.length === 0) {
+      const rawProviders: any[] = JSON.parse(answers["_providers"] || "[]");
+      if (rawProviders.length === 0) {
         validationError = "Add at least one provider";
         return false;
       }
+
+      const customError = customProviderError(rawProviders);
+      if (customError) {
+        validationError = customError;
+        return false;
+      }
+
+      const providers = normalizeProviderEntries(rawProviders);
+      const customProbeResults: Array<{ provider: string; live_ok: boolean; reason: string }> = [];
+
+      for (const provider of providers) {
+        if (!provider.base_url) continue;
+        try {
+          const probe = await api.probeProviderModels(provider.base_url, provider.api_key || "");
+          customProbeResults.push({
+            provider: provider.provider,
+            live_ok: probe.live_ok,
+            reason: probe.reason || "",
+          });
+        } catch {
+          customProbeResults.push({
+            provider: provider.provider,
+            live_ok: false,
+            reason: "probe_request_failed",
+          });
+        }
+      }
+
+      if (customProbeResults.some((result) => !result.live_ok)) {
+        providerValidationResults = customProbeResults;
+        return false;
+      }
+
       const result = await api.validateProviders(component, providers);
-      providerValidationResults = result.results || [];
+      const backendResults = result.results || [];
+      const mergedResults = backendResults.map(
+        (backend: any) =>
+          customProbeResults.find((custom) => custom.provider === backend.provider) || backend,
+      );
+      for (const custom of customProbeResults) {
+        if (!mergedResults.some((entry: any) => entry.provider === custom.provider)) {
+          mergedResults.push(custom);
+        }
+      }
+
+      providerValidationResults = mergedResults;
       validationWarning = result.saved_providers_warning || "";
       return providerValidationResults.every((r: any) => r.live_ok);
     } catch (e) {
@@ -270,14 +345,20 @@
       };
       if (_providers) {
         try {
-          const parsed = JSON.parse(_providers);
+          const rawProviders = JSON.parse(_providers);
+          const customError = customProviderError(rawProviders);
+          if (customError) throw new Error(customError);
+          const parsed = normalizeProviderEntries(rawProviders);
           payload.providers = parsed;
           if (parsed.length > 0) {
             payload.provider = parsed[0].provider;
             payload.api_key = parsed[0].api_key || "";
             payload.model = parsed[0].model || "";
+            if (parsed[0].base_url) payload.base_url = parsed[0].base_url;
           }
-        } catch {}
+        } catch (e) {
+          throw e;
+        }
       }
       if (Object.keys(channels).length > 0) {
         payload.channels = channels;
