@@ -121,14 +121,12 @@ optional `NULLTICKETS_TOKEN`.
 
 ## Development
 
-Testing strategy and roadmap:
-
-- `TESTING.md`
+Testing strategy and roadmap live in [TESTING.md](TESTING.md).
 
 Backend:
 
 ```bash
-zig build test
+zig build test --summary all
 ```
 
 Frontend:

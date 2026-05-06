@@ -21,7 +21,7 @@ As of the current `main` branch:
 - Coverage is concentrated heavily in API and routing code.
 - The project has a shell smoke script at `tests/test_e2e.sh`.
 - The project does not yet have a committed frontend unit-test harness.
-- CI currently runs backend tests, the shell smoke test on Linux, and release builds.
+- CI currently runs backend tests, the shell smoke test on Linux, and ReleaseSmall binary builds.
 
 This means the main gap is not "no tests". The gap is uneven coverage and missing layers.
 
@@ -59,18 +59,18 @@ The snapshot below is based on the current `src/` tree and the committed test di
 
 The current backend suite is broad in file count but uneven in depth.
 
-Most heavily tested files on `main` include:
+Most heavily tested files on `main` currently are:
 
-- `src/api/instances.zig`
-- `src/server.zig`
-- `src/core/state.zig`
-- `src/cli.zig`
-- `src/api/logs.zig`
-- `src/api/wizard.zig`
-- `src/supervisor/manager.zig`
-- `src/api/providers.zig`
-- `src/api/config.zig`
-- `src/installer/orchestrator.zig`
+- `src/api/instances.zig` (90 tests)
+- `src/server.zig` (53 tests)
+- `src/api/providers.zig` (35 tests)
+- `src/core/state.zig` (34 tests)
+- `src/cli.zig` (28 tests)
+- `src/api/wizard.zig` (17 tests)
+- `src/api/logs.zig` (17 tests)
+- `src/installer/orchestrator.zig` (16 tests)
+- `src/supervisor/manager.zig` (15 tests)
+- `src/api/config.zig` (14 tests)
 
 Refresh this snapshot with:
 
@@ -93,7 +93,13 @@ Use for:
 - supervisor state transitions
 - auth and access rules
 
-Primary command:
+Primary local command:
+
+```bash
+zig build test --summary all
+```
+
+CI-style command after `ui/build` has already been generated:
 
 ```bash
 zig build test -Dbuild-ui=false --summary all
@@ -163,9 +169,9 @@ Purpose:
 - document the test contract
 - align contributor expectations with NullClaw's model
 
-Suggested PR:
+Status:
 
-- `docs(testing): add testing strategy and contributor expectations`
+- covered by this document
 
 Dependencies:
 
@@ -178,9 +184,13 @@ Purpose:
 - make the shell smoke test fail on real server crashes
 - keep smoke runs isolated from developer-local state
 
-Suggested PR:
+Landed scope:
 
-- `test(smoke): isolate E2E home and detect server exits`
+- `test(smoke): harden e2e server diagnostics`
+
+Status:
+
+- already landed on `main` in `tests/test_e2e.sh`; do not open a duplicate smoke-hardening PR unless new smoke gaps are identified
 
 Dependencies:
 
@@ -193,9 +203,9 @@ Purpose:
 - make current strengths and weaknesses explicit
 - give later test PRs a scoped target list
 
-Suggested PR:
+Status:
 
-- `docs(testing): add subsystem coverage map and gap inventory`
+- covered by this document
 
 Dependencies:
 
@@ -342,13 +352,19 @@ git diff --check
 Backend code changes:
 
 ```bash
+zig build test --summary all
+```
+
+CI-style rerun after `ui/build` already exists:
+
+```bash
 zig build test -Dbuild-ui=false --summary all
 ```
 
 Smoke or lifecycle changes:
 
 ```bash
-zig build test -Dbuild-ui=false --summary all
+zig build test --summary all
 bash tests/test_e2e.sh
 ```
 
@@ -356,7 +372,7 @@ Future UI test changes after the harness exists:
 
 ```bash
 npm --prefix ui test -- --run
-zig build test -Dbuild-ui=false --summary all
+zig build test --summary all
 ```
 
 If any validation is skipped, the PR description should say exactly what was skipped and why.
