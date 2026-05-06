@@ -560,7 +560,7 @@ pub const Server = struct {
             if (std.mem.eql(u8, target, "/api/status")) {
                 const now = std_compat.time.timestamp();
                 const uptime: u64 = @intCast(@max(0, now - self.start_time));
-                const resp = status_api.handleStatus(allocator, self.state, self.manager, uptime, self.host, self.port, self.currentAccessOptions());
+                const resp = status_api.handleStatus(allocator, self.state, self.manager, self.paths, uptime, self.host, self.port, self.currentAccessOptions());
                 return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
             }
             if (meta_api.isRoutesPath(target)) {
