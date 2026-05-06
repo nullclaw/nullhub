@@ -1542,18 +1542,11 @@ test "reconcileInstancesOnBoot terminates mismatched persisted runtime without r
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-server-reconcile-mismatch";
-    const tmp_state = "/tmp/nullhub-test-server-reconcile-mismatch-state.json";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-    defer std_compat.fs.deleteFileAbsolute(tmp_state) catch {};
-
-    var ctx = TestContext.initAtRoot(allocator, tmp_root, tmp_state);
+    var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
     try ctx.paths.ensureDirs();
 
-    const output_path = try std.fs.path.join(allocator, &.{ tmp_root, "starts.log" });
+    const output_path = try ctx.fixture.path(allocator, "starts.log");
     defer allocator.free(output_path);
 
     const binary_path = try ctx.paths.binary(allocator, "nullclaw", "1.0.0");
@@ -1585,7 +1578,10 @@ test "reconcileInstancesOnBoot terminates mismatched persisted runtime without r
         .binary = binary_path,
         .argv = launch.argv,
     });
-    defer _ = spawned.child.wait() catch {};
+    defer {
+        if (process_mod.isAlive(spawned.pid)) process_mod.forceKill(spawned.pid) catch {};
+        _ = spawned.child.wait() catch {};
+    }
 
     // Regression: if persisted runtime metadata no longer matches the desired
     // launch config, boot reconciliation must terminate the old process,
