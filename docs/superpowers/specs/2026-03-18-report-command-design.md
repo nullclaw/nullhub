@@ -14,7 +14,7 @@ Create GitHub issues with pre-filled system data from CLI and Web UI.
 
 Order is fixed (as listed above) in both CLI and Web UI selectors.
 
-The target list is hardcoded in `report.zig`, independent of `known_components` in `registry.zig`. nullwatch exists as a repo but is not yet in the component registry.
+The target list is hardcoded in `report.zig`, independent of `known_components` in `registry.zig`. `nullwatch` is also a known installable component, so report target metadata should stay aligned with the registry entry.
 
 ## Report types and labels
 

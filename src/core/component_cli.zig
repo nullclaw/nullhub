@@ -21,6 +21,7 @@ pub fn homeEnvVarForComponent(component_name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, component_name, "nullclaw")) return "NULLCLAW_HOME";
     if (std.mem.eql(u8, component_name, "nullboiler")) return "NULLBOILER_HOME";
     if (std.mem.eql(u8, component_name, "nulltickets")) return "NULLTICKETS_HOME";
+    if (std.mem.eql(u8, component_name, "nullwatch")) return "NULLWATCH_HOME";
     return null;
 }
 
@@ -134,4 +135,12 @@ pub fn fromJson(
         .stderr = result.stderr,
         .success = result.success,
     };
+}
+
+test "home env var includes managed components" {
+    try std.testing.expectEqualStrings("NULLCLAW_HOME", homeEnvVarForComponent("nullclaw").?);
+    try std.testing.expectEqualStrings("NULLBOILER_HOME", homeEnvVarForComponent("nullboiler").?);
+    try std.testing.expectEqualStrings("NULLTICKETS_HOME", homeEnvVarForComponent("nulltickets").?);
+    try std.testing.expectEqualStrings("NULLWATCH_HOME", homeEnvVarForComponent("nullwatch").?);
+    try std.testing.expect(homeEnvVarForComponent("unknown") == null);
 }

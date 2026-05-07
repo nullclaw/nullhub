@@ -176,7 +176,7 @@ test "deriveDisplayName capitalizes first letter" {
     try std.testing.expectEqualStrings("", name3);
 }
 
-test "handleList returns valid JSON with all 3 known components" {
+test "handleList returns valid JSON with all known components" {
     const allocator = std.testing.allocator;
     var fixture = try test_helpers.TempPaths.init(allocator);
     defer fixture.deinit();
@@ -192,30 +192,34 @@ test "handleList returns valid JSON with all 3 known components" {
     try std.testing.expect(std.mem.startsWith(u8, json, "{\"components\":["));
     try std.testing.expect(std.mem.endsWith(u8, json, "]}"));
 
-    // Verify all 3 components are present
+    // Verify all components are present
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullboiler\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nulltickets\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"nullwatch\"") != null);
 
     // Verify display names
     try std.testing.expect(std.mem.indexOf(u8, json, "\"NullClaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"NullBoiler\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"NullTickets\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"NullWatch\"") != null);
 
     // Verify descriptions are present
     try std.testing.expect(std.mem.indexOf(u8, json, "Autonomous AI agent runtime") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "DAG-based workflow orchestrator") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "Task and issue tracker") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "Headless observability") != null);
 
     // Verify repo fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nullclaw\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/NullBoiler\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nulltickets\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nullwatch\"") != null);
 
     // Verify structural fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"alpha\"") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "\"alpha\":true"));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\"alpha\":false"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "\"alpha\":false"));
     try std.testing.expect(std.mem.indexOf(u8, json, "\"installed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"instance_count\"") != null);
 }

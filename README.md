@@ -7,7 +7,7 @@ Management hub for the nullclaw ecosystem.
 
 `NullHub` is a single Zig binary with an embedded Svelte web UI for installing,
 configuring, monitoring, and updating ecosystem components (NullClaw, NullBoiler,
-NullTickets).
+NullTickets, NullWatch).
 
 ## Features
 
@@ -15,13 +15,14 @@ NullTickets).
 - **Process supervision** -- start, stop, restart, crash recovery with backoff
 - **Health monitoring** -- periodic HTTP health checks, dashboard status cards
 - **Cross-component linking** -- auto-connect `NullTickets -> NullBoiler`, generate native tracker config, and inspect queue/orchestrator status from one UI
-- **Config management** -- structured editors for `NullClaw`, `NullBoiler`, and `NullTickets`, with raw JSON fallback when needed
+- **Config management** -- structured editors for `NullClaw`, `NullBoiler`, `NullTickets`, and `NullWatch`, with raw JSON fallback when needed
 - **Log viewing** -- tail and live SSE streaming per instance
 - **One-click updates** -- download, migrate config, rollback on failure
 - **Multi-instance** -- run multiple instances of the same component side by side
 - **Web UI + CLI** -- browser dashboard for humans, CLI for automation
 - **Managed instance admin API** -- instance-scoped status, config, models, cron, channels, and skills routes for managed NullClaw installs
 - **Orchestration UI** -- workflow editor, poll-based run monitoring, checkpoint forking, encoded workflow/run/store links, and key-value store browser (proxied to NullTickets through NullHub)
+- **Observability cockpit** -- local NullWatch run summaries, span timelines, eval results, token usage, cost, and error context through a NullHub proxy
 
 ## Quick Start
 
@@ -119,6 +120,47 @@ to the local orchestration stack. Most routes go to NullBoiler's REST API via
 `/api/orchestration/store/*` is proxied to NullTickets via `NULLTICKETS_URL` and
 optional `NULLTICKETS_TOKEN`.
 
+**Observability proxy** -- requests to `/api/observability/*` are reverse-proxied
+to the managed NullWatch instance installed in NullHub. `NULLWATCH_URL` can
+still override the target for an external NullWatch instance, and
+`NULLWATCH_TOKEN` overrides the managed instance token when set. The built-in
+Observability page uses this proxy to display run summaries, spans, evals,
+latency, cost, and failure context without sending data to hosted services.
+
+Local NullWatch setup:
+
+1. Start NullHub:
+
+   ```bash
+   zig build run -- serve --no-open
+   ```
+
+2. In the web UI, open **Install Component**, select **NullWatch**, keep or set
+   the API port to `7710`, and finish the wizard. The installer starts the
+   NullWatch instance and the observability proxy discovers it automatically.
+
+3. Optional demo data can be ingested through the NullHub proxy:
+
+   ```bash
+   curl -X POST http://127.0.0.1:19800/api/observability/v1/spans \
+     -H 'Content-Type: application/json' \
+     -d '{"run_id":"demo-run-1","trace_id":"trace-demo-1","span_id":"span-1","source":"nullclaw","operation":"tool.call","status":"error","started_at_ms":1710000000000,"ended_at_ms":1710000001500,"tool_name":"shell","error_message":"tool call failed: command timed out","attributes_json":"{\"exit_code\":124}"}'
+
+   curl -X POST http://127.0.0.1:19800/api/observability/v1/evals \
+     -H 'Content-Type: application/json' \
+     -d '{"run_id":"demo-run-1","eval_key":"tool_success","scorer":"deterministic","score":0.0,"verdict":"fail","dataset":"demo","notes":"The tool call timed out."}'
+   ```
+
+### Observability Screenshots
+
+Flight Recorder overview:
+
+![NullHub Observability overview](docs/screenshots/nullhub-observability-overview.png)
+
+Failure detail with tool-call error context:
+
+![NullHub Observability failure detail](docs/screenshots/nullhub-observability-failure.png)
+
 ## Development
 
 Testing strategy and roadmap live in [TESTING.md](TESTING.md).
@@ -163,12 +205,14 @@ src/
   auth.zig              # Optional bearer token auth
   api/                  # REST endpoints (components, instances, wizard, ...)
     orchestration.zig   # Reverse proxy to NullBoiler orchestration API
+    observability.zig   # Reverse proxy to NullWatch tracing/eval API
   core/                 # Manifest parser, state, platform, paths
   installer/            # Download, build, UI module fetching
   supervisor/           # Process spawn, health checks, manager
 ui/src/
   routes/               # SvelteKit pages
     orchestration/      # Orchestration pages (dashboard, workflows, runs, store)
+    observability/      # NullWatch flight recorder page
   lib/components/       # Reusable Svelte components
     orchestration/      # GraphViewer, StateInspector, RunEventLog, InterruptPanel,
                         # CheckpointTimeline, WorkflowJsonEditor, NodeCard, SendProgressBar

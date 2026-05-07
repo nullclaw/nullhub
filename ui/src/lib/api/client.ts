@@ -159,6 +159,51 @@ export const api = {
 
   refreshComponents: () => request<any>('/components/refresh', { method: 'POST' }),
 
+  getObservabilityHealth: () => request<any>('/observability/health'),
+  getObservabilitySummary: () => request<any>('/observability/v1/summary'),
+  getObservabilityRuns: (params?: { run_id?: string; source?: string; operation?: string; status?: string; model?: string; tool_name?: string; verdict?: string; dataset?: string; limit?: number }) =>
+    request<any>(
+      withQuery('/observability/v1/runs', {
+        run_id: params?.run_id,
+        source: params?.source,
+        operation: params?.operation,
+        status: params?.status,
+        model: params?.model,
+        tool_name: params?.tool_name,
+        verdict: params?.verdict,
+        dataset: params?.dataset,
+        limit: params?.limit,
+      }),
+    ),
+  getObservabilityRun: (runId: string) => request<any>(`/observability/v1/runs/${encodeURIComponent(runId)}`),
+  getObservabilitySpans: (params?: { run_id?: string; trace_id?: string; source?: string; operation?: string; status?: string; model?: string; tool_name?: string; task_id?: string; session_id?: string; agent_id?: string; limit?: number }) =>
+    request<any>(
+      withQuery('/observability/v1/spans', {
+        run_id: params?.run_id,
+        trace_id: params?.trace_id,
+        source: params?.source,
+        operation: params?.operation,
+        status: params?.status,
+        model: params?.model,
+        tool_name: params?.tool_name,
+        task_id: params?.task_id,
+        session_id: params?.session_id,
+        agent_id: params?.agent_id,
+        limit: params?.limit,
+      }),
+    ),
+  getObservabilityEvals: (params?: { run_id?: string; verdict?: string; eval_key?: string; scorer?: string; dataset?: string; limit?: number }) =>
+    request<any>(
+      withQuery('/observability/v1/evals', {
+        run_id: params?.run_id,
+        verdict: params?.verdict,
+        eval_key: params?.eval_key,
+        scorer: params?.scorer,
+        dataset: params?.dataset,
+        limit: params?.limit,
+      }),
+    ),
+
   applyUpdate: (c: string, n: string) =>
     request<any>(`/instances/${c}/${n}/update`, { method: 'POST' }),
 

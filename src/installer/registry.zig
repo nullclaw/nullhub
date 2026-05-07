@@ -48,6 +48,14 @@ pub const known_components = [_]KnownComponent{
         .repo = "nullclaw/nulltickets",
         .is_alpha = true,
     },
+    .{
+        .name = "nullwatch",
+        .display_name = "NullWatch",
+        .description = "Headless observability, tracing, evals, and run intelligence for lightweight agent infrastructure.",
+        .repo = "nullclaw/nullwatch",
+        .default_launch_command = "serve",
+        .default_port = 7710,
+    },
 };
 
 /// Look up a component by name in the known_components list.
@@ -236,6 +244,14 @@ test "findKnownComponent returns nullboiler" {
     const comp = findKnownComponent("nullboiler");
     try std.testing.expect(comp != null);
     try std.testing.expectEqualStrings("nullclaw/NullBoiler", comp.?.repo);
+}
+
+test "findKnownComponent returns nullwatch" {
+    const comp = findKnownComponent("nullwatch");
+    try std.testing.expect(comp != null);
+    try std.testing.expectEqualStrings("nullclaw/nullwatch", comp.?.repo);
+    try std.testing.expectEqualStrings("serve", comp.?.default_launch_command);
+    try std.testing.expectEqual(@as(u16, 7710), comp.?.default_port);
 }
 
 test "findKnownComponent returns null for unknown" {

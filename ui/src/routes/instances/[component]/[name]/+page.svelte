@@ -95,6 +95,8 @@
     component === "nullboiler" || component === "nulltickets",
   );
   let supportsAgentData = $derived(component === "nullclaw");
+  let supportsChat = $derived(component === "nullclaw");
+  let supportsUsage = $derived(component === "nullclaw");
   let supportsVerboseStartup = $derived(component === "nullclaw");
   let instanceRouteKey = $derived(`${component}/${name}`);
   let initializedRouteKey = $state("");
@@ -119,18 +121,21 @@
   let standaloneHomeEnv = $derived(componentHomeEnv(component));
   let standaloneHomePath = $derived(`$NULLHUB_HOME/instances/${component}/${name}`);
   let standaloneConfigPath = $derived(`${standaloneHomePath}/config.json`);
+  let hasStandaloneBinary = $derived(Boolean(instance?.version && instance.version !== "standalone"));
   let standaloneBinaryPath = $derived(
-    instance?.version ? `$NULLHUB_HOME/bin/${component}-${instance.version}` : "",
+    hasStandaloneBinary ? `$NULLHUB_HOME/bin/${component}-${instance.version}` : "",
   );
   let standaloneLaunchScript = $derived(
-    buildStandaloneLaunchScript(
-      component,
-      name,
-      instance?.version,
-      instance?.launch_mode,
-      instance?.verbose,
-      standaloneHomeEnv,
-    ),
+    hasStandaloneBinary
+      ? buildStandaloneLaunchScript(
+          component,
+          name,
+          instance?.version,
+          instance?.launch_mode,
+          instance?.verbose,
+          standaloneHomeEnv,
+        )
+      : "",
   );
 
   function extractModel(cfg: any): string | null {
@@ -267,6 +272,7 @@
     if (componentName === "nullclaw") return "NULLCLAW_HOME";
     if (componentName === "nullboiler") return "NULLBOILER_HOME";
     if (componentName === "nulltickets") return "NULLTICKETS_HOME";
+    if (componentName === "nullwatch") return "NULLWATCH_HOME";
     return "COMPONENT_HOME";
   }
 
@@ -282,6 +288,29 @@
       .filter(Boolean);
   }
 
+  function defaultLaunchMode(componentName: string): string {
+    if (componentName === "nullwatch") return "serve";
+    return "gateway";
+  }
+
+  function normalizedLaunchArgs(componentName: string, launchMode: string | undefined): string[] {
+    const args = tokenizeLaunchMode(launchMode || defaultLaunchMode(componentName));
+    if (args.length === 0) args.push(defaultLaunchMode(componentName));
+    if (componentName === "nullwatch" && args[0] === "nullwatch") {
+      args[0] = "serve";
+    }
+    return args;
+  }
+
+  function displayLaunchMode(launchMode: string | undefined): string {
+    const tokens = normalizedLaunchArgs(component, launchMode);
+    const primary = tokens[0] || defaultLaunchMode(component);
+    if (primary === "agent") return "Agent";
+    if (primary === "gateway") return "Gateway";
+    if (primary === "serve") return "Serve";
+    return primary;
+  }
+
   function buildStandaloneLaunchScript(
     componentName: string,
     instanceName: string,
@@ -292,8 +321,7 @@
   ): string {
     if (!version) return "";
 
-    const args = tokenizeLaunchMode(launchMode || "gateway");
-    if (args.length === 0) args.push("gateway");
+    const args = normalizedLaunchArgs(componentName, launchMode);
     if (verbose) args.push("--verbose");
 
     const command = [
@@ -469,6 +497,11 @@
   }
 
   async function refreshUsage(force = false) {
+    if (!supportsUsage) {
+      usageData = null;
+      usageLoading = false;
+      return;
+    }
     const now = Date.now();
     if (!force && now - lastUsageRefreshAt < 15_000) return;
     lastUsageRefreshAt = now;
@@ -538,6 +571,7 @@
 
   $effect(() => {
     usageWindow;
+    if (!supportsUsage) return;
     if (!component || !name) return;
     void refreshUsage(true);
   });
@@ -563,6 +597,9 @@
   $effect(() => {
     component;
     name;
+    if (activeTab === "chat" && !supportsChat) {
+      activeTab = "overview";
+    }
     if ((activeTab === "history" || activeTab === "memory" || activeTab === "skills") && !supportsAgentData) {
       activeTab = "overview";
     }
@@ -690,7 +727,9 @@
     </div>
     <div class="actions">
       <button class="btn" onclick={start} disabled={loading}>Start</button>
-      <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {#if supportsAgentData}
+        <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {/if}
       <button class="btn" onclick={stop} disabled={loading}>Stop</button>
       <button class="btn" onclick={restart} disabled={loading}>Restart</button>
       <button class="btn danger" onclick={remove} disabled={loading}
@@ -704,13 +743,15 @@
       class:active={activeTab === "overview"}
       onclick={() => (activeTab = "overview")}>Overview</button
     >
-    <button
-      class:active={activeTab === "chat"}
-      class:disabled-tab={!chatReady}
-      onclick={() => (activeTab = "chat")}
-      >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
-        >{/if}</button
-    >
+    {#if supportsChat}
+      <button
+        class:active={activeTab === "chat"}
+        class:disabled-tab={!chatReady}
+        onclick={() => (activeTab = "chat")}
+        >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
+          >{/if}</button
+      >
+    {/if}
     {#if supportsAgentData}
       <button
         class:active={activeTab === "history"}
@@ -752,7 +793,7 @@
         </div>
         <div class="info-card">
           <span class="label">Launch Mode</span>
-          <span class="mode-value">{(instance?.launch_mode || "gateway") === "agent" ? "Agent" : "Gateway"}</span>
+          <span class="mode-value">{displayLaunchMode(instance?.launch_mode)}</span>
         </div>
         <div class="info-card">
           <span class="label">Auto Start</span>
@@ -1038,56 +1079,58 @@
             {/if}
           </div>
         {/if}
-        <div class="info-card usage-card">
-          <div class="usage-header">
-            <span class="label">LLM Usage</span>
-            <select class="usage-window" bind:value={usageWindow}>
-              <option value="24h">24h</option>
-              <option value="7d">7d</option>
-              <option value="30d">30d</option>
-              <option value="all">All</option>
-            </select>
-          </div>
-          {#if usageLoading}
-            <span class="usage-empty">Loading usage...</span>
-          {:else if !usageData?.rows || usageData.rows.length === 0}
-            <span class="usage-empty">No usage data for selected window.</span>
-          {:else}
-            <div class="usage-table-wrap">
-              <table class="usage-table">
-                <thead>
-                  <tr>
-                    <th>Provider</th>
-                    <th>Model</th>
-                    <th>To provider (prompt)</th>
-                    <th>From provider (completion)</th>
-                    <th>Total</th>
-                    <th>Requests</th>
-                    <th>Last used</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each [...usageData.rows].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)) as row}
+        {#if supportsUsage}
+          <div class="info-card usage-card">
+            <div class="usage-header">
+              <span class="label">LLM Usage</span>
+              <select class="usage-window" bind:value={usageWindow}>
+                <option value="24h">24h</option>
+                <option value="7d">7d</option>
+                <option value="30d">30d</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            {#if usageLoading}
+              <span class="usage-empty">Loading usage...</span>
+            {:else if !usageData?.rows || usageData.rows.length === 0}
+              <span class="usage-empty">No usage data for selected window.</span>
+            {:else}
+              <div class="usage-table-wrap">
+                <table class="usage-table">
+                  <thead>
                     <tr>
-                      <td>{row.provider}</td>
-                      <td class="mono">{row.model}</td>
-                      <td>{formatTokens(row.prompt_tokens)}</td>
-                      <td>{formatTokens(row.completion_tokens)}</td>
-                      <td>{formatTokens(row.total_tokens)}</td>
-                      <td>{row.requests || 0}</td>
-                      <td>{formatLastUsed(row.last_used)}</td>
+                      <th>Provider</th>
+                      <th>Model</th>
+                      <th>To provider (prompt)</th>
+                      <th>From provider (completion)</th>
+                      <th>Total</th>
+                      <th>Requests</th>
+                      <th>Last used</th>
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {/if}
-          {#if usageData?.totals}
-            <div class="usage-total">
-              Total: {formatTokens(usageData.totals.total_tokens)} tokens in {usageData.totals.requests || 0} request(s)
-            </div>
-          {/if}
-        </div>
+                  </thead>
+                  <tbody>
+                    {#each [...usageData.rows].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)) as row}
+                      <tr>
+                        <td>{row.provider}</td>
+                        <td class="mono">{row.model}</td>
+                        <td>{formatTokens(row.prompt_tokens)}</td>
+                        <td>{formatTokens(row.completion_tokens)}</td>
+                        <td>{formatTokens(row.total_tokens)}</td>
+                        <td>{row.requests || 0}</td>
+                        <td>{formatLastUsed(row.last_used)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+            {#if usageData?.totals}
+              <div class="usage-total">
+                Total: {formatTokens(usageData.totals.total_tokens)} tokens in {usageData.totals.requests || 0} request(s)
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     {:else if activeTab === "history"}
       {#key instanceRouteKey}
@@ -1113,7 +1156,7 @@
       <div class="advanced-panel">
         <div class="advanced-card">
           <h3>Standalone Launch</h3>
-          {#if component === "nullclaw" && standaloneBinaryPath}
+          {#if standaloneBinaryPath}
             <p>
               Run this instance without <code>nullhub</code>, reusing the same
               config, auth, data, and logs directory.
@@ -1156,8 +1199,7 @@
             </p>
           {:else}
             <p>
-              Standalone launch instructions are available for <code>nullclaw</code>
-              instances for now.
+              Standalone launch instructions are available after this instance has a versioned binary.
             </p>
           {/if}
         </div>

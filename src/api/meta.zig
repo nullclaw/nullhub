@@ -1333,6 +1333,16 @@ const routes = [_]RouteSpec{
         .body = "Forwarded as-is to the orchestration backend.",
         .response = "Forwarded upstream JSON response.",
     },
+    .{
+        .id = "observability.proxy",
+        .method = "ANY",
+        .path_template = "/api/observability/{...}",
+        .category = "observability",
+        .summary = "Proxy observability requests to a managed or configured NullWatch instance.",
+        .auth_mode = "optional_bearer",
+        .body = "Forwarded as-is to NullWatch.",
+        .response = "Forwarded upstream JSON response.",
+    },
 };
 
 pub fn allRoutes() []const RouteSpec {
