@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
+const registry = @import("../installer/registry.zig");
 const helpers = @import("helpers.zig");
 const local_binary = @import("../core/local_binary.zig");
 const component_cli = @import("../core/component_cli.zig");
@@ -1917,7 +1918,8 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
         }
     }
 
-    var launch = launch_args_mod.resolve(allocator, launch_cmd, launch_verbose) catch return badRequest("{\"error\":\"invalid launch_mode\"}");
+    const normalized_launch_cmd = registry.normalizeLaunchCommand(component, launch_cmd);
+    var launch = launch_args_mod.resolve(allocator, normalized_launch_cmd, launch_verbose) catch return badRequest("{\"error\":\"invalid launch_mode\"}");
     defer launch.deinit();
     // The launch-mode helper decides whether this mode should be supervised via
     // an HTTP health endpoint or process liveness only.
@@ -3152,9 +3154,15 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     };
 
     // 5. Register in state
+    const default_launch_mode = if (registry.findKnownComponent(component)) |known|
+        known.default_launch_command
+    else
+        "gateway";
+
     s.addInstance(component, "default", .{
         .version = version,
         .auto_start = false,
+        .launch_mode = default_launch_mode,
         .verbose = false,
     }) catch return helpers.serverError();
     s.save() catch return helpers.serverError();
@@ -3180,7 +3188,7 @@ pub fn handlePatch(s: *state_mod.State, component: []const u8, name: []const u8,
     defer parsed.deinit();
 
     const new_auto_start = parsed.value.auto_start orelse entry.auto_start;
-    const new_launch_mode = parsed.value.launch_mode orelse entry.launch_mode;
+    const new_launch_mode = registry.normalizeLaunchCommand(component, parsed.value.launch_mode orelse entry.launch_mode);
     const new_verbose = parsed.value.verbose orelse entry.verbose;
 
     var validated_launch = launch_args_mod.resolve(s.allocator, new_launch_mode, new_verbose) catch
@@ -4474,6 +4482,24 @@ test "handlePatch updates launch_mode" {
 
     const entry = s.getInstance("nullclaw", "my-agent").?;
     try std.testing.expectEqualStrings("agent", entry.launch_mode);
+}
+
+test "handlePatch normalizes service component launch_mode" {
+    const allocator = std.testing.allocator;
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+
+    try s.addInstance("nullboiler", "default", .{ .version = "1.0.0", .launch_mode = "server" });
+
+    const resp = handlePatch(&s, "nullboiler", "default", "{\"launch_mode\":\"nullboiler\"}");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const entry = s.getInstance("nullboiler", "default").?;
+    try std.testing.expectEqualStrings("server", entry.launch_mode);
 }
 
 test "handlePatch rejects invalid launch_mode" {

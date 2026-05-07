@@ -16,6 +16,7 @@ pub const KnownComponent = struct {
     description: []const u8,
     repo: []const u8,
     is_alpha: bool = false,
+    installable: bool = true,
     default_launch_command: []const u8 = "gateway",
     default_health_endpoint: []const u8 = "/health",
     default_port: u16 = 3000,
@@ -38,8 +39,10 @@ pub const known_components = [_]KnownComponent{
         .name = "nullboiler",
         .display_name = "NullBoiler",
         .description = "DAG-based workflow orchestrator. Chains agents into multi-step pipelines with branching, loops, and parallel execution. Turns NullClaw agents into teams.",
-        .repo = "nullclaw/NullBoiler",
+        .repo = "nullclaw/nullboiler",
         .is_alpha = true,
+        .default_launch_command = "server",
+        .default_port = 8080,
     },
     .{
         .name = "nulltickets",
@@ -47,6 +50,8 @@ pub const known_components = [_]KnownComponent{
         .description = "Task and issue tracker for AI agents. Project management that agents can read, create, and update autonomously via API.",
         .repo = "nullclaw/nulltickets",
         .is_alpha = true,
+        .default_launch_command = "server",
+        .default_port = 7700,
     },
 };
 
@@ -58,6 +63,19 @@ pub fn findKnownComponent(name: []const u8) ?KnownComponent {
         }
     }
     return null;
+}
+
+/// NullBoiler and NullTickets expose long-lived API services as the default
+/// process. Their manifests historically named the binary as the launch
+/// command; NullHub stores the service mode as `server` so process supervision
+/// can use HTTP health checks without passing a component-name argument.
+pub fn normalizeLaunchCommand(component: []const u8, command: []const u8) []const u8 {
+    if ((std.mem.eql(u8, component, "nullboiler") or std.mem.eql(u8, component, "nulltickets")) and
+        (std.mem.eql(u8, command, component) or std.mem.eql(u8, command, "serve")))
+    {
+        return "server";
+    }
+    return command;
 }
 
 // ─── URL builders ────────────────────────────────────────────────────────────
@@ -235,11 +253,19 @@ test "findKnownComponent returns nullclaw" {
 test "findKnownComponent returns nullboiler" {
     const comp = findKnownComponent("nullboiler");
     try std.testing.expect(comp != null);
-    try std.testing.expectEqualStrings("nullclaw/NullBoiler", comp.?.repo);
+    try std.testing.expectEqualStrings("nullclaw/nullboiler", comp.?.repo);
+    try std.testing.expectEqualStrings("server", comp.?.default_launch_command);
+    try std.testing.expectEqual(@as(u16, 8080), comp.?.default_port);
 }
 
 test "findKnownComponent returns null for unknown" {
     try std.testing.expect(findKnownComponent("nonexistent") == null);
+}
+
+test "normalizeLaunchCommand maps service component binary names to server mode" {
+    try std.testing.expectEqualStrings("server", normalizeLaunchCommand("nullboiler", "nullboiler"));
+    try std.testing.expectEqualStrings("server", normalizeLaunchCommand("nulltickets", "nulltickets"));
+    try std.testing.expectEqualStrings("gateway", normalizeLaunchCommand("nullclaw", "gateway"));
 }
 
 test "buildReleasesUrl" {

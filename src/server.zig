@@ -156,7 +156,8 @@ pub const Server = struct {
         };
         defer self.allocator.free(desired_binary);
 
-        var desired_launch = launch_args_mod.resolve(self.allocator, entry.launch_mode, entry.verbose) catch {
+        const normalized_launch_mode = registry.normalizeLaunchCommand(component, entry.launch_mode);
+        var desired_launch = launch_args_mod.resolve(self.allocator, normalized_launch_mode, entry.verbose) catch {
             self.terminatePersistedRuntime(&runtime, component, name);
             return false;
         };

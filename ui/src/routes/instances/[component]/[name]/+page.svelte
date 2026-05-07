@@ -270,12 +270,26 @@
     return "COMPONENT_HOME";
   }
 
+  function componentPortLabel(componentName: string): string {
+    if (componentName === "nullclaw") return "Gateway";
+    return "API";
+  }
+
+  function formatLaunchMode(launchMode: string | undefined): string {
+    const mode = launchMode || (component === "nullclaw" ? "gateway" : "server");
+    if (mode === "agent") return "Agent";
+    if (mode === "gateway") return "Gateway";
+    if (mode === "server" || mode === "serve") return "Server";
+    return mode;
+  }
+
   function shellQuote(value: string): string {
     if (value === "") return "''";
     return `'${value.replaceAll("'", `'\"'\"'`)}'`;
   }
 
   function tokenizeLaunchMode(launchMode: string): string[] {
+    if (launchMode === "server") return [];
     return launchMode
       .split(/\s+/)
       .map((token) => token.trim())
@@ -292,9 +306,9 @@
   ): string {
     if (!version) return "";
 
-    const args = tokenizeLaunchMode(launchMode || "gateway");
-    if (args.length === 0) args.push("gateway");
-    if (verbose) args.push("--verbose");
+    const args = tokenizeLaunchMode(launchMode || (componentName === "nullclaw" ? "gateway" : "server"));
+    if (args.length === 0 && componentName === "nullclaw") args.push("gateway");
+    if (verbose && args.length > 0) args.push("--verbose");
 
     const command = [
       `"$NULLHUB_HOME/bin/${componentName}-${version}"`,
@@ -563,7 +577,13 @@
   $effect(() => {
     component;
     name;
-    if ((activeTab === "history" || activeTab === "memory" || activeTab === "skills") && !supportsAgentData) {
+    if (
+      (activeTab === "chat" ||
+        activeTab === "history" ||
+        activeTab === "memory" ||
+        activeTab === "skills") &&
+      !supportsAgentData
+    ) {
       activeTab = "overview";
     }
   });
@@ -690,7 +710,9 @@
     </div>
     <div class="actions">
       <button class="btn" onclick={start} disabled={loading}>Start</button>
-      <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {#if supportsAgentData}
+        <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {/if}
       <button class="btn" onclick={stop} disabled={loading}>Stop</button>
       <button class="btn" onclick={restart} disabled={loading}>Restart</button>
       <button class="btn danger" onclick={remove} disabled={loading}
@@ -704,14 +726,14 @@
       class:active={activeTab === "overview"}
       onclick={() => (activeTab = "overview")}>Overview</button
     >
-    <button
-      class:active={activeTab === "chat"}
-      class:disabled-tab={!chatReady}
-      onclick={() => (activeTab = "chat")}
-      >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
-        >{/if}</button
-    >
     {#if supportsAgentData}
+      <button
+        class:active={activeTab === "chat"}
+        class:disabled-tab={!chatReady}
+        onclick={() => (activeTab = "chat")}
+        >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
+          >{/if}</button
+      >
       <button
         class:active={activeTab === "history"}
         onclick={() => (activeTab = "history")}>History</button
@@ -752,7 +774,7 @@
         </div>
         <div class="info-card">
           <span class="label">Launch Mode</span>
-          <span class="mode-value">{(instance?.launch_mode || "gateway") === "agent" ? "Agent" : "Gateway"}</span>
+          <span class="mode-value">{formatLaunchMode(instance?.launch_mode)}</span>
         </div>
         <div class="info-card">
           <span class="label">Auto Start</span>
@@ -792,7 +814,7 @@
         {/if}
         {#if instance?.port}
           <div class="info-card">
-            <span class="label">Port</span>
+            <span class="label">{componentPortLabel(component)} Port</span>
             <span class="mono">{instance.port}</span>
           </div>
         {/if}
@@ -1113,7 +1135,7 @@
       <div class="advanced-panel">
         <div class="advanced-card">
           <h3>Standalone Launch</h3>
-          {#if component === "nullclaw" && standaloneBinaryPath}
+          {#if standaloneBinaryPath}
             <p>
               Run this instance without <code>nullhub</code>, reusing the same
               config, auth, data, and logs directory.
@@ -1156,8 +1178,7 @@
             </p>
           {:else}
             <p>
-              Standalone launch instructions are available for <code>nullclaw</code>
-              instances for now.
+              Standalone launch instructions appear once this instance has a managed binary.
             </p>
           {/if}
         </div>

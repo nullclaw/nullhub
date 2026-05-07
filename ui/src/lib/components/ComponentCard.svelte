@@ -6,13 +6,14 @@
     displayName = "",
     description = "",
     alpha = false,
+    installable = true,
     installed = false,
     standalone = false,
     instanceCount = 0,
   } = $props();
   let importing = $state(false);
   let imported = $state(false);
-  let comingSoon = $derived(alpha && !installed && !standalone);
+  let comingSoon = $derived(!installable && !installed && !standalone);
 
   async function handleImport(e: MouseEvent) {
     e.preventDefault();
