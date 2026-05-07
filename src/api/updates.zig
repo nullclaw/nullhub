@@ -197,7 +197,8 @@ pub fn handleApplyUpdateRuntime(
 
     const inst_dir = paths.instanceDir(allocator, component, name) catch return serverError();
     defer allocator.free(inst_dir);
-    var launch = launch_args_mod.resolve(allocator, entry.launch_mode, entry.verbose) catch return serverError();
+    const launch_mode = registry.normalizeLaunchCommand(component, entry.launch_mode);
+    var launch = launch_args_mod.resolve(allocator, launch_mode, entry.verbose) catch return serverError();
     defer launch.deinit();
     const effective_port = launch.effectiveHealthPort(port);
 

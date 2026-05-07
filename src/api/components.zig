@@ -62,13 +62,14 @@ fn buildListJson(allocator: std.mem.Allocator, s: *state_mod.State) ![]const u8 
         const installed = has_dot_dir or instance_count > 0;
 
         try buf.print(
-            "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"{s}\",\"repo\":\"{s}\",\"alpha\":{s},\"installed\":{s},\"standalone\":{s},\"instance_count\":{d}}}",
+            "{{\"name\":\"{s}\",\"display_name\":\"{s}\",\"description\":\"{s}\",\"repo\":\"{s}\",\"alpha\":{s},\"installable\":{s},\"installed\":{s},\"standalone\":{s},\"instance_count\":{d}}}",
             .{
                 comp.name,
                 comp.display_name,
                 comp.description,
                 comp.repo,
                 if (comp.is_alpha) "true" else "false",
+                if (comp.installable) "true" else "false",
                 if (installed) "true" else "false",
                 if (standalone) "true" else "false",
                 instance_count,
@@ -209,11 +210,13 @@ test "handleList returns valid JSON with all 3 known components" {
 
     // Verify repo fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nullclaw\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/NullBoiler\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nullboiler\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nullclaw/nulltickets\"") != null);
 
     // Verify structural fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"alpha\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"installable\"") != null);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, json, "\"installable\":true"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "\"alpha\":true"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\"alpha\":false"));
     try std.testing.expect(std.mem.indexOf(u8, json, "\"installed\"") != null);

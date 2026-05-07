@@ -36,6 +36,16 @@ pub fn resolve(
         try appendOwnedToken(allocator, &list, "start");
     }
 
+    if (list.items.len == 1 and std.mem.eql(u8, list.items[0], "server")) {
+        deinitOwnedArgList(allocator, &list);
+        return .{
+            .allocator = allocator,
+            .raw_mode = launch_mode,
+            .primary_command = "server",
+            .argv = &.{},
+        };
+    }
+
     if (verbose) {
         try appendOwnedToken(allocator, &list, "--verbose");
     }
@@ -146,7 +156,9 @@ fn deinitOwnedArgList(allocator: std.mem.Allocator, list: *std.ArrayListUnmanage
 }
 
 fn usesHttpHealthChecksCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "serve") or std.mem.eql(u8, command, "gateway");
+    return std.mem.eql(u8, command, "serve") or
+        std.mem.eql(u8, command, "server") or
+        std.mem.eql(u8, command, "gateway");
 }
 
 pub fn primaryLaunchCommand(launch_mode: []const u8) []const u8 {
@@ -222,6 +234,16 @@ test "buildLaunchArgs expands bare channel to channel start" {
 
 test "resolve rejects empty launch mode" {
     try std.testing.expectError(error.InvalidLaunchMode, resolve(std.testing.allocator, "   \t", false));
+}
+
+test "resolve maps server mode to no child args and HTTP health checks" {
+    const allocator = std.testing.allocator;
+    var resolved = try resolve(allocator, "server", false);
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), resolved.argv.len);
+    try std.testing.expectEqualStrings("server", resolved.primary_command);
+    try std.testing.expect(resolved.usesHttpHealthChecks());
 }
 
 test "resolve rejects unterminated quoted launch mode" {
