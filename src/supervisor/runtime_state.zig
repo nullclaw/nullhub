@@ -119,29 +119,47 @@ pub fn load(
     var runtime = PersistedRuntime{
         .pid = parsed.value.pid,
         .port = parsed.value.port,
-        .health_endpoint = try allocator.dupe(u8, parsed.value.health_endpoint),
-        .binary_path = try allocator.dupe(u8, parsed.value.binary_path),
-        .working_dir = try allocator.dupe(u8, parsed.value.working_dir),
-        .config_path = try allocator.dupe(u8, parsed.value.config_path),
-        .launch_command = try allocator.dupe(u8, parsed.value.launch_command),
-        .launch_args = if (parsed.value.launch_args.len == 0)
-            &.{}
-        else
-            try allocator.alloc([]u8, parsed.value.launch_args.len),
+        .health_endpoint = "",
+        .binary_path = "",
+        .working_dir = "",
+        .config_path = "",
+        .launch_command = "",
+        .launch_args = &.{},
         .started_at = parsed.value.started_at,
         .starting_since = parsed.value.starting_since,
     };
     errdefer runtime.deinit(allocator);
 
-    for (parsed.value.launch_args, 0..) |arg, idx| {
-        runtime.launch_args[idx] = try allocator.dupe(u8, arg);
-    }
+    runtime.health_endpoint = try allocator.dupe(u8, parsed.value.health_endpoint);
+    runtime.binary_path = try allocator.dupe(u8, parsed.value.binary_path);
+    runtime.working_dir = try allocator.dupe(u8, parsed.value.working_dir);
+    runtime.config_path = try allocator.dupe(u8, parsed.value.config_path);
+    runtime.launch_command = try allocator.dupe(u8, parsed.value.launch_command);
+    runtime.launch_args = try cloneLaunchArgs(allocator, parsed.value.launch_args);
 
     if (!runtime.isValid()) {
         runtime.deinit(allocator);
         return error.InvalidRuntimeState;
     }
     return runtime;
+}
+
+fn cloneLaunchArgs(allocator: std.mem.Allocator, args: []const []const u8) ![][]u8 {
+    if (args.len == 0) return &.{};
+
+    const owned = try allocator.alloc([]u8, args.len);
+    errdefer allocator.free(owned);
+
+    var cloned: usize = 0;
+    errdefer {
+        for (owned[0..cloned]) |arg| allocator.free(arg);
+    }
+
+    for (args, 0..) |arg, idx| {
+        owned[idx] = try allocator.dupe(u8, arg);
+        cloned += 1;
+    }
+    return owned;
 }
 
 pub fn delete(
@@ -193,17 +211,12 @@ test "runtime state round-trips through instance.json" {
 
 test "load accepts persisted runtime json written by supervisor" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-runtime-state-load";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var paths = try paths_mod.Paths.init(allocator, tmp_root);
-    defer paths.deinit(allocator);
-    try paths.ensureDirs();
-
-    const meta_path = try paths.instanceMeta(allocator, "nullclaw", "demo");
+    const meta_path = try fixture.paths.instanceMeta(allocator, "nullclaw", "demo");
     defer allocator.free(meta_path);
-    const inst_dir = try paths.instanceDir(allocator, "nullclaw", "demo");
+    const inst_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "demo");
     defer allocator.free(inst_dir);
     try fs_compat.makePath(inst_dir);
 
@@ -214,7 +227,7 @@ test "load accepts persisted runtime json written by supervisor" {
     defer file.close();
     try file.writeAll(body);
 
-    var loaded = (try load(allocator, paths, "nullclaw", "demo")).?;
+    var loaded = (try load(allocator, fixture.paths, "nullclaw", "demo")).?;
     defer loaded.deinit(allocator);
 
     try std.testing.expectEqual(@as(u64, 39275), loaded.pid);
