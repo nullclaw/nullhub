@@ -26,7 +26,7 @@ jobs:
           {"os":"macos-latest","target":"macos-aarch64","zig_target":"aarch64-macos"},
           {"os":"windows-latest","target":"windows-x86_64","zig_target":"x86_64-windows"}
         ]
-      test_command: zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
+      test_command: bash tests/test_backend.sh
       pre_build_command: |
         npm --prefix ui ci --no-audit --no-fund
         npm --prefix ui run build

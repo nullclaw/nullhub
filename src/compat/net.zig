@@ -91,10 +91,10 @@ pub const Stream = struct {
                 }
             }
         }
-        var stream_reader = self.toInner().reader(shared.io(), &[_]u8{});
-        return stream_reader.interface.readSliceShort(buffer) catch |err| switch (err) {
-            error.ReadFailed => return stream_reader.err orelse error.Unexpected,
-        };
+        if (buffer.len == 0) return 0;
+        const io = shared.io();
+        var data: [1][]u8 = .{buffer};
+        return io.vtable.netRead(io.userdata, self.handle, &data);
     }
 
     pub fn write(self: Stream, bytes: []const u8) WriteError!usize {

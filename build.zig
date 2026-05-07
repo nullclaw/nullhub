@@ -108,7 +108,8 @@ pub fn build(b: *std.Build) void {
     const run_integration_tests = b.addRunArtifact(integration_tests);
     run_integration_tests.step.dependOn(b.getInstallStep());
     run_integration_tests.setCwd(b.path("."));
-    run_integration_tests.setEnvironmentVariable("NULLHUB_INTEGRATION_BIN", "zig-out/bin/nullhub");
+    const integration_bin_name = b.fmt("nullhub{s}", .{target.result.exeFileExt()});
+    run_integration_tests.setEnvironmentVariable("NULLHUB_INTEGRATION_BIN", b.getInstallPath(.bin, integration_bin_name));
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_integration_tests.step);
 }

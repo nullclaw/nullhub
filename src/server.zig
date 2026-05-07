@@ -418,14 +418,17 @@ pub const Server = struct {
                 std.debug.print("accept error: {}\n", .{err});
                 continue;
             };
-            defer conn.stream.close();
 
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena.deinit();
+            {
+                defer conn.stream.close();
 
-            self.handleConnection(conn, arena.allocator()) catch |err| {
-                std.debug.print("request error: {}\n", .{err});
-            };
+                var arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer arena.deinit();
+
+                self.handleConnection(conn, arena.allocator()) catch |err| {
+                    std.debug.print("request error: {}\n", .{err});
+                };
+            }
         }
     }
 
@@ -1198,6 +1201,12 @@ fn sendResponse(stream: std_compat.net.Stream, response: Response, raw_request: 
     try writer.print("Content-Length: {d}\r\n", .{response.body.len});
     try appendCorsHeaders(&writer, raw_request, bind_host, port, extra_origins);
     try writer.writeAll("Connection: close\r\n\r\n");
+
+    if (response.body.len <= buf.len - writer.buffered().len) {
+        try writer.writeAll(response.body);
+        try net_compat.streamWriteAll(stream, writer.buffered());
+        return;
+    }
 
     try net_compat.streamWriteAll(stream, writer.buffered());
     if (response.body.len > 0) {

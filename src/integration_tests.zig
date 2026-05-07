@@ -1,8 +1,6 @@
 const std = @import("std");
 const std_compat = @import("compat");
 const builtin = @import("builtin");
-const paths_mod = @import("core/paths.zig");
-const state_mod = @import("core/state.zig");
 
 const IntegrationServer = struct {
     allocator: std.mem.Allocator,
@@ -10,8 +8,8 @@ const IntegrationServer = struct {
     temp_root: []const u8,
     home_dir: []const u8,
     port: u16,
-    child: std_compat.process.Child,
-    env_map: std_compat.process.EnvMap,
+    child: ?std_compat.process.Child = null,
+    env_map: ?std_compat.process.EnvMap = null,
 
     fn start(allocator: std.mem.Allocator) !IntegrationServer {
         if (builtin.os.tag == .wasi) return error.SkipZigTest;
@@ -21,37 +19,23 @@ const IntegrationServer = struct {
         }.call);
     }
 
-    fn startWithEnv(
-        allocator: std.mem.Allocator,
-        extra_env: []const EnvEntry,
-    ) !IntegrationServer {
-        return startWithSeedAndEnv(allocator, struct {
-            fn call(_: *IntegrationServer) !void {}
-        }.call, extra_env);
-    }
-
     fn startWithSeed(
         allocator: std.mem.Allocator,
         comptime seedFn: *const fn (*IntegrationServer) anyerror!void,
     ) !IntegrationServer {
-        return startWithSeedAndEnv(allocator, seedFn, &.{});
-    }
-
-    fn startWithSeedAndEnv(
-        allocator: std.mem.Allocator,
-        comptime seedFn: *const fn (*IntegrationServer) anyerror!void,
-        extra_env: []const EnvEntry,
-    ) !IntegrationServer {
         if (builtin.os.tag == .wasi) return error.SkipZigTest;
 
         var tmp_dir = std.testing.tmpDir(.{});
-        errdefer tmp_dir.cleanup();
+        var cleanup_tmp_dir = true;
+        errdefer if (cleanup_tmp_dir) tmp_dir.cleanup();
 
         const temp_root = try std_compat.fs.Dir.wrap(tmp_dir.dir).realpathAlloc(allocator, ".");
-        errdefer allocator.free(temp_root);
+        var cleanup_temp_root = true;
+        errdefer if (cleanup_temp_root) allocator.free(temp_root);
 
         const home_dir = try std.fs.path.join(allocator, &.{ temp_root, "home" });
-        errdefer allocator.free(home_dir);
+        var cleanup_home_dir = true;
+        errdefer if (cleanup_home_dir) allocator.free(home_dir);
         try std_compat.fs.makeDirAbsolute(home_dir);
 
         var server = IntegrationServer{
@@ -60,9 +44,10 @@ const IntegrationServer = struct {
             .temp_root = temp_root,
             .home_dir = home_dir,
             .port = undefined,
-            .child = undefined,
-            .env_map = undefined,
         };
+        cleanup_tmp_dir = false;
+        cleanup_temp_root = false;
+        cleanup_home_dir = false;
         errdefer server.deinit();
 
         try seedFn(&server);
@@ -76,31 +61,31 @@ const IntegrationServer = struct {
         defer allocator.free(exe_path);
 
         server.env_map = try std_compat.process.getEnvMap(allocator);
-        errdefer server.env_map.deinit();
-        try server.env_map.put("HOME", home_dir);
-        for (extra_env) |entry| try server.env_map.put(entry.key, entry.value);
+        try server.env_map.?.put("HOME", home_dir);
 
         const argv = try allocator.dupe([]const u8, &.{ exe_path, "serve", "--port", port_text, "--no-open" });
         defer allocator.free(argv);
 
-        server.child = std_compat.process.Child.init(argv, allocator);
-        server.child.cwd = ".";
-        server.child.env_map = &server.env_map;
-        server.child.stdin_behavior = .Ignore;
-        server.child.stdout_behavior = .Ignore;
-        server.child.stderr_behavior = .Ignore;
-        try server.child.spawn();
+        var child = std_compat.process.Child.init(argv, allocator);
+        child.cwd = ".";
+        child.env_map = &server.env_map.?;
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = if (builtin.os.tag == .windows) .Inherit else .Ignore;
+        try child.spawn();
+        child.argv = &.{};
+        server.child = child;
 
         try server.waitUntilReady();
         return server;
     }
 
     fn deinit(self: *IntegrationServer) void {
-        if (@intFromPtr(self.child.argv.ptr) != 0) {
-            _ = self.child.kill() catch {};
-            _ = self.child.wait() catch {};
+        if (self.child) |*child| {
+            _ = child.kill() catch {};
+            _ = child.wait() catch {};
         }
-        if (self.env_map.count() > 0) self.env_map.deinit();
+        if (self.env_map) |*env_map| env_map.deinit();
         self.allocator.free(self.home_dir);
         self.allocator.free(self.temp_root);
         self.tmp_dir.cleanup();
@@ -109,7 +94,8 @@ const IntegrationServer = struct {
 
     fn waitUntilReady(self: *IntegrationServer) !void {
         var attempt: usize = 0;
-        while (attempt < 40) : (attempt += 1) {
+        const max_attempts = 40;
+        while (attempt < max_attempts) : (attempt += 1) {
             const result = self.fetch(.{ .path = "/health" });
             if (result) |resp| {
                 defer resp.deinit(self.allocator);
@@ -126,24 +112,32 @@ const IntegrationServer = struct {
         const url = try std.fmt.allocPrint(self.allocator, "http://127.0.0.1:{d}{s}", .{ self.port, req.path });
         defer self.allocator.free(url);
 
-        var client: std.http.Client = .{ .allocator = self.allocator, .io = std_compat.io() };
+        const payload = payloadForRequest(req.method, req.body);
+        var headers: std.http.Client.Request.Headers = .{
+            .connection = .{ .override = "close" },
+        };
+        if (payload) |bytes| {
+            if (bytes.len > 0) {
+                headers.content_type = .{ .override = "application/json" };
+            }
+        }
+
+        var client: std.http.Client = .{
+            .allocator = self.allocator,
+            .io = std_compat.io(),
+        };
         defer client.deinit();
 
         var body: std.Io.Writer.Allocating = .init(self.allocator);
         errdefer body.deinit();
 
-        var header_buf: [1]std.http.Header = undefined;
-        const extra_headers: []const std.http.Header = if (req.body.len > 0) blk: {
-            header_buf[0] = .{ .name = "Content-Type", .value = "application/json" };
-            break :blk header_buf[0..1];
-        } else &.{};
-
         const result = try client.fetch(.{
             .location = .{ .url = url },
             .method = req.method,
-            .payload = if (req.body.len > 0 or req.method.requestHasBody()) req.body else null,
+            .payload = payload,
+            .keep_alive = false,
+            .headers = headers,
             .response_writer = &body.writer,
-            .extra_headers = extra_headers,
         });
 
         return .{
@@ -152,17 +146,16 @@ const IntegrationServer = struct {
         };
     }
 
-    fn paths(self: *IntegrationServer) !paths_mod.Paths {
-        const root = try std.fs.path.join(self.allocator, &.{ self.home_dir, ".nullhub" });
-        defer self.allocator.free(root);
-        return try paths_mod.Paths.init(self.allocator, root);
+    fn nullhubRoot(self: *IntegrationServer) ![]const u8 {
+        return std.fs.path.join(self.allocator, &.{ self.home_dir, ".nullhub" });
     }
 };
 
-const EnvEntry = struct {
-    key: []const u8,
-    value: []const u8,
-};
+fn payloadForRequest(method: std.http.Method, body: []const u8) ?[]const u8 {
+    if (body.len > 0) return body;
+    if (method.requestHasBody()) return body;
+    return null;
+}
 
 const Request = struct {
     path: []const u8,
@@ -186,23 +179,44 @@ fn reservePort() !u16 {
     return listener.listen_address.in.getPort();
 }
 
+const StateInstanceEntry = struct {
+    version: []const u8,
+    auto_start: bool = false,
+    launch_mode: []const u8 = "gateway",
+    verbose: bool = false,
+};
+
 fn seedManagedInstance(server: *IntegrationServer, component: []const u8, name: []const u8) !void {
-    var paths = try server.paths();
-    defer paths.deinit(server.allocator);
-    try paths.ensureDirs();
+    const root = try server.nullhubRoot();
+    defer server.allocator.free(root);
+    try std_compat.fs.cwd().makePath(root);
 
-    const state_path = try paths.state(server.allocator);
+    const state_path = try std.fs.path.join(server.allocator, &.{ root, "state.json" });
     defer server.allocator.free(state_path);
-    var state = state_mod.State.init(server.allocator, state_path);
-    defer state.deinit();
 
-    try state.addInstance(component, name, .{
+    var component_instances = std.json.ArrayHashMap(StateInstanceEntry){};
+    defer component_instances.deinit(server.allocator);
+    try component_instances.map.put(server.allocator, name, .{
         .version = "1.0.0",
         .auto_start = false,
         .launch_mode = "gateway",
         .verbose = false,
     });
-    try state.save();
+
+    var instances = std.json.ArrayHashMap(std.json.ArrayHashMap(StateInstanceEntry)){};
+    defer instances.deinit(server.allocator);
+    try instances.map.put(server.allocator, component, component_instances);
+
+    const state_json = try std.json.Stringify.valueAlloc(server.allocator, .{
+        .instances = instances,
+        .saved_providers = &.{},
+        .saved_channels = &.{},
+    }, .{ .whitespace = .indent_2 });
+    defer server.allocator.free(state_json);
+
+    const file = try std_compat.fs.createFileAbsolute(state_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(state_json);
 }
 
 test "integration harness serves health and core api routes" {
