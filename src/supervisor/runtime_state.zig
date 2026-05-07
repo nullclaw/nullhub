@@ -2,6 +2,7 @@ const std = @import("std");
 const std_compat = @import("compat");
 const fs_compat = @import("../fs_compat.zig");
 const paths_mod = @import("../core/paths.zig");
+const test_helpers = @import("../test_helpers.zig");
 
 pub const PersistedRuntimeView = struct {
     pid: u64,
@@ -159,14 +160,10 @@ pub fn delete(
 
 test "runtime state round-trips through instance.json" {
     const allocator = std.testing.allocator;
-    const tmp_root = "/tmp/nullhub-test-runtime-state";
-    std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
-    defer std_compat.fs.deleteTreeAbsolute(tmp_root) catch {};
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
 
-    var paths = try paths_mod.Paths.init(allocator, tmp_root);
-    defer paths.deinit(allocator);
-
-    try write(allocator, paths, "nullclaw", "demo", .{
+    try write(allocator, fixture.paths, "nullclaw", "demo", .{
         .pid = 42,
         .port = 8080,
         .health_endpoint = "/health",
@@ -179,7 +176,7 @@ test "runtime state round-trips through instance.json" {
         .starting_since = 1000,
     });
 
-    var loaded = (try load(allocator, paths, "nullclaw", "demo")).?;
+    var loaded = (try load(allocator, fixture.paths, "nullclaw", "demo")).?;
     defer loaded.deinit(allocator);
 
     try std.testing.expectEqual(@as(u64, 42), loaded.pid);
@@ -190,8 +187,8 @@ test "runtime state round-trips through instance.json" {
     try std.testing.expectEqual(@as(usize, 2), loaded.launch_args.len);
     try std.testing.expectEqualStrings("--verbose", loaded.launch_args[1]);
 
-    delete(allocator, paths, "nullclaw", "demo");
-    try std.testing.expect((try load(allocator, paths, "nullclaw", "demo")) == null);
+    delete(allocator, fixture.paths, "nullclaw", "demo");
+    try std.testing.expect((try load(allocator, fixture.paths, "nullclaw", "demo")) == null);
 }
 
 test "load accepts persisted runtime json written by supervisor" {

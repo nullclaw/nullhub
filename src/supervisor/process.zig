@@ -3,6 +3,31 @@ const std_compat = @import("compat");
 const builtin = @import("builtin");
 const windows = std.os.windows;
 
+const darwin = if (builtin.os.tag == .macos) struct {
+    const extern_structs = struct {
+        pub const ProcBsdShortInfo = extern struct {
+            pbsi_pid: u32,
+            pbsi_ppid: u32,
+            pbsi_pgid: u32,
+            pbsi_status: u32,
+            pbsi_comm: [16]u8,
+            pbsi_flags: u32,
+            pbsi_uid: u32,
+            pbsi_gid: u32,
+            pbsi_ruid: u32,
+            pbsi_rgid: u32,
+            pbsi_svuid: u32,
+            pbsi_svgid: u32,
+            pbsi_rfu: u32,
+        };
+    };
+
+    const PROC_PIDT_SHORTBSDINFO: i32 = 13;
+    const SZOMB: u32 = 5;
+
+    extern "c" fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: ?*anyopaque, buffersize: i32) c_int;
+} else struct {};
+
 const kernel32 = struct {
     extern "kernel32" fn GetProcessId(
         process: windows.HANDLE,
@@ -207,10 +232,30 @@ pub fn isAlive(pid: std_compat.process.Child.Id) bool {
             else => false,
         };
     }
-    return switch (std.posix.errno(std.posix.system.kill(pid, @as(std.posix.SIG, @enumFromInt(0))))) {
+    const alive = switch (std.posix.errno(std.posix.system.kill(pid, @as(std.posix.SIG, @enumFromInt(0))))) {
         .SUCCESS => true,
         else => false,
     };
+    if (!alive) return false;
+
+    if (comptime builtin.os.tag == .macos) {
+        return !isDarwinZombie(pid);
+    }
+
+    return true;
+}
+
+fn isDarwinZombie(pid: std_compat.process.Child.Id) bool {
+    var info: darwin.extern_structs.ProcBsdShortInfo = undefined;
+    const size = darwin.proc_pidinfo(
+        @intCast(pid),
+        darwin.PROC_PIDT_SHORTBSDINFO,
+        0,
+        @ptrCast(&info),
+        @sizeOf(darwin.extern_structs.ProcBsdShortInfo),
+    );
+    if (size != @sizeOf(darwin.extern_structs.ProcBsdShortInfo)) return false;
+    return info.pbsi_status == darwin.SZOMB;
 }
 
 pub fn persistedPidValue(pid: std_compat.process.Child.Id) ?u64 {
@@ -362,6 +407,20 @@ test "isAlive returns false for non-existent pid" {
 
     // PID 99999999 is almost certainly not a running process
     try std.testing.expect(!isAlive(99999999));
+}
+
+test "isAlive returns false for zombie process on macOS" {
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const result = try spawn(std.testing.allocator, .{
+        .binary = "/bin/sh",
+        .argv = &.{ "-c", "exit 0" },
+    });
+    var child = result.child;
+    defer _ = child.wait() catch {};
+
+    std_compat.thread.sleep(50 * std.time.ns_per_ms);
+    try std.testing.expect(!isAlive(result.pid));
 }
 
 test "terminate non-existent pid does not error" {

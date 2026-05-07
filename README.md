@@ -51,8 +51,8 @@ Local access chain:
 
 ### Build Prerequisites
 
-- `npm` is required for `zig build` and `zig build test` because the Svelte UI is
-  built and embedded into the binary during the Zig build.
+- `npm` is required for `zig build` and for any build that embeds the Svelte UI.
+- Backend-only tests can run without UI assets via `zig build test -Dembed-ui=false -Dbuild-ui=false`.
 
 When these tools are missing, `nullhub` will try to install them automatically
 via available system package managers (`apt`, `dnf`, `yum`, `pacman`, `zypper`,
@@ -121,10 +121,13 @@ optional `NULLTICKETS_TOKEN`.
 
 ## Development
 
+Testing strategy and roadmap live in [TESTING.md](TESTING.md).
+
 Backend:
 
 ```bash
-zig build test
+zig build test -Dembed-ui=false -Dbuild-ui=false --summary all
+zig build test-integration -Dembed-ui=false -Dbuild-ui=false --summary all
 ```
 
 Frontend:
@@ -138,6 +141,9 @@ End-to-end:
 ```bash
 ./tests/test_e2e.sh
 ```
+
+`zig build test-integration` runs structured backend HTTP integration tests
+against a real `nullhub` process started in a temporary home directory.
 
 ## Tech Stack
 
