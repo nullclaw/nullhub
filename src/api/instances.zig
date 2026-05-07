@@ -16,6 +16,7 @@ const nullclaw_web_channel = @import("../core/nullclaw_web_channel.zig");
 const query_api = @import("query.zig");
 const test_helpers = @import("../test_helpers.zig");
 const instance_runtime = @import("instance_runtime.zig");
+const registry = @import("../installer/registry.zig");
 
 const ApiResponse = helpers.ApiResponse;
 const appendEscaped = helpers.appendEscaped;
@@ -28,6 +29,16 @@ const default_tracker_prompt_template =
     "Task {{task.id}}: {{task.title}}\n\n{{task.description}}\n\nMetadata:\n{{task.metadata}}";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn defaultLaunchModeForComponent(component: []const u8) []const u8 {
+    if (registry.findKnownComponent(component)) |known| return known.default_launch_command;
+    return "gateway";
+}
+
+fn isLegacyDefaultLaunchMode(component: []const u8, launch_mode: []const u8) bool {
+    const default_launch = defaultLaunchModeForComponent(component);
+    return !std.mem.eql(u8, default_launch, "gateway") and std.mem.eql(u8, launch_mode, "gateway");
+}
 
 const FetchedJsonValue = struct {
     bytes: []u8,
@@ -1926,7 +1937,10 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
 
     if (!launch_mode_overridden) {
         if (manifest_launch_mode) |mode| {
-            if (std.mem.eql(u8, launch_cmd, manifest_launch_command) and !std.mem.eql(u8, launch_cmd, mode)) {
+            const should_normalize_launch =
+                (std.mem.eql(u8, launch_cmd, manifest_launch_command) and !std.mem.eql(u8, launch_cmd, mode)) or
+                isLegacyDefaultLaunchMode(component, launch_cmd);
+            if (should_normalize_launch) {
                 launch_cmd = mode;
                 _ = s.updateInstance(component, name, .{
                     .version = entry.version,
@@ -3184,6 +3198,7 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
     s.addInstance(component, "default", .{
         .version = version,
         .auto_start = false,
+        .launch_mode = defaultLaunchModeForComponent(component),
         .verbose = false,
     }) catch return helpers.serverError();
     s.save() catch return helpers.serverError();
@@ -3853,6 +3868,15 @@ const TestManagerCtx = struct {
     }
 };
 
+test "component default launch mode uses registry metadata" {
+    try std.testing.expectEqualStrings("gateway", defaultLaunchModeForComponent("nullclaw"));
+    try std.testing.expectEqualStrings("serve", defaultLaunchModeForComponent("nullwatch"));
+    try std.testing.expectEqualStrings("gateway", defaultLaunchModeForComponent("unknown-component"));
+    try std.testing.expect(isLegacyDefaultLaunchMode("nullwatch", "gateway"));
+    try std.testing.expect(!isLegacyDefaultLaunchMode("nullwatch", "serve"));
+    try std.testing.expect(!isLegacyDefaultLaunchMode("nullclaw", "gateway"));
+}
+
 fn writeTestInstanceConfig(
     allocator: std.mem.Allocator,
     paths: paths_mod.Paths,
@@ -4358,6 +4382,47 @@ test "handleStart normalizes manifest binary command to runnable launch args" {
     try std.testing.expectEqual(@as(u16, 43124), status.port);
     const inst = mctx.manager.instances.get("nullwatch/watch").?;
     try std.testing.expectEqual(@as(usize, 1), inst.launch_args.len);
+    try std.testing.expectEqualStrings("serve", inst.launch_args[0]);
+
+    mctx.manager.stopInstance("nullwatch", "watch") catch {};
+}
+
+test "handleStart normalizes legacy default launch mode for nullwatch" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullwatch", "watch", .{ .version = "1.0.0", .launch_mode = "gateway" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullwatch", "watch", "{\"port\":43125}");
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullwatch",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "--export-manifest" ]; then
+        \\  printf '%s\n' '{"launch":{"command":"nullwatch","args":["serve"]},"health":{"endpoint":"/health","port_from_config":"port"},"ports":[{"name":"api","config_key":"port","default":7710,"protocol":"http"}]}'
+        \\  exit 0
+        \\fi
+        \\sleep 60
+        ,
+    );
+
+    const resp = handleStart(allocator, &s, &mctx.manager, mctx.paths, "nullwatch", "watch", "");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const entry = s.getInstance("nullwatch", "watch").?;
+    try std.testing.expectEqualStrings("serve", entry.launch_mode);
+    const inst = mctx.manager.instances.get("nullwatch/watch").?;
     try std.testing.expectEqualStrings("serve", inst.launch_args[0]);
 
     mctx.manager.stopInstance("nullwatch", "watch") catch {};

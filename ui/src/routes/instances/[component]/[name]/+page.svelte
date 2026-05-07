@@ -96,6 +96,7 @@
   );
   let supportsAgentData = $derived(component === "nullclaw");
   let supportsChat = $derived(component === "nullclaw");
+  let supportsUsage = $derived(component === "nullclaw");
   let supportsVerboseStartup = $derived(component === "nullclaw");
   let instanceRouteKey = $derived(`${component}/${name}`);
   let queueSummary = $derived(summarizeQueue(integration?.queue));
@@ -119,18 +120,21 @@
   let standaloneHomeEnv = $derived(componentHomeEnv(component));
   let standaloneHomePath = $derived(`$NULLHUB_HOME/instances/${component}/${name}`);
   let standaloneConfigPath = $derived(`${standaloneHomePath}/config.json`);
+  let hasStandaloneBinary = $derived(Boolean(instance?.version && instance.version !== "standalone"));
   let standaloneBinaryPath = $derived(
-    instance?.version ? `$NULLHUB_HOME/bin/${component}-${instance.version}` : "",
+    hasStandaloneBinary ? `$NULLHUB_HOME/bin/${component}-${instance.version}` : "",
   );
   let standaloneLaunchScript = $derived(
-    buildStandaloneLaunchScript(
-      component,
-      name,
-      instance?.version,
-      instance?.launch_mode,
-      instance?.verbose,
-      standaloneHomeEnv,
-    ),
+    hasStandaloneBinary
+      ? buildStandaloneLaunchScript(
+          component,
+          name,
+          instance?.version,
+          instance?.launch_mode,
+          instance?.verbose,
+          standaloneHomeEnv,
+        )
+      : "",
   );
 
   function extractModel(cfg: any): string | null {
@@ -492,6 +496,11 @@
   }
 
   async function refreshUsage(force = false) {
+    if (!supportsUsage) {
+      usageData = null;
+      usageLoading = false;
+      return;
+    }
     const now = Date.now();
     if (!force && now - lastUsageRefreshAt < 15_000) return;
     lastUsageRefreshAt = now;
@@ -561,6 +570,7 @@
 
   $effect(() => {
     usageWindow;
+    if (!supportsUsage) return;
     if (!component || !name) return;
     void refreshUsage(true);
   });
@@ -1067,56 +1077,58 @@
             {/if}
           </div>
         {/if}
-        <div class="info-card usage-card">
-          <div class="usage-header">
-            <span class="label">LLM Usage</span>
-            <select class="usage-window" bind:value={usageWindow}>
-              <option value="24h">24h</option>
-              <option value="7d">7d</option>
-              <option value="30d">30d</option>
-              <option value="all">All</option>
-            </select>
-          </div>
-          {#if usageLoading}
-            <span class="usage-empty">Loading usage...</span>
-          {:else if !usageData?.rows || usageData.rows.length === 0}
-            <span class="usage-empty">No usage data for selected window.</span>
-          {:else}
-            <div class="usage-table-wrap">
-              <table class="usage-table">
-                <thead>
-                  <tr>
-                    <th>Provider</th>
-                    <th>Model</th>
-                    <th>To provider (prompt)</th>
-                    <th>From provider (completion)</th>
-                    <th>Total</th>
-                    <th>Requests</th>
-                    <th>Last used</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each [...usageData.rows].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)) as row}
+        {#if supportsUsage}
+          <div class="info-card usage-card">
+            <div class="usage-header">
+              <span class="label">LLM Usage</span>
+              <select class="usage-window" bind:value={usageWindow}>
+                <option value="24h">24h</option>
+                <option value="7d">7d</option>
+                <option value="30d">30d</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            {#if usageLoading}
+              <span class="usage-empty">Loading usage...</span>
+            {:else if !usageData?.rows || usageData.rows.length === 0}
+              <span class="usage-empty">No usage data for selected window.</span>
+            {:else}
+              <div class="usage-table-wrap">
+                <table class="usage-table">
+                  <thead>
                     <tr>
-                      <td>{row.provider}</td>
-                      <td class="mono">{row.model}</td>
-                      <td>{formatTokens(row.prompt_tokens)}</td>
-                      <td>{formatTokens(row.completion_tokens)}</td>
-                      <td>{formatTokens(row.total_tokens)}</td>
-                      <td>{row.requests || 0}</td>
-                      <td>{formatLastUsed(row.last_used)}</td>
+                      <th>Provider</th>
+                      <th>Model</th>
+                      <th>To provider (prompt)</th>
+                      <th>From provider (completion)</th>
+                      <th>Total</th>
+                      <th>Requests</th>
+                      <th>Last used</th>
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {/if}
-          {#if usageData?.totals}
-            <div class="usage-total">
-              Total: {formatTokens(usageData.totals.total_tokens)} tokens in {usageData.totals.requests || 0} request(s)
-            </div>
-          {/if}
-        </div>
+                  </thead>
+                  <tbody>
+                    {#each [...usageData.rows].sort((a, b) => (b.total_tokens || 0) - (a.total_tokens || 0)) as row}
+                      <tr>
+                        <td>{row.provider}</td>
+                        <td class="mono">{row.model}</td>
+                        <td>{formatTokens(row.prompt_tokens)}</td>
+                        <td>{formatTokens(row.completion_tokens)}</td>
+                        <td>{formatTokens(row.total_tokens)}</td>
+                        <td>{row.requests || 0}</td>
+                        <td>{formatLastUsed(row.last_used)}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
+            {#if usageData?.totals}
+              <div class="usage-total">
+                Total: {formatTokens(usageData.totals.total_tokens)} tokens in {usageData.totals.requests || 0} request(s)
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     {:else if activeTab === "history"}
       {#key instanceRouteKey}

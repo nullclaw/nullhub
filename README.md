@@ -15,7 +15,7 @@ NullTickets, NullWatch).
 - **Process supervision** -- start, stop, restart, crash recovery with backoff
 - **Health monitoring** -- periodic HTTP health checks, dashboard status cards
 - **Cross-component linking** -- auto-connect `NullTickets -> NullBoiler`, generate native tracker config, and inspect queue/orchestrator status from one UI
-- **Config management** -- structured editors for `NullClaw`, `NullBoiler`, and `NullTickets`, with raw JSON fallback when needed
+- **Config management** -- structured editors for `NullClaw`, `NullBoiler`, `NullTickets`, and `NullWatch`, with raw JSON fallback when needed
 - **Log viewing** -- tail and live SSE streaming per instance
 - **One-click updates** -- download, migrate config, rollback on failure
 - **Multi-instance** -- run multiple instances of the same component side by side

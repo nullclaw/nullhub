@@ -218,8 +218,8 @@ test "handleList returns valid JSON with all known components" {
 
     // Verify structural fields
     try std.testing.expect(std.mem.indexOf(u8, json, "\"alpha\"") != null);
-    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, json, "\"alpha\":true"));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\"alpha\":false"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "\"alpha\":true"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, json, "\"alpha\":false"));
     try std.testing.expect(std.mem.indexOf(u8, json, "\"installed\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"instance_count\"") != null);
 }
