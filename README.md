@@ -121,22 +121,23 @@ to the local orchestration stack. Most routes go to NullBoiler's REST API via
 optional `NULLTICKETS_TOKEN`.
 
 **Observability proxy** -- requests to `/api/observability/*` are reverse-proxied
-to a local NullWatch instance via `NULLWATCH_URL` (for example
-`http://localhost:7710`) and optional `NULLWATCH_TOKEN`. The built-in
-Observability page uses this proxy to display run summaries, spans, evals,
-latency, cost, and failure context without sending data to hosted services.
+to the managed NullWatch instance installed in NullHub. `NULLWATCH_URL` can
+still override the target for an external NullWatch instance, and
+`NULLWATCH_TOKEN` is forwarded when set. The built-in Observability page uses
+this proxy to display run summaries, spans, evals, latency, cost, and failure
+context without sending data to hosted services.
 
 Local NullWatch setup:
 
-1. Start NullHub with the proxy target it should use:
+1. Start NullHub:
 
    ```bash
-   NULLWATCH_URL=http://127.0.0.1:7710 zig build run -- serve --no-open
+   zig build run -- serve --no-open
    ```
 
 2. In the web UI, open **Install Component**, select **NullWatch**, keep or set
    the API port to `7710`, and finish the wizard. The installer starts the
-   NullWatch instance.
+   NullWatch instance and the observability proxy discovers it automatically.
 
 3. Optional demo data can be ingested through the NullHub proxy:
 

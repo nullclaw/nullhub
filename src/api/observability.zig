@@ -16,7 +16,7 @@ pub fn isProxyPath(target: []const u8) bool {
     return http_proxy.isPathInNamespace(target, prefix);
 }
 
-/// Proxies observability API requests to a local NullWatch instance.
+/// Proxies observability API requests to a managed or configured NullWatch instance.
 /// The shared `/api/observability` prefix is stripped before forwarding, so
 /// `/api/observability/v1/runs` becomes `/v1/runs` on NullWatch.
 pub fn handle(allocator: Allocator, method: []const u8, target: []const u8, body: []const u8, cfg: Config) Response {

@@ -1872,6 +1872,7 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
     };
     var launch_cmd: []const u8 = entry.launch_mode;
     var launch_verbose = entry.verbose;
+    var launch_mode_overridden = false;
     var parsed_body: ?std.json.Parsed(StartBody) = null;
     defer if (parsed_body) |*pb| pb.deinit();
     if (body.len > 0) {
@@ -1882,7 +1883,10 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
             .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
         ) catch null;
         if (parsed_body) |pb| {
-            if (pb.value.launch_mode) |mode| launch_cmd = mode;
+            if (pb.value.launch_mode) |mode| {
+                launch_cmd = mode;
+                launch_mode_overridden = true;
+            }
             if (pb.value.verbose) |verbose| launch_verbose = verbose;
         }
     }
@@ -1897,6 +1901,9 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
     var health_endpoint: []const u8 = "/health";
     var port: u16 = 0;
     var port_from_config: []const u8 = "";
+    var manifest_launch_command: []const u8 = "";
+    var manifest_launch_mode: ?[]const u8 = null;
+    defer if (manifest_launch_mode) |mode| allocator.free(mode);
     const manifest_json = component_cli.exportManifest(allocator, bin_path) catch null;
     var parsed_manifest: ?std.json.Parsed(manifest_mod.Manifest) = null;
     if (manifest_json) |mj| {
@@ -1905,10 +1912,32 @@ pub fn handleStart(allocator: std.mem.Allocator, s: *state_mod.State, manager: *
             health_endpoint = pm.value.health.endpoint;
             port_from_config = pm.value.health.port_from_config;
             if (pm.value.ports.len > 0) port = pm.value.ports[0].default;
+            manifest_launch_command = pm.value.launch.command;
+            manifest_launch_mode = launch_args_mod.fromManifestLaunch(
+                allocator,
+                component,
+                pm.value.launch.command,
+                pm.value.launch.args,
+            ) catch null;
         }
     }
     defer if (manifest_json) |mj| allocator.free(mj);
     defer if (parsed_manifest) |*pm| pm.deinit();
+
+    if (!launch_mode_overridden) {
+        if (manifest_launch_mode) |mode| {
+            if (std.mem.eql(u8, launch_cmd, manifest_launch_command) and !std.mem.eql(u8, launch_cmd, mode)) {
+                launch_cmd = mode;
+                _ = s.updateInstance(component, name, .{
+                    .version = entry.version,
+                    .auto_start = entry.auto_start,
+                    .launch_mode = launch_cmd,
+                    .verbose = entry.verbose,
+                }) catch {};
+                s.save() catch {};
+            }
+        }
+    }
 
     // Try to read actual port from instance config.json using port_from_config key
     if (port_from_config.len > 0) {
@@ -4286,6 +4315,52 @@ test "handleStart keeps gateway instances on their HTTP health port" {
     try std.testing.expectEqual(@as(u16, 43123), status.port);
 
     mctx.manager.stopInstance("nullclaw", "my-agent") catch {};
+}
+
+test "handleStart normalizes manifest binary command to runnable launch args" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var state_fixture = try test_helpers.TempPaths.init(allocator);
+    defer state_fixture.deinit();
+    const state_path = try state_fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var s = state_mod.State.init(allocator, state_path);
+    defer s.deinit();
+    var mctx = TestManagerCtx.init(allocator);
+    defer mctx.deinit(allocator);
+
+    try s.addInstance("nullwatch", "watch", .{ .version = "1.0.0", .launch_mode = "nullwatch" });
+    try writeTestInstanceConfig(allocator, mctx.paths, "nullwatch", "watch", "{\"port\":43124}");
+    try writeTestBinary(
+        allocator,
+        mctx.paths,
+        "nullwatch",
+        "1.0.0",
+        \\#!/bin/sh
+        \\set -eu
+        \\if [ "$1" = "--export-manifest" ]; then
+        \\  printf '%s\n' '{"launch":{"command":"nullwatch","args":["serve"]},"health":{"endpoint":"/health","port_from_config":"port"},"ports":[{"name":"api","config_key":"port","default":7710,"protocol":"http"}]}'
+        \\  exit 0
+        \\fi
+        \\sleep 60
+        ,
+    );
+
+    const resp = handleStart(allocator, &s, &mctx.manager, mctx.paths, "nullwatch", "watch", "");
+    try std.testing.expectEqualStrings("200 OK", resp.status);
+
+    const entry = s.getInstance("nullwatch", "watch").?;
+    try std.testing.expectEqualStrings("serve", entry.launch_mode);
+
+    const status = mctx.manager.getStatus("nullwatch", "watch").?;
+    try std.testing.expectEqual(manager_mod.Status.starting, status.status);
+    try std.testing.expectEqual(@as(u16, 43124), status.port);
+    const inst = mctx.manager.instances.get("nullwatch/watch").?;
+    try std.testing.expectEqual(@as(usize, 1), inst.launch_args.len);
+    try std.testing.expectEqualStrings("serve", inst.launch_args[0]);
+
+    mctx.manager.stopInstance("nullwatch", "watch") catch {};
 }
 
 test "handleStop returns 200 for existing instance" {

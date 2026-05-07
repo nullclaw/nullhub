@@ -195,7 +195,17 @@ pub fn install(
     } else |_| {}
 
     // Use parsed manifest values or fall back to registry defaults
-    const launch_command = if (parsed_manifest) |pm| pm.value.launch.command else comp.default_launch_command;
+    var owned_launch_command: ?[]const u8 = null;
+    defer if (owned_launch_command) |value| allocator.free(value);
+    const launch_command = if (parsed_manifest) |pm| blk: {
+        owned_launch_command = launch_args_mod.fromManifestLaunch(
+            allocator,
+            opts.component,
+            pm.value.launch.command,
+            pm.value.launch.args,
+        ) catch null;
+        break :blk owned_launch_command orelse comp.default_launch_command;
+    } else comp.default_launch_command;
     const health_endpoint = if (parsed_manifest) |pm| pm.value.health.endpoint else comp.default_health_endpoint;
     const default_port = if (parsed_manifest) |pm| (if (pm.value.ports.len > 0) pm.value.ports[0].default else comp.default_port) else comp.default_port;
     defer if (parsed_manifest) |pm| pm.deinit();

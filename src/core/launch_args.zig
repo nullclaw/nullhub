@@ -57,6 +57,29 @@ pub fn buildLaunchArgs(
     return resolved.argv;
 }
 
+pub fn fromManifestLaunch(
+    allocator: std.mem.Allocator,
+    component: []const u8,
+    command: []const u8,
+    args: []const []const u8,
+) ![]const u8 {
+    var tokens = std.array_list.Managed([]const u8).init(allocator);
+    defer tokens.deinit();
+
+    if (!isBinaryCommand(component, command) and command.len > 0) {
+        try tokens.append(command);
+    }
+    for (args) |arg| try tokens.append(arg);
+    if (tokens.items.len == 0) return error.InvalidLaunchMode;
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    errdefer buf.deinit();
+    for (tokens.items, 0..) |token, index| {
+        try appendLaunchModeToken(&buf, token, index == 0);
+    }
+    return buf.toOwnedSlice();
+}
+
 pub fn freeOwnedArgv(allocator: std.mem.Allocator, argv: []const []const u8) void {
     if (argv.len == 0) return;
     for (argv) |arg| allocator.free(arg);
@@ -130,6 +153,37 @@ fn parseLaunchMode(allocator: std.mem.Allocator, launch_mode: []const u8) !std.A
     return list;
 }
 
+fn isBinaryCommand(component: []const u8, command: []const u8) bool {
+    const base = std.fs.path.basename(command);
+    if (std.mem.eql(u8, base, component)) return true;
+    return std.mem.endsWith(u8, base, ".exe") and
+        std.mem.eql(u8, base[0 .. base.len - ".exe".len], component);
+}
+
+fn appendLaunchModeToken(buf: *std.array_list.Managed(u8), token: []const u8, first: bool) !void {
+    if (!first) try buf.append(' ');
+
+    var needs_quote = token.len == 0;
+    for (token) |ch| {
+        if (std.ascii.isWhitespace(ch) or ch == '"' or ch == '\\') {
+            needs_quote = true;
+            break;
+        }
+    }
+
+    if (!needs_quote) {
+        try buf.appendSlice(token);
+        return;
+    }
+
+    try buf.append('"');
+    for (token) |ch| {
+        if (ch == '"' or ch == '\\') try buf.append('\\');
+        try buf.append(ch);
+    }
+    try buf.append('"');
+}
+
 fn appendOwnedToken(
     allocator: std.mem.Allocator,
     list: *std.ArrayListUnmanaged([]const u8),
@@ -186,6 +240,28 @@ test "buildLaunchArgs preserves tokenized launch mode when verbose disabled" {
     try std.testing.expectEqualStrings("agent", args[0]);
     try std.testing.expectEqualStrings("--foo", args[1]);
     try std.testing.expectEqualStrings("bar", args[2]);
+}
+
+test "fromManifestLaunch drops binary command and keeps launch args" {
+    const allocator = std.testing.allocator;
+    const mode = try fromManifestLaunch(allocator, "nullwatch", "nullwatch", &.{"serve"});
+    defer allocator.free(mode);
+    try std.testing.expectEqualStrings("serve", mode);
+}
+
+test "fromManifestLaunch keeps command args and quotes round-trippable tokens" {
+    const allocator = std.testing.allocator;
+    const args = [_][]const u8{ "--label", "hello world" };
+    const mode = try fromManifestLaunch(allocator, "demo", "serve", &args);
+    defer allocator.free(mode);
+
+    var resolved = try resolve(allocator, mode, false);
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), resolved.argv.len);
+    try std.testing.expectEqualStrings("serve", resolved.argv[0]);
+    try std.testing.expectEqualStrings("--label", resolved.argv[1]);
+    try std.testing.expectEqualStrings("hello world", resolved.argv[2]);
 }
 
 test "resolve preserves quoted arguments with spaces" {

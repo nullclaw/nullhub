@@ -13,9 +13,9 @@ its tracing/eval data in the UI.
 Add a local-first Observability cockpit to NullHub:
 
 - register `nullwatch` as a known component
-- proxy `/api/observability/*` to a local NullWatch instance
+- proxy `/api/observability/*` to a managed NullWatch instance
 - add a Flight Recorder page for runs, spans, evals, cost, tokens, and errors
-- document the local demo flow with `NULLWATCH_URL`
+- document the local demo flow through NullHub's managed install path
 
 ## Why This Idea Was Chosen
 
@@ -50,10 +50,10 @@ agent runtime behavior.
 
 ## How To Test Or Demo
 
-Start NullHub with the observability proxy configured:
+Start NullHub:
 
 ```bash
-NULLWATCH_URL=http://127.0.0.1:7710 zig build run -- serve --no-open
+zig build run -- serve --no-open
 ```
 
 Install NullWatch from NullHub:
@@ -61,9 +61,9 @@ Install NullWatch from NullHub:
 1. Open the web UI.
 2. Go to `Install Component`.
 3. Select `NullWatch`.
-4. Keep the API port at `7710` or update `NULLWATCH_URL` to match the chosen
-   port.
-5. Finish the wizard. The installer starts the NullWatch instance.
+4. Keep or set the API port to `7710`.
+5. Finish the wizard. The installer starts the NullWatch instance and NullHub
+   discovers it automatically.
 
 Optional sample data can be ingested through the NullHub proxy:
 
@@ -91,8 +91,8 @@ Failure detail with tool-call error context:
 
 ## Limitations And Future Improvements
 
-- The MVP reads from a configured `NULLWATCH_URL`; automatic discovery of managed
-  NullWatch instances can be added later.
+- `NULLWATCH_URL` remains useful for pointing NullHub at an external NullWatch
+  instance, but the default demo path uses a managed NullWatch install.
 - The first UI version renders a compact timeline, not a full waterfall chart.
 - Run correlation with NullBoiler orchestration pages can be added as a follow-up
   when both systems share stable run ids.

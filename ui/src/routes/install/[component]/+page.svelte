@@ -22,6 +22,14 @@
       wizardError = (e as Error).message;
     });
   });
+
+  function visibleWizardSteps(steps: any[], component: string) {
+    return steps.filter(
+      (s: any) =>
+        s.id !== 'gateway_port' &&
+        !(component === 'nullclaw' && s.id === 'port')
+    );
+  }
 </script>
 
 <div class="wizard-page">
@@ -33,7 +41,7 @@
   {:else if wizardData}
     <WizardRenderer
       component={componentName}
-      steps={(wizardData?.wizard?.steps || wizardData?.steps || []).filter((s: any) => s.id !== 'gateway_port' && s.id !== 'port')}
+      steps={visibleWizardSteps(wizardData?.wizard?.steps || wizardData?.steps || [], componentName)}
       onComplete={() => goto('/')}
     />
   {:else}

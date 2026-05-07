@@ -554,9 +554,48 @@ pub const Server = struct {
         return getEnv("NULLTICKETS_TOKEN");
     }
 
-    fn getWatchUrl(self: *Server) ?[]const u8 {
-        _ = self;
-        return getEnv("NULLWATCH_URL");
+    const WatchUrl = struct {
+        value: ?[]const u8 = null,
+        owned: bool = false,
+
+        fn deinit(self: WatchUrl, allocator: std.mem.Allocator) void {
+            if (self.owned) {
+                if (self.value) |value| allocator.free(value);
+            }
+        }
+    };
+
+    fn getWatchUrl(self: *Server, allocator: std.mem.Allocator) WatchUrl {
+        if (getEnv("NULLWATCH_URL")) |url| return .{ .value = url };
+        if (self.getManagedWatchUrl(allocator) catch null) |url| return .{ .value = url, .owned = true };
+        return .{};
+    }
+
+    fn getManagedWatchUrl(self: *Server, allocator: std.mem.Allocator) !?[]const u8 {
+        var starting_port: ?u16 = null;
+        var it = self.manager.instances.iterator();
+        while (it.next()) |entry| {
+            const inst = entry.value_ptr.*;
+            if (!std.mem.eql(u8, inst.component, "nullwatch")) continue;
+            if (inst.port == 0) continue;
+
+            switch (inst.status) {
+                .running => {
+                    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{inst.port});
+                    return url;
+                },
+                .starting, .restarting => {
+                    if (starting_port == null) starting_port = inst.port;
+                },
+                .stopped, .stopping, .failed => {},
+            }
+        }
+
+        if (starting_port) |port| {
+            const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
+            return url;
+        }
+        return null;
     }
 
     fn getWatchToken(self: *Server) ?[]const u8 {
@@ -1146,8 +1185,10 @@ pub const Server = struct {
         }
 
         if (observability_api.isProxyPath(target)) {
+            const watch_url = self.getWatchUrl(allocator);
+            defer watch_url.deinit(allocator);
             const resp = observability_api.handle(allocator, method, target, body, .{
-                .watch_url = self.getWatchUrl(),
+                .watch_url = watch_url.value,
                 .watch_token = self.getWatchToken(),
             });
             return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
@@ -1881,6 +1922,25 @@ test "routeWithoutServerMutex keeps orchestration proxy requests off global lock
     try std.testing.expect(Server.routeWithoutServerMutex("/api/observability/v1/runs"));
     try std.testing.expect(Server.routeWithoutServerMutex("/api/instances/nullclaw/demo/logs"));
     try std.testing.expect(!Server.routeWithoutServerMutex("/api/components"));
+}
+
+test "managed NullWatch URL is discovered from supervisor state" {
+    const allocator = std.testing.allocator;
+    var ctx = TestContext.init(allocator);
+    defer ctx.deinit(allocator);
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "nullwatch", "watch" });
+    try ctx.manager.instances.put(key, .{
+        .component = "nullwatch",
+        .name = "watch",
+        .status = .running,
+        .port = 7710,
+    });
+
+    const url = try ctx.server.getManagedWatchUrl(allocator);
+    defer if (url) |value| allocator.free(value);
+    try std.testing.expect(url != null);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7710", url.?);
 }
 
 test "extractBody returns body after headers" {

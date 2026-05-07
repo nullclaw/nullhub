@@ -266,6 +266,7 @@
     if (componentName === "nullclaw") return "NULLCLAW_HOME";
     if (componentName === "nullboiler") return "NULLBOILER_HOME";
     if (componentName === "nulltickets") return "NULLTICKETS_HOME";
+    if (componentName === "nullwatch") return "NULLWATCH_HOME";
     return "COMPONENT_HOME";
   }
 
