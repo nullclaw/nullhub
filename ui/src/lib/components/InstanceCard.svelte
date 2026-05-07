@@ -16,6 +16,7 @@
   let displayVersion = $derived(
     !version ? "-" : version.startsWith("v") || version.startsWith("dev-") ? version : `v${version}`,
   );
+  let portLabel = $derived(component === "nullclaw" ? "Gateway" : "API");
 
   // Sync localStatus when prop changes (from poll)
   $effect(() => {
@@ -64,7 +65,7 @@
   </div>
   {#if localStatus === "running" && port > 0}
     <div class="gateway-addr">
-      <span class="gateway-label">Gateway:</span>
+      <span class="gateway-label">{portLabel}:</span>
       <code>127.0.0.1:{port}</code>
     </div>
   {/if}

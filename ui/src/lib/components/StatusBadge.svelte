@@ -7,6 +7,7 @@
     starting: "var(--warning)",
     failed: "var(--error)",
     restarting: "var(--warning)",
+    stopping: "var(--warning)",
   };
 </script>
 

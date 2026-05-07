@@ -95,6 +95,7 @@
     component === "nullboiler" || component === "nulltickets",
   );
   let supportsAgentData = $derived(component === "nullclaw");
+  let supportsChat = $derived(component === "nullclaw");
   let supportsVerboseStartup = $derived(component === "nullclaw");
   let instanceRouteKey = $derived(`${component}/${name}`);
   let queueSummary = $derived(summarizeQueue(integration?.queue));
@@ -282,6 +283,29 @@
       .filter(Boolean);
   }
 
+  function defaultLaunchMode(componentName: string): string {
+    if (componentName === "nullwatch") return "serve";
+    return "gateway";
+  }
+
+  function normalizedLaunchArgs(componentName: string, launchMode: string | undefined): string[] {
+    const args = tokenizeLaunchMode(launchMode || defaultLaunchMode(componentName));
+    if (args.length === 0) args.push(defaultLaunchMode(componentName));
+    if (componentName === "nullwatch" && args[0] === "nullwatch") {
+      args[0] = "serve";
+    }
+    return args;
+  }
+
+  function displayLaunchMode(launchMode: string | undefined): string {
+    const tokens = normalizedLaunchArgs(component, launchMode);
+    const primary = tokens[0] || defaultLaunchMode(component);
+    if (primary === "agent") return "Agent";
+    if (primary === "gateway") return "Gateway";
+    if (primary === "serve") return "Serve";
+    return primary;
+  }
+
   function buildStandaloneLaunchScript(
     componentName: string,
     instanceName: string,
@@ -292,8 +316,7 @@
   ): string {
     if (!version) return "";
 
-    const args = tokenizeLaunchMode(launchMode || "gateway");
-    if (args.length === 0) args.push("gateway");
+    const args = normalizedLaunchArgs(componentName, launchMode);
     if (verbose) args.push("--verbose");
 
     const command = [
@@ -563,6 +586,9 @@
   $effect(() => {
     component;
     name;
+    if (activeTab === "chat" && !supportsChat) {
+      activeTab = "overview";
+    }
     if ((activeTab === "history" || activeTab === "memory" || activeTab === "skills") && !supportsAgentData) {
       activeTab = "overview";
     }
@@ -689,7 +715,9 @@
     </div>
     <div class="actions">
       <button class="btn" onclick={start} disabled={loading}>Start</button>
-      <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {#if supportsAgentData}
+        <button class="btn" onclick={startAgent} disabled={loading}>Agent</button>
+      {/if}
       <button class="btn" onclick={stop} disabled={loading}>Stop</button>
       <button class="btn" onclick={restart} disabled={loading}>Restart</button>
       <button class="btn danger" onclick={remove} disabled={loading}
@@ -703,13 +731,15 @@
       class:active={activeTab === "overview"}
       onclick={() => (activeTab = "overview")}>Overview</button
     >
-    <button
-      class:active={activeTab === "chat"}
-      class:disabled-tab={!chatReady}
-      onclick={() => (activeTab = "chat")}
-      >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
-        >{/if}</button
-    >
+    {#if supportsChat}
+      <button
+        class:active={activeTab === "chat"}
+        class:disabled-tab={!chatReady}
+        onclick={() => (activeTab = "chat")}
+        >Chat{#if !providerStatus.configured}<span class="tab-warn">!</span
+          >{/if}</button
+      >
+    {/if}
     {#if supportsAgentData}
       <button
         class:active={activeTab === "history"}
@@ -751,7 +781,7 @@
         </div>
         <div class="info-card">
           <span class="label">Launch Mode</span>
-          <span class="mode-value">{(instance?.launch_mode || "gateway") === "agent" ? "Agent" : "Gateway"}</span>
+          <span class="mode-value">{displayLaunchMode(instance?.launch_mode)}</span>
         </div>
         <div class="info-card">
           <span class="label">Auto Start</span>
@@ -1112,7 +1142,7 @@
       <div class="advanced-panel">
         <div class="advanced-card">
           <h3>Standalone Launch</h3>
-          {#if component === "nullclaw" && standaloneBinaryPath}
+          {#if standaloneBinaryPath}
             <p>
               Run this instance without <code>nullhub</code>, reusing the same
               config, auth, data, and logs directory.
@@ -1155,8 +1185,7 @@
             </p>
           {:else}
             <p>
-              Standalone launch instructions are available for <code>nullclaw</code>
-              instances for now.
+              Standalone launch instructions are available after this instance has a versioned binary.
             </p>
           {/if}
         </div>

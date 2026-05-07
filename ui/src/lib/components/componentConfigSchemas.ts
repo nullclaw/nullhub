@@ -161,12 +161,28 @@ const nullticketsSections: GenericSectionDef[] = [
   },
 ];
 
+const nullwatchSections: GenericSectionDef[] = [
+  {
+    key: "service",
+    label: "Service",
+    description: "Core observability API and local storage settings.",
+    fields: [
+      { key: "host", label: "Bind Host", type: "text", default: "127.0.0.1" },
+      { key: "port", label: "API Port", type: "number", default: 7710, min: 1, max: 65535 },
+      { key: "data_dir", label: "Data Directory", type: "text", default: "data" },
+      { key: "api_token", label: "API Token", type: "password" },
+    ],
+  },
+];
+
 export function getComponentConfigSchema(component: string): GenericSectionDef[] {
   switch (component) {
     case "nullboiler":
       return nullboilerSections;
     case "nulltickets":
       return nullticketsSections;
+    case "nullwatch":
+      return nullwatchSections;
     default:
       return [];
   }
