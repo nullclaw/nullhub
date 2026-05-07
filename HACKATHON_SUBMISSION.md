@@ -37,6 +37,7 @@ agent runtime behavior.
 
 - `src/installer/registry.zig`
 - `src/api/observability.zig`
+- `src/api/proxy.zig`
 - `src/api/components.zig`
 - `src/api/meta.zig`
 - `src/root.zig`
@@ -49,12 +50,16 @@ agent runtime behavior.
 
 ## How To Test Or Demo
 
-Start NullWatch with seeded data from the sibling repository:
+Start NullWatch with sample data from the sibling repository:
 
 ```bash
 cd ../nullwatch
-zig build run -- demo-seed
-zig build run -- serve --port 7710
+# Use the Zig toolchain declared by nullwatch if that checkout has not been
+# migrated to your local Zig version yet. NullHub only needs the HTTP API.
+DATA_DIR="$(mktemp -d)"
+zig build run -- ingest-span --data-dir "$DATA_DIR" --json '{"run_id":"demo-run-1","trace_id":"trace-demo-1","span_id":"span-1","source":"nullclaw","operation":"tool.call","status":"error","started_at_ms":1710000000000,"ended_at_ms":1710000001500,"tool_name":"shell","error_message":"tool call failed: command timed out","attributes_json":"{\"exit_code\":124}"}'
+zig build run -- ingest-eval --data-dir "$DATA_DIR" --json '{"run_id":"demo-run-1","eval_key":"tool_success","scorer":"deterministic","score":0.0,"verdict":"fail","dataset":"demo","notes":"The tool call timed out."}'
+zig build run -- serve --data-dir "$DATA_DIR" --port 7710
 ```
 
 Start NullHub with the observability proxy configured:
@@ -63,7 +68,7 @@ Start NullHub with the observability proxy configured:
 NULLWATCH_URL=http://127.0.0.1:7710 zig build run -- serve --no-open
 ```
 
-Open `/observability` in NullHub and inspect the seeded runs.
+Open `/observability` in NullHub and inspect the sample run.
 
 ## Screenshots
 
