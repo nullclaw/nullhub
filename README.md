@@ -123,9 +123,9 @@ optional `NULLTICKETS_TOKEN`.
 **Observability proxy** -- requests to `/api/observability/*` are reverse-proxied
 to the managed NullWatch instance installed in NullHub. `NULLWATCH_URL` can
 still override the target for an external NullWatch instance, and
-`NULLWATCH_TOKEN` is forwarded when set. The built-in Observability page uses
-this proxy to display run summaries, spans, evals, latency, cost, and failure
-context without sending data to hosted services.
+`NULLWATCH_TOKEN` overrides the managed instance token when set. The built-in
+Observability page uses this proxy to display run summaries, spans, evals,
+latency, cost, and failure context without sending data to hosted services.
 
 Local NullWatch setup:
 

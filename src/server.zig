@@ -554,25 +554,43 @@ pub const Server = struct {
         return getEnv("NULLTICKETS_TOKEN");
     }
 
-    const WatchUrl = struct {
-        value: ?[]const u8 = null,
-        owned: bool = false,
+    const WatchTarget = struct {
+        url: ?[]const u8 = null,
+        url_owned: bool = false,
+        token: ?[]const u8 = null,
+        token_owned: bool = false,
 
-        fn deinit(self: WatchUrl, allocator: std.mem.Allocator) void {
-            if (self.owned) {
-                if (self.value) |value| allocator.free(value);
-            }
+        fn deinit(self: WatchTarget, allocator: std.mem.Allocator) void {
+            if (self.url_owned) if (self.url) |value| allocator.free(value);
+            if (self.token_owned) if (self.token) |value| allocator.free(value);
         }
     };
 
-    fn getWatchUrl(self: *Server, allocator: std.mem.Allocator) WatchUrl {
-        if (getEnv("NULLWATCH_URL")) |url| return .{ .value = url };
-        if (self.getManagedWatchUrl(allocator) catch null) |url| return .{ .value = url, .owned = true };
-        return .{};
+    const ManagedWatchConfig = struct {
+        host: []const u8 = "127.0.0.1",
+        host_owned: bool = false,
+        api_token: ?[]const u8 = null,
+        api_token_owned: bool = false,
+
+        fn deinit(self: ManagedWatchConfig, allocator: std.mem.Allocator) void {
+            if (self.host_owned) allocator.free(self.host);
+            if (self.api_token_owned) if (self.api_token) |value| allocator.free(value);
+        }
+    };
+
+    fn getWatchTarget(self: *Server, allocator: std.mem.Allocator) WatchTarget {
+        const env_token = getEnv("NULLWATCH_TOKEN");
+        if (getEnv("NULLWATCH_URL")) |url| return .{ .url = url, .token = env_token };
+        return self.getManagedWatchTarget(allocator, env_token) catch .{ .token = env_token };
     }
 
-    fn getManagedWatchUrl(self: *Server, allocator: std.mem.Allocator) !?[]const u8 {
-        var starting_port: ?u16 = null;
+    fn getManagedWatchTarget(self: *Server, allocator: std.mem.Allocator, token_override: ?[]const u8) !WatchTarget {
+        const Candidate = struct {
+            name: []const u8,
+            port: u16,
+        };
+
+        var starting: ?Candidate = null;
         var it = self.manager.instances.iterator();
         while (it.next()) |entry| {
             const inst = entry.value_ptr.*;
@@ -580,27 +598,81 @@ pub const Server = struct {
             if (inst.port == 0) continue;
 
             switch (inst.status) {
-                .running => {
-                    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{inst.port});
-                    return url;
-                },
+                .running => return try self.buildManagedWatchTarget(allocator, inst.name, inst.port, token_override),
                 .starting, .restarting => {
-                    if (starting_port == null) starting_port = inst.port;
+                    if (starting == null) starting = .{ .name = inst.name, .port = inst.port };
                 },
                 .stopped, .stopping, .failed => {},
             }
         }
 
-        if (starting_port) |port| {
-            const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
-            return url;
+        if (starting) |candidate| {
+            return try self.buildManagedWatchTarget(allocator, candidate.name, candidate.port, token_override);
         }
-        return null;
+        return .{ .token = token_override };
     }
 
-    fn getWatchToken(self: *Server) ?[]const u8 {
-        _ = self;
-        return getEnv("NULLWATCH_TOKEN");
+    fn buildManagedWatchTarget(self: *Server, allocator: std.mem.Allocator, name: []const u8, port: u16, token_override: ?[]const u8) !WatchTarget {
+        var cfg = try self.loadManagedWatchConfig(allocator, name);
+        defer cfg.deinit(allocator);
+
+        const url_host = try normalizeWatchUrlHost(allocator, cfg.host);
+        defer allocator.free(url_host);
+
+        var target = WatchTarget{};
+        errdefer target.deinit(allocator);
+        target.url = try std.fmt.allocPrint(allocator, "http://{s}:{d}", .{ url_host, port });
+        target.url_owned = true;
+        if (token_override) |token| {
+            target.token = token;
+        } else if (cfg.api_token) |token| {
+            target.token = try allocator.dupe(u8, token);
+            target.token_owned = true;
+        }
+        return target;
+    }
+
+    fn loadManagedWatchConfig(self: *Server, allocator: std.mem.Allocator, name: []const u8) !ManagedWatchConfig {
+        const config_path = self.paths.instanceConfig(allocator, "nullwatch", name) catch return .{};
+        defer allocator.free(config_path);
+
+        const file = std_compat.fs.openFileAbsolute(config_path, .{}) catch return .{};
+        defer file.close();
+
+        const contents = file.readToEndAlloc(allocator, 1024 * 1024) catch return .{};
+        defer allocator.free(contents);
+
+        const parsed = std.json.parseFromSlice(
+            struct {
+                host: []const u8 = "127.0.0.1",
+                api_token: ?[]const u8 = null,
+            },
+            allocator,
+            contents,
+            .{ .allocate = .alloc_always, .ignore_unknown_fields = true },
+        ) catch return .{};
+        defer parsed.deinit();
+
+        return .{
+            .host = try allocator.dupe(u8, parsed.value.host),
+            .host_owned = true,
+            .api_token = if (parsed.value.api_token) |token| try allocator.dupe(u8, token) else null,
+            .api_token_owned = parsed.value.api_token != null,
+        };
+    }
+
+    fn normalizeWatchUrlHost(allocator: std.mem.Allocator, host: []const u8) ![]const u8 {
+        if (host.len == 0 or
+            std.mem.eql(u8, host, "0.0.0.0") or
+            std.mem.eql(u8, host, "::"))
+        {
+            return allocator.dupe(u8, "127.0.0.1");
+        }
+
+        if (std.mem.indexOfScalar(u8, host, ':') != null and !std.mem.startsWith(u8, host, "[")) {
+            return std.fmt.allocPrint(allocator, "[{s}]", .{host});
+        }
+        return allocator.dupe(u8, host);
     }
 
     fn routeWithoutServerMutex(target: []const u8) bool {
@@ -1185,11 +1257,11 @@ pub const Server = struct {
         }
 
         if (observability_api.isProxyPath(target)) {
-            const watch_url = self.getWatchUrl(allocator);
-            defer watch_url.deinit(allocator);
+            const watch_target = self.getWatchTarget(allocator);
+            defer watch_target.deinit(allocator);
             const resp = observability_api.handle(allocator, method, target, body, .{
-                .watch_url = watch_url.value,
-                .watch_token = self.getWatchToken(),
+                .watch_url = watch_target.url,
+                .watch_token = watch_target.token,
             });
             return .{ .status = resp.status, .content_type = resp.content_type, .body = resp.body };
         }
@@ -1924,7 +1996,7 @@ test "routeWithoutServerMutex keeps orchestration proxy requests off global lock
     try std.testing.expect(!Server.routeWithoutServerMutex("/api/components"));
 }
 
-test "managed NullWatch URL is discovered from supervisor state" {
+test "managed NullWatch target is discovered from supervisor state" {
     const allocator = std.testing.allocator;
     var ctx = TestContext.init(allocator);
     defer ctx.deinit(allocator);
@@ -1937,10 +2009,71 @@ test "managed NullWatch URL is discovered from supervisor state" {
         .port = 7710,
     });
 
-    const url = try ctx.server.getManagedWatchUrl(allocator);
-    defer if (url) |value| allocator.free(value);
-    try std.testing.expect(url != null);
-    try std.testing.expectEqualStrings("http://127.0.0.1:7710", url.?);
+    const target = try ctx.server.getManagedWatchTarget(allocator, null);
+    defer target.deinit(allocator);
+    try std.testing.expect(target.url != null);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7710", target.url.?);
+    try std.testing.expect(target.token == null);
+}
+
+test "managed NullWatch target reads host and token from config" {
+    const allocator = std.testing.allocator;
+    var ctx = TestContext.init(allocator);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const inst_dir = try ctx.paths.instanceDir(allocator, "nullwatch", "watch");
+    defer allocator.free(inst_dir);
+    try std_compat.fs.makeDirAbsolute(inst_dir);
+
+    const config_path = try ctx.paths.instanceConfig(allocator, "nullwatch", "watch");
+    defer allocator.free(config_path);
+    var file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll("{\"host\":\"0.0.0.0\",\"api_token\":\"managed-secret\"}");
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "nullwatch", "watch" });
+    try ctx.manager.instances.put(key, .{
+        .component = "nullwatch",
+        .name = "watch",
+        .status = .running,
+        .port = 7710,
+    });
+
+    const target = try ctx.server.getManagedWatchTarget(allocator, null);
+    defer target.deinit(allocator);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7710", target.url.?);
+    try std.testing.expectEqualStrings("managed-secret", target.token.?);
+}
+
+test "managed NullWatch target brackets IPv6 host and lets env token override config" {
+    const allocator = std.testing.allocator;
+    var ctx = TestContext.init(allocator);
+    defer ctx.deinit(allocator);
+    try ctx.paths.ensureDirs();
+
+    const inst_dir = try ctx.paths.instanceDir(allocator, "nullwatch", "watch");
+    defer allocator.free(inst_dir);
+    try std_compat.fs.makeDirAbsolute(inst_dir);
+
+    const config_path = try ctx.paths.instanceConfig(allocator, "nullwatch", "watch");
+    defer allocator.free(config_path);
+    var file = try std_compat.fs.createFileAbsolute(config_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll("{\"host\":\"::1\",\"api_token\":\"managed-secret\"}");
+
+    const key = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "nullwatch", "watch" });
+    try ctx.manager.instances.put(key, .{
+        .component = "nullwatch",
+        .name = "watch",
+        .status = .running,
+        .port = 7710,
+    });
+
+    const target = try ctx.server.getManagedWatchTarget(allocator, "env-secret");
+    defer target.deinit(allocator);
+    try std.testing.expectEqualStrings("http://[::1]:7710", target.url.?);
+    try std.testing.expectEqualStrings("env-secret", target.token.?);
 }
 
 test "extractBody returns body after headers" {
