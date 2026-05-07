@@ -126,6 +126,30 @@ to a local NullWatch instance via `NULLWATCH_URL` (for example
 Observability page uses this proxy to display run summaries, spans, evals,
 latency, cost, and failure context without sending data to hosted services.
 
+Local NullWatch setup:
+
+1. Start NullHub with the proxy target it should use:
+
+   ```bash
+   NULLWATCH_URL=http://127.0.0.1:7710 zig build run -- serve --no-open
+   ```
+
+2. In the web UI, open **Install Component**, select **NullWatch**, keep or set
+   the API port to `7710`, and finish the wizard. The installer starts the
+   NullWatch instance.
+
+3. Optional demo data can be ingested through the NullHub proxy:
+
+   ```bash
+   curl -X POST http://127.0.0.1:19800/api/observability/v1/spans \
+     -H 'Content-Type: application/json' \
+     -d '{"run_id":"demo-run-1","trace_id":"trace-demo-1","span_id":"span-1","source":"nullclaw","operation":"tool.call","status":"error","started_at_ms":1710000000000,"ended_at_ms":1710000001500,"tool_name":"shell","error_message":"tool call failed: command timed out","attributes_json":"{\"exit_code\":124}"}'
+
+   curl -X POST http://127.0.0.1:19800/api/observability/v1/evals \
+     -H 'Content-Type: application/json' \
+     -d '{"run_id":"demo-run-1","eval_key":"tool_success","scorer":"deterministic","score":0.0,"verdict":"fail","dataset":"demo","notes":"The tool call timed out."}'
+   ```
+
 ### Observability Screenshots
 
 Flight Recorder overview:
