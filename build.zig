@@ -91,6 +91,27 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(exe_unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    const integration_test_module = b.createModule(.{
+        .root_source_file = b.path("src/integration_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    integration_test_module.addImport("build_options", build_options_module);
+    integration_test_module.addImport("ui_assets", ui_assets_module);
+    integration_test_module.addImport("compat", compat_module);
+
+    const integration_tests = b.addTest(.{
+        .root_module = integration_test_module,
+    });
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+    run_integration_tests.step.dependOn(b.getInstallStep());
+    run_integration_tests.setCwd(b.path("."));
+    const integration_bin_name = b.fmt("nullhub{s}", .{target.result.exeFileExt()});
+    run_integration_tests.setEnvironmentVariable("NULLHUB_INTEGRATION_BIN", b.getInstallPath(.bin, integration_bin_name));
+    const integration_test_step = b.step("test-integration", "Run integration tests");
+    integration_test_step.dependOn(&run_integration_tests.step);
 }
 
 fn createUiAssetsModule(b: *std.Build, embed_ui: bool) *std.Build.Module {
