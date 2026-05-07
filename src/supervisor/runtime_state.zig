@@ -17,6 +17,19 @@ pub const PersistedRuntimeView = struct {
     starting_since: ?i64 = null,
 };
 
+const PersistedRuntimeJson = struct {
+    pid: u64 = 0,
+    port: u16 = 0,
+    health_endpoint: []const u8 = "",
+    binary_path: []const u8 = "",
+    working_dir: []const u8 = "",
+    config_path: []const u8 = "",
+    launch_command: []const u8 = "",
+    launch_args: []const []const u8 = &.{},
+    started_at: ?i64 = null,
+    starting_since: ?i64 = null,
+};
+
 pub const PersistedRuntime = struct {
     pid: u64 = 0,
     port: u16 = 0,
@@ -97,19 +110,56 @@ pub fn load(
     const raw = try file.readToEndAlloc(allocator, 64 * 1024);
     defer allocator.free(raw);
 
-    var parsed = try std.json.parseFromSlice(PersistedRuntime, allocator, raw, .{
+    var parsed = try std.json.parseFromSlice(PersistedRuntimeJson, allocator, raw, .{
         .allocate = .alloc_always,
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
 
-    var runtime = parsed.value;
-    parsed.value = .{};
+    var runtime = PersistedRuntime{
+        .pid = parsed.value.pid,
+        .port = parsed.value.port,
+        .health_endpoint = "",
+        .binary_path = "",
+        .working_dir = "",
+        .config_path = "",
+        .launch_command = "",
+        .launch_args = &.{},
+        .started_at = parsed.value.started_at,
+        .starting_since = parsed.value.starting_since,
+    };
+    errdefer runtime.deinit(allocator);
+
+    runtime.health_endpoint = try allocator.dupe(u8, parsed.value.health_endpoint);
+    runtime.binary_path = try allocator.dupe(u8, parsed.value.binary_path);
+    runtime.working_dir = try allocator.dupe(u8, parsed.value.working_dir);
+    runtime.config_path = try allocator.dupe(u8, parsed.value.config_path);
+    runtime.launch_command = try allocator.dupe(u8, parsed.value.launch_command);
+    runtime.launch_args = try cloneLaunchArgs(allocator, parsed.value.launch_args);
+
     if (!runtime.isValid()) {
         runtime.deinit(allocator);
         return error.InvalidRuntimeState;
     }
     return runtime;
+}
+
+fn cloneLaunchArgs(allocator: std.mem.Allocator, args: []const []const u8) ![][]u8 {
+    if (args.len == 0) return &.{};
+
+    const owned = try allocator.alloc([]u8, args.len);
+    errdefer allocator.free(owned);
+
+    var cloned: usize = 0;
+    errdefer {
+        for (owned[0..cloned]) |arg| allocator.free(arg);
+    }
+
+    for (args, 0..) |arg, idx| {
+        owned[idx] = try allocator.dupe(u8, arg);
+        cloned += 1;
+    }
+    return owned;
 }
 
 pub fn delete(
@@ -157,4 +207,34 @@ test "runtime state round-trips through instance.json" {
 
     delete(allocator, fixture.paths, "nullclaw", "demo");
     try std.testing.expect((try load(allocator, fixture.paths, "nullclaw", "demo")) == null);
+}
+
+test "load accepts persisted runtime json written by supervisor" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+
+    const meta_path = try fixture.paths.instanceMeta(allocator, "nullclaw", "demo");
+    defer allocator.free(meta_path);
+    const inst_dir = try fixture.paths.instanceDir(allocator, "nullclaw", "demo");
+    defer allocator.free(inst_dir);
+    try fs_compat.makePath(inst_dir);
+
+    const body =
+        "{\"pid\":39275,\"port\":0,\"health_endpoint\":\"/health\",\"binary_path\":\"/Users/vds/.nullhub/bin/nullclaw\",\"working_dir\":\"/Users/vds/.nullhub/instances/nullclaw/demo\",\"config_path\":\"\",\"launch_command\":\"gateway\",\"launch_args\":[\"gateway\"],\"started_at\":1777963594379,\"starting_since\":1777963594379}";
+
+    const file = try std_compat.fs.createFileAbsolute(meta_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(body);
+
+    var loaded = (try load(allocator, fixture.paths, "nullclaw", "demo")).?;
+    defer loaded.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 39275), loaded.pid);
+    try std.testing.expectEqual(@as(u16, 0), loaded.port);
+    try std.testing.expectEqualStrings("/health", loaded.health_endpoint);
+    try std.testing.expectEqualStrings("/Users/vds/.nullhub/bin/nullclaw", loaded.binary_path);
+    try std.testing.expectEqualStrings("gateway", loaded.launch_command);
+    try std.testing.expectEqual(@as(usize, 1), loaded.launch_args.len);
+    try std.testing.expectEqualStrings("gateway", loaded.launch_args[0]);
 }
