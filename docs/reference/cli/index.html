@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="content-security-policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://api.github.com; font-src 'self'; form-action 'self'; frame-src 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-IRprildjLL+3SuNhpxASNxA3FHtF9vaMbtB0cdufpr4=' 'sha256-OWaV3OEhxpx+7gMABhmpWJ9G+wnQHTqYesu52fT5L9U=' 'sha256-Ri42AkirzmP18FoQE6ehtzj7K9CXQ3PKqbM2whi5GYU='; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:" data-null-security-policy>
+		<meta name="referrer" content="strict-origin-when-cross-origin" data-null-security-policy>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#0c0a08" />
+		<script>
+			document.documentElement.classList.add('js');
+			// Resolve the shared theme mode before first paint.
+			(function () {
+				var key = 'nullmenu-theme';
+				var valid = function (value) {
+					return value === 'system' || value === 'light' || value === 'dark';
+				};
+				var cookieMode = null;
+				try {
+					var cookie = document.cookie
+						.split(';')
+						.map(function (part) { return part.trim(); })
+						.find(function (part) { return part.indexOf(key + '=') === 0; });
+					if (cookie) {
+						try { cookieMode = decodeURIComponent(cookie.slice(key.length + 1)); } catch (e) {}
+					}
+				} catch (e) {}
+				var localMode = null;
+				try { localMode = localStorage.getItem(key); } catch (e) {}
+				var mode = valid(cookieMode) ? cookieMode : valid(localMode) ? localMode : 'system';
+				var theme = mode === 'system'
+					? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+					: mode;
+				document.documentElement.dataset.themeMode = mode;
+				document.documentElement.dataset.theme = theme;
+				if (theme === 'light') {
+					document.querySelector('meta[name="theme-color"]').content = '#f2ead8';
+				}
+			})();
+		</script>
+		<link rel="icon" href="../../../favicon.svg" type="image/svg+xml" />
+		<link
+			rel="preload"
+			href="../../../fonts/InstrumentSerif-normal-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/InstrumentSerif-italic-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/Geist-normal-300_700-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/GeistMono-normal-400_600-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link href="../../../_app/immutable/entry/start.6R6bJIUu.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/CGMkUONz.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/Bneb2paa.js" rel="modulepreload">
+		<link href="../../../_app/immutable/entry/app.d_YkXizr.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/HclGiUj8.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/xihTtKlq.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/0.BWRI0n53.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DIs7c8UJ.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/CAuGsAyG.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DsBvvBRv.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/Bc0JvcBg.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/3dok05DY.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/2.a5kTMHys.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/5.rpju0Pm_.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DtsPaqkl.js" rel="modulepreload">
+		<!--12qhfyh--><!----><style>:root:root{--spice:#e3a93c;--spice-dim:#96702a;}</style><!----> <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%2312100d%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%229%22%20stroke%3D%22%23ece5d8%22%20stroke-width%3D%223.4%22%20fill%3D%22none%22%2F%3E%3Cline%20x1%3D%228.5%22%20y1%3D%2225.5%22%20x2%3D%2223.5%22%20y2%3D%226.5%22%20stroke%3D%22%23e3a93c%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E" type="image/svg+xml"/><!----><!--gsrl61--><meta name="description" content="Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service."/> <link rel="canonical" href="https://hub.nullmenu.ai/docs/reference/cli/"/> <meta property="og:type" content="article"/> <meta property="og:site_name" content="NullHub"/> <meta property="og:title" content="CLI — NullHub docs"/> <meta property="og:description" content="Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service."/> <meta property="og:url" content="https://hub.nullmenu.ai/docs/reference/cli/"/> <meta property="og:image" content="https://hub.nullmenu.ai/og/hub.png"/> <meta property="og:image:alt" content="Social preview for NullHub: CLI — NullHub docs"/> <meta property="og:image:width" content="1200"/> <meta property="og:image:height" content="630"/> <meta name="twitter:card" content="summary_large_image"/> <meta name="twitter:title" content="CLI — NullHub docs"/> <meta name="twitter:description" content="Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service."/> <meta name="twitter:image" content="https://hub.nullmenu.ai/og/hub.png"/> <meta name="twitter:image:alt" content="Social preview for NullHub: CLI — NullHub docs"/> <!----><script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://nullmenu.ai/#organization","name":"Null ecosystem","url":"https://nullmenu.ai/","sameAs":["https://github.com/nullclaw"]},{"@type":"TechArticle","@id":"https://hub.nullmenu.ai/docs/reference/cli/#article","headline":"CLI — NullHub docs","description":"Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.","url":"https://hub.nullmenu.ai/docs/reference/cli/","image":"https://hub.nullmenu.ai/og/hub.png","inLanguage":"en","articleSection":"Reference","version":"v2026.5.29","dateModified":"2026-07-17","mainEntityOfPage":"https://hub.nullmenu.ai/docs/reference/cli/","author":{"@id":"https://nullmenu.ai/#organization"},"publisher":{"@id":"https://nullmenu.ai/#organization"}},{"@type":"BreadcrumbList","@id":"https://hub.nullmenu.ai/docs/reference/cli/#breadcrumbs","itemListElement":[{"@type":"ListItem","position":1,"name":"NullHub","item":"https://hub.nullmenu.ai/"},{"@type":"ListItem","position":2,"name":"Documentation","item":"https://hub.nullmenu.ai/docs/"},{"@type":"ListItem","position":3,"name":"CLI","item":"https://hub.nullmenu.ai/docs/reference/cli/"}]}]}</script><!----><!----><title>CLI — NullHub docs</title>
+		<link href="../../../_app/immutable/assets/0.b4SYXXpF.css" rel="stylesheet">
+		<link href="../../../_app/immutable/assets/2.D_3iEgFB.css" rel="stylesheet">
+		<link href="../../../_app/immutable/assets/5.s1K1snEQ.css" rel="stylesheet">
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents"><!--[--><!--[0--><!--[--><a class="skip mono svelte-12qhfyh" href="#main">Skip to content</a> <span id="sr-status" class="sr-status" role="status" aria-live="polite"></span> <header class="svelte-1elxaub"><div class="inner container svelte-1elxaub"><div class="left svelte-1elxaub"><a class="brand svelte-1elxaub" href="/" aria-label="NullHub home"><svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="1.75"></circle><line class="slash" x1="7" y1="27" x2="25" y2="5" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="round"></line></svg><!----> <span class="word mono svelte-1elxaub">null<span class="suffix serif-i svelte-1elxaub">·hub</span></span></a> <!--[0--><a class="version mono svelte-1elxaub" href="https://github.com/nullclaw/nullhub/releases/tag/v2026.5.29" target="_blank" rel="noopener" aria-label="Published release v2026.5.29 (opens in a new tab)">v2026.5.29<!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a><!--]--></div> <nav class="desktop svelte-1elxaub" aria-label="Main"><!--[--><a href="/docs/" class="nav-link mono svelte-1elxaub active" aria-current="page">Docs<!--[-1--><!--]--></a><a href="https://nullmenu.ai" class="nav-link mono svelte-1elxaub">The menu<!--[-1--><!--]--></a><a href="https://github.com/nullclaw/nullhub" class="nav-link mono svelte-1elxaub" target="_blank" rel="noopener">GitHub<!--[0--><span class="ext svelte-1elxaub"><!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></span><!--]--></a><!--]--> <button class="search-btn mono svelte-1elxaub" aria-label="Search docs"><!----><svg class="functional-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="5.75"></circle><path d="m14.8 14.8 4.7 4.7"></path></g></svg><!----><!----> <kbd class="svelte-1elxaub">Ctrl K</kbd></button> <button class="theme-toggle svelte-1elxaub" aria-label="Theme: system (dark). Switch to light theme" title="Theme: system (dark). Switch to light theme"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" class="svelte-1elxaub"><circle cx="9" cy="9" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path class="half" d="M9 2.25 a6.75 6.75 0 0 1 0 13.5 Z" fill="currentColor"></path></svg> <span class="theme-mode mono svelte-1elxaub" aria-hidden="true">system</span></button></nav> <button class="burger svelte-1elxaub" aria-expanded="false" aria-controls="mobile-navigation" aria-label="Open navigation"><span class="svelte-1elxaub"></span><span class="svelte-1elxaub"></span></button></div> <details class="nojs-navigation svelte-1elxaub" data-pagefind-ignore=""><summary class="mono svelte-1elxaub">Menu</summary> <nav aria-label="Main navigation" class="svelte-1elxaub"><!--[--><a href="/docs/" class="mono svelte-1elxaub">Docs<!--[-1--><!--]--></a><a href="https://nullmenu.ai" class="mono svelte-1elxaub">The menu<!--[-1--><!--]--></a><a href="https://github.com/nullclaw/nullhub" class="mono svelte-1elxaub" target="_blank" rel="noopener">GitHub<!--[0--><span class="ext svelte-1elxaub"><!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></span><!--]--></a><!--]--></nav></details> <!--[-1--><!--]--></header><!----> <!--[-1--><!--]--><!----> <main id="main" class="svelte-12qhfyh"><!--[0--><!--[--><div class="docs container svelte-1bpnej"><button class="nav-toggle mono svelte-1bpnej" aria-expanded="false" aria-controls="docs-navigation">menu — docs</button> <details class="nojs-docs-navigation svelte-1bpnej" data-pagefind-ignore=""><summary class="mono svelte-1bpnej">Browse documentation</summary> <nav aria-label="Documentation navigation" class="svelte-1bpnej"><a href="/docs/" class="serif-i svelte-1bpnej">Docs home</a> <!--[--><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Start</h2> <!--[--><a href="/docs/start/install/" class="svelte-1bpnej">Install</a><a href="/docs/start/quickstart/" class="svelte-1bpnej">Quickstart</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Guides</h2> <!--[--><a href="/docs/guides/install-components/" class="svelte-1bpnej">Installing components</a><a href="/docs/guides/web-dashboard/" class="svelte-1bpnej">Web dashboard</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Operate</h2> <!--[--><a href="/docs/operate/updates-and-rollback/" class="svelte-1bpnej">Updates and rollback</a><a href="/docs/operate/multi-instance/" class="svelte-1bpnej">Multi-instance</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Reference</h2> <!--[--><a href="/docs/reference/cli/" class="svelte-1bpnej">CLI</a><a href="/docs/reference/manifests/" class="svelte-1bpnej">Manifests</a><!--]--></div><!--]--> <!--[-1--><!--]--></nav></details> <!--[-1--><!--]--> <div id="docs-navigation" class="sidebar svelte-1bpnej" role="navigation" aria-label="Documentation"><div class="drawer-head mono svelte-1bpnej"><div class="svelte-1bpnej"><span class="drawer-kicker svelte-1bpnej">Browse</span> <span id="docs-navigation-title" class="drawer-title svelte-1bpnej">Documentation</span></div> <button class="drawer-close svelte-1bpnej"><span>close</span><!----><svg class="functional-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10"></path><path d="M17 7 7 17"></path></g></svg><!----><!----></button></div> <a href="/docs/" class="cookbook-link serif-i svelte-1bpnej">Docs home</a> <!--[--><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Start</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/start/install/" class="svelte-1bpnej">Install</a></li><li class="svelte-1bpnej"><a href="/docs/start/quickstart/" class="svelte-1bpnej">Quickstart</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Guides</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/guides/install-components/" class="svelte-1bpnej">Installing components</a></li><li class="svelte-1bpnej"><a href="/docs/guides/web-dashboard/" class="svelte-1bpnej">Web dashboard</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Operate</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/operate/updates-and-rollback/" class="svelte-1bpnej">Updates and rollback</a></li><li class="svelte-1bpnej"><a href="/docs/operate/multi-instance/" class="svelte-1bpnej">Multi-instance</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Reference</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/reference/cli/" aria-current="page" class="svelte-1bpnej active">CLI</a></li><li class="svelte-1bpnej"><a href="/docs/reference/manifests/" class="svelte-1bpnej">Manifests</a></li><!--]--></ul></div><!--]--> <!--[-1--><!--]--></div> <div class="content svelte-1bpnej"><!--[--><!----> <div class="page svelte-5oqt2y has-toc"><article data-pagefind-body=""><p class="label label--accent" data-pagefind-ignore="">Reference</p> <h1 class="serif svelte-5oqt2y">CLI</h1> <div class="meta mono svelte-5oqt2y" data-pagefind-ignore=""><!--[0--><span class="chip svelte-5oqt2y" title="Last verified with this release">verified · v2026.5.29</span><!--]--> <button class="meta-link svelte-5oqt2y"><!--[-1-->copy as markdown<!--]--></button> <a class="meta-link svelte-5oqt2y" href="https://github.com/nullclaw/nullmenu/edit/main/content/hub/docs/reference/cli.md" target="_blank" rel="noopener">edit on github <!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></div> <!--[0--><details class="mobile-toc svelte-5oqt2y" data-pagefind-ignore=""><summary class="svelte-5oqt2y"><span class="label">On this page</span> <span class="toc-count mono svelte-5oqt2y">11 sections <!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.5v11"></path><path d="M6.5 12h11"></path></g></svg><!----><!----></span></summary> <nav aria-label="On this page" class="svelte-5oqt2y"><ul class="svelte-5oqt2y"><!--[--><li class="d2 svelte-5oqt2y"><a href="#server" class="svelte-5oqt2y">Server</a></li><li class="d2 svelte-5oqt2y"><a href="#install-and-remove" class="svelte-5oqt2y">Install and remove</a></li><li class="d2 svelte-5oqt2y"><a href="#lifecycle" class="svelte-5oqt2y">Lifecycle</a></li><li class="d2 svelte-5oqt2y"><a href="#inspect" class="svelte-5oqt2y">Inspect</a></li><li class="d2 svelte-5oqt2y"><a href="#updates" class="svelte-5oqt2y">Updates</a></li><li class="d2 svelte-5oqt2y"><a href="#config" class="svelte-5oqt2y">Config</a></li><li class="d2 svelte-5oqt2y"><a href="#discover-and-call-the-api" class="svelte-5oqt2y">Discover and call the API</a></li><li class="d2 svelte-5oqt2y"><a href="#report-an-issue" class="svelte-5oqt2y">Report an issue</a></li><li class="d2 svelte-5oqt2y"><a href="#os-service" class="svelte-5oqt2y">OS service</a></li><li class="d2 svelte-5oqt2y"><a href="#environment-variables" class="svelte-5oqt2y">Environment variables</a></li><li class="d2 svelte-5oqt2y"><a href="#files" class="svelte-5oqt2y">Files</a></li><!--]--></ul></nav></details><!--]--> <div class="prose"><!----><p>One binary, two modes. Run <code>nullhub</code> with no arguments and it becomes a server (HTTP plus a supervisor thread); run it with a command and it acts as an HTTP client to that server — every subcommand except <code>serve</code>, <code>service</code> and <code>report</code> calls the REST API and prints the result. If the server is down, the CLI tells you: <code>nullhub is not running</code>. Instances are addressed as <code>{component}/{instance-name}</code> everywhere, abbreviated <code>&lt;c&gt;/&lt;n&gt;</code> below.</p>
+<aside class="callout callout--note"><div class="callout-title">Note</div><p>Pre-1.0: config and CLI may change between releases.</p>
+</aside>
+<h2 id="server" aria-labelledby="heading-label-server"><span id="heading-label-server">Server</span><a class="heading-anchor" href="#server" aria-label="Permalink to Server" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub</code></td>
+<td>Start server and open the browser at the dashboard</td>
+</tr>
+<tr>
+<td><code>nullhub serve [--host H] [--port N] [--allowed-origin ORIGIN] ...</code></td>
+<td>Start the server; repeat <code>--allowed-origin</code> to authorize extra CORS origins</td>
+</tr>
+<tr>
+<td><code>nullhub serve --no-open</code></td>
+<td>Start the server without opening the browser</td>
+</tr>
+<tr>
+<td><code>nullhub version</code> (also <code>-v</code>, <code>--version</code>)</td>
+<td>Print version</td>
+</tr>
+<tr>
+<td><code>nullhub help</code> (also <code>-h</code>, <code>--help</code>)</td>
+<td>Print usage</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The server binds <code>127.0.0.1:19800</code> by default and the dashboard serves at <code>http://nullhub.localhost:19800</code>, with <code>nullhub.local</code> published via mDNS (<code>dns-sd</code> on macOS, <code>avahi-publish</code> on Linux) when available. Allowed origins can also come from <code>NULLHUB_ALLOWED_ORIGINS</code> as a comma-separated list — that plus <code>--allowed-origin</code> is how remote access over a tailnet (Tailscale, for example) is enabled. Origins are validated: http/https only, no path, query or userinfo.</p>
+<h2 id="install-and-remove" aria-labelledby="heading-label-install-and-remove"><span id="heading-label-install-and-remove">Install and remove</span><a class="heading-anchor" href="#install-and-remove" aria-label="Permalink to Install and remove" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub install &lt;component&gt; [--name NAME] [--version V] [--build-from-source]</code></td>
+<td>Terminal install wizard (manifest-driven; same steps as the web UI)</td>
+</tr>
+<tr>
+<td><code>nullhub wizard &lt;component&gt;</code></td>
+<td>Print the component&#39;s setup wizard steps without installing</td>
+</tr>
+<tr>
+<td><code>nullhub uninstall &lt;c&gt;/&lt;n&gt; [--remove-data]</code></td>
+<td>Remove an instance, optionally with its data</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Valid components today: <code>nullclaw</code>, <code>nullboiler</code>, <code>nulltickets</code>, <code>nullwatch</code>. Downloads are SHA256-verified and deleted on mismatch.</p>
+<h2 id="lifecycle" aria-labelledby="heading-label-lifecycle"><span id="heading-label-lifecycle">Lifecycle</span><a class="heading-anchor" href="#lifecycle" aria-label="Permalink to Lifecycle" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub start &lt;c&gt;/&lt;n&gt;</code></td>
+<td>Start an instance</td>
+</tr>
+<tr>
+<td><code>nullhub stop &lt;c&gt;/&lt;n&gt;</code></td>
+<td>Stop an instance</td>
+</tr>
+<tr>
+<td><code>nullhub restart &lt;c&gt;/&lt;n&gt;</code></td>
+<td>Restart an instance</td>
+</tr>
+<tr>
+<td><code>nullhub start-all</code></td>
+<td>Start every installed instance</td>
+</tr>
+<tr>
+<td><code>nullhub stop-all</code></td>
+<td>Stop every installed instance</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="inspect" aria-labelledby="heading-label-inspect"><span id="heading-label-inspect">Inspect</span><a class="heading-anchor" href="#inspect" aria-label="Permalink to Inspect" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub status [--host H] [--port N]</code></td>
+<td>Table of all instances</td>
+</tr>
+<tr>
+<td><code>nullhub status &lt;c&gt;/&lt;n&gt;</code></td>
+<td>Single-instance detail</td>
+</tr>
+<tr>
+<td><code>nullhub logs &lt;c&gt;/&lt;n&gt; [--lines N]</code></td>
+<td>Tail logs</td>
+</tr>
+<tr>
+<td><code>nullhub logs &lt;c&gt;/&lt;n&gt; -f</code> (also <code>--follow</code>)</td>
+<td>Follow logs — note: log following is not stream-backed yet in v2026.5.29; the CLI says so and shows the current tail</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="updates" aria-labelledby="heading-label-updates"><span id="heading-label-updates">Updates</span><a class="heading-anchor" href="#updates" aria-label="Permalink to Updates" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub check-updates</code></td>
+<td>Check all instances for new versions</td>
+</tr>
+<tr>
+<td><code>nullhub update &lt;c&gt;/&lt;n&gt;</code></td>
+<td>Update one instance: download, migrate config, rollback on failure</td>
+</tr>
+<tr>
+<td><code>nullhub update-all</code></td>
+<td>Update everything</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="/docs/operate/updates-and-rollback/">Updates and rollback</a>.</p>
+<h2 id="config" aria-labelledby="heading-label-config"><span id="heading-label-config">Config</span><a class="heading-anchor" href="#config" aria-label="Permalink to Config" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub config &lt;c&gt;/&lt;n&gt;</code></td>
+<td>View instance config</td>
+</tr>
+<tr>
+<td><code>nullhub config &lt;c&gt;/&lt;n&gt; --edit</code></td>
+<td>Edit instance config in <code>$EDITOR</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="discover-and-call-the-api" aria-labelledby="heading-label-discover-and-call-the-api"><span id="heading-label-discover-and-call-the-api">Discover and call the API</span><a class="heading-anchor" href="#discover-and-call-the-api" aria-label="Permalink to Discover and call the API" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>The server describes its own API — 108 routes with method and path templates at <code>/api/meta/routes</code> (also <code>/api/spec</code>):</p>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub routes</code></td>
+<td>List every API route the server exposes</td>
+</tr>
+<tr>
+<td><code>nullhub routes --json</code></td>
+<td>Same, machine-readable</td>
+</tr>
+<tr>
+<td><code>nullhub api &lt;METHOD&gt; &lt;PATH&gt; [--host] [--port] [--body JSON] [--body-file F] [--token T] [--content-type CT] [--pretty]</code></td>
+<td>Send a raw request to any route and print the JSON</td>
+</tr>
+</tbody>
+</table>
+</div>
+<figure class="code-figure" data-lang="bash"><pre class="shiki null-kitchen" style="background-color:#0a0806;color:#d9d1c3" tabindex="0"><code><span class="line"><span style="color:#ECE5D8">nullhub</span><span style="color:#C9B795"> api</span><span style="color:#C9B795"> GET</span><span style="color:#C9B795"> /api/instances/nullclaw/main/status</span><span style="color:#C9B795"> --pretty</span></span>
+<span class="line"><span style="color:#ECE5D8">nullhub</span><span style="color:#C9B795"> api</span><span style="color:#C9B795"> GET</span><span style="color:#C9B795"> /api/instances/nullclaw/main/cron</span><span style="color:#C9B795"> --pretty</span></span></code></pre><button class="code-copy" type="button" data-code data-pagefind-ignore aria-live="polite">copy</button></figure>
+<p>Everything the dashboard does goes through this same API, so anything you can click, you can script. The bundled <code>nullhub-admin</code> skill teaches managed NullClaw agents this exact flow: <code>routes --json</code> to discover, <code>api</code> to act.</p>
+<h2 id="report-an-issue" aria-labelledby="heading-label-report-an-issue"><span id="heading-label-report-an-issue">Report an issue</span><a class="heading-anchor" href="#report-an-issue" aria-label="Permalink to Report an issue" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub report [--repo R] [--type T] [--message M] [--yes] [--dry-run]</code></td>
+<td>File a GitHub issue interactively from the terminal</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Uses the <code>gh</code> CLI when present, falls back to <code>GITHUB_TOKEN</code> + curl, and as a last resort prints a prefilled issue URL. <code>--dry-run</code> shows what would be filed.</p>
+<h2 id="os-service" aria-labelledby="heading-label-os-service"><span id="heading-label-os-service">OS service</span><a class="heading-anchor" href="#os-service" aria-label="Permalink to OS service" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Command, What it does" tabindex="0"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nullhub service install</code></td>
+<td>Register and start NullHub as a systemd user unit (Linux) or launchd service (macOS)</td>
+</tr>
+<tr>
+<td><code>nullhub service uninstall</code></td>
+<td>Remove the OS service</td>
+</tr>
+<tr>
+<td><code>nullhub service status</code></td>
+<td>Show OS service status</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Windows binaries ship, but <code>nullhub service</code> is not supported on Windows yet — it returns <code>UnsupportedPlatform</code>.</p>
+<h2 id="environment-variables" aria-labelledby="heading-label-environment-variables"><span id="heading-label-environment-variables">Environment variables</span><a class="heading-anchor" href="#environment-variables" aria-label="Permalink to Environment variables" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Variable, Purpose" tabindex="0"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>NULLHUB_ALLOWED_ORIGINS</code></td>
+<td>Comma-separated extra CORS origins, merged with <code>--allowed-origin</code> flags (http/https only, no path or query)</td>
+</tr>
+<tr>
+<td><code>GITHUB_TOKEN</code></td>
+<td>Fallback auth for <code>nullhub report</code> when the <code>gh</code> CLI is absent</td>
+</tr>
+<tr>
+<td><code>EDITOR</code></td>
+<td>Editor opened by <code>nullhub config --edit</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="files" aria-labelledby="heading-label-files"><span id="heading-label-files">Files</span><a class="heading-anchor" href="#files" aria-label="Permalink to Files" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>All state lives under <code>~/.nullhub/</code>:</p>
+<div class="table-scroll" role="region" aria-label="Data table: Path, Contents" tabindex="0"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>config.json</code>, <code>state.json</code></td>
+<td>Hub config; instance registry plus the saved-provider and saved-channel vaults</td>
+</tr>
+<tr>
+<td><code>manifests/{component}@{version}.json</code></td>
+<td>Cached component manifests</td>
+</tr>
+<tr>
+<td><code>bin/</code></td>
+<td>Installed component binaries</td>
+</tr>
+<tr>
+<td><code>instances/{component}/{name}/</code></td>
+<td><code>instance.json</code>, <code>config.json</code>, <code>data</code>, <code>logs</code> per instance</td>
+</tr>
+<tr>
+<td><code>ui/{module}@{version}</code></td>
+<td>Installed UI modules</td>
+</tr>
+<tr>
+<td><code>mission-control/replays/</code></td>
+<td>Saved Mission Control replays</td>
+</tr>
+<tr>
+<td><code>cache/downloads</code></td>
+<td>Download cache</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!----></div> <nav class="pager svelte-5oqt2y" aria-label="Previous and next" data-pagefind-ignore=""><!--[0--><a class="pager-link prev svelte-5oqt2y" href="/docs/operate/multi-instance/"><span class="dir mono svelte-5oqt2y"><!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 7-5 5 5 5"></path><path d="M6 12h12.5"></path></g></svg><!----><!----> previous</span> <span class="serif-i svelte-5oqt2y">Multi-instance</span></a><!--]--> <!--[0--><a class="pager-link next svelte-5oqt2y" href="/docs/reference/manifests/"><span class="dir mono svelte-5oqt2y">next <!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m13.5 7 5 5-5 5"></path><path d="M18 12H5.5"></path></g></svg><!----><!----></span> <span class="serif-i svelte-5oqt2y">Manifests</span></a><!--]--></nav></article> <!--[0--><aside class="toc svelte-5oqt2y" aria-label="On this page"><h2 class="label svelte-5oqt2y">On this page</h2> <ul class="svelte-5oqt2y"><!--[--><li class="d2 svelte-5oqt2y"><a href="#server" class="svelte-5oqt2y">Server</a></li><li class="d2 svelte-5oqt2y"><a href="#install-and-remove" class="svelte-5oqt2y">Install and remove</a></li><li class="d2 svelte-5oqt2y"><a href="#lifecycle" class="svelte-5oqt2y">Lifecycle</a></li><li class="d2 svelte-5oqt2y"><a href="#inspect" class="svelte-5oqt2y">Inspect</a></li><li class="d2 svelte-5oqt2y"><a href="#updates" class="svelte-5oqt2y">Updates</a></li><li class="d2 svelte-5oqt2y"><a href="#config" class="svelte-5oqt2y">Config</a></li><li class="d2 svelte-5oqt2y"><a href="#discover-and-call-the-api" class="svelte-5oqt2y">Discover and call the API</a></li><li class="d2 svelte-5oqt2y"><a href="#report-an-issue" class="svelte-5oqt2y">Report an issue</a></li><li class="d2 svelte-5oqt2y"><a href="#os-service" class="svelte-5oqt2y">OS service</a></li><li class="d2 svelte-5oqt2y"><a href="#environment-variables" class="svelte-5oqt2y">Environment variables</a></li><li class="d2 svelte-5oqt2y"><a href="#files" class="svelte-5oqt2y">Files</a></li><!--]--></ul></aside><!--]--></div><!--]--><!----></div></div><!--]--><!--]--><!----></main> <footer class="svelte-jz8lnl"><div class="container"><div class="signoff svelte-jz8lnl"><p class="serif-i big svelte-jz8lnl">Built for your hardware.</p> <p class="sub svelte-jz8lnl">Single-binary Zig tools for running and supervising AI agents locally.</p></div> <div class="cols svelte-jz8lnl"><div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Products</h3> <ul class="svelte-jz8lnl"><!--[--><li><a href="https://hub.nullmenu.ai" class="mono svelte-jz8lnl">nullhub</a></li><li><a href="https://claw.nullmenu.ai" class="mono svelte-jz8lnl">nullclaw</a></li><li><a href="https://boiler.nullmenu.ai" class="mono svelte-jz8lnl">nullboiler</a></li><li><a href="https://tickets.nullmenu.ai" class="mono svelte-jz8lnl">nulltickets</a></li><li><a href="https://watch.nullmenu.ai" class="mono svelte-jz8lnl">nullwatch</a></li><li><a href="https://pantry.nullmenu.ai" class="mono svelte-jz8lnl">nullpantry</a></li><li><a href="https://clw.nullmenu.ai" class="mono svelte-jz8lnl">nllclw</a></li><li><a href="https://desk.nullmenu.ai" class="mono svelte-jz8lnl">nulldesk</a></li><li><a href="https://cap.nullmenu.ai" class="mono svelte-jz8lnl">nullcap</a></li><li><a href="https://builder.nullmenu.ai" class="mono svelte-jz8lnl">nullbuilder</a></li><!--]--></ul></div> <div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Explore</h3> <ul class="svelte-jz8lnl"><li><a href="https://nullmenu.ai/products/" class="svelte-jz8lnl">All products</a></li> <li><a href="/docs/" class="svelte-jz8lnl">Documentation</a></li> <li><a href="/llms.txt" class="mono svelte-jz8lnl">llms.txt</a></li></ul></div> <div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Source</h3> <ul class="svelte-jz8lnl"><li><a href="https://github.com/nullclaw/nullhub" target="_blank" rel="noopener" class="svelte-jz8lnl">GitHub <!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></li> <li><a href="https://github.com/nullclaw" target="_blank" rel="noopener" class="svelte-jz8lnl">nullclaw org <!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></li> <!--[0--><li><span class="dim svelte-jz8lnl">MIT licensed</span></li><!--]--> <!--[0--><li><span class="dim mono svelte-jz8lnl">v2026.5.29</span></li><!--]--></ul></div></div> <div class="bottom svelte-jz8lnl"><span class="mark svelte-jz8lnl"><svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="1.75"></circle><line class="slash" x1="7" y1="27" x2="25" y2="5" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="round"></line></svg><!----></span> <span class="mono note svelte-jz8lnl">© 2026 the Null ecosystem</span> <span class="mono note svelte-jz8lnl">built with Zig 0.16</span> <span class="mono note svelte-jz8lnl">local-first · no cloud</span></div></div></footer><!----> <div class="grain svelte-2z0jyf" aria-hidden="true" style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E&quot;);"></div><!----><!--]--><!--]--> <!--[-1--><!--]--><!--]-->
+			
+			<script>
+				{
+					__sveltekit_zpj1a5 = {
+						base: new URL("../../..", location).pathname.slice(0, -1)
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("../../../_app/immutable/entry/start.6R6bJIUu.js"),
+						import("../../../_app/immutable/entry/app.d_YkXizr.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element, {
+							node_ids: [0, 2, 5],
+							data: [null,{type:"data",data:{tree:[{slug:"start",title:"Start",pages:[{siteId:"hub",section:"start",slug:"install",path:"/content/hub/docs/start/install.md",title:"Install",description:"Get the NullHub binary — Docker, prebuilt release, or build from source.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"start",slug:"quickstart",path:"/content/hub/docs/start/quickstart.md",title:"Quickstart",description:"Start the server, open the dashboard, install your first component.",order:2,verified:"v2026.5.29"}]},{slug:"guides",title:"Guides",pages:[{siteId:"hub",section:"guides",slug:"install-components",path:"/content/hub/docs/guides/install-components.md",title:"Installing components",description:"Add NullClaw, NullBoiler, NullTickets and NullWatch through the manifest-driven wizard.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"guides",slug:"web-dashboard",path:"/content/hub/docs/guides/web-dashboard.md",title:"Web dashboard",description:"The embedded UI — status cards, config editors, logs, component pages, Mission Control.",order:2,verified:"v2026.5.29"}]},{slug:"operate",title:"Operate",pages:[{siteId:"hub",section:"operate",slug:"updates-and-rollback",path:"/content/hub/docs/operate/updates-and-rollback.md",title:"Updates and rollback",description:"Check for new component versions, update with config migration, roll back on failure.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"operate",slug:"multi-instance",path:"/content/hub/docs/operate/multi-instance.md",title:"Multi-instance",description:"Run several instances of the same component side by side, addressed as component/name.",order:2,verified:"v2026.5.29"}]},{slug:"reference",title:"Reference",pages:[{siteId:"hub",section:"reference",slug:"cli",path:"/content/hub/docs/reference/cli.md",title:"CLI",description:"Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"reference",slug:"manifests",path:"/content/hub/docs/reference/manifests.md",title:"Manifests",description:"The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.",order:2,verified:"v2026.5.29"}]}]},uses:{}},{type:"data",data:{doc:{siteId:"hub",section:"reference",slug:"cli",path:"/content/hub/docs/reference/cli.md",title:"CLI",description:"Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.",order:1,verified:"v2026.5.29",body:"\nOne binary, two modes. Run `nullhub` with no arguments and it becomes a server (HTTP plus a supervisor thread); run it with a command and it acts as an HTTP client to that server — every subcommand except `serve`, `service` and `report` calls the REST API and prints the result. If the server is down, the CLI tells you: `nullhub is not running`. Instances are addressed as `{component}/{instance-name}` everywhere, abbreviated `\u003Cc>/\u003Cn>` below.\n\n> [!NOTE]\n> Pre-1.0: config and CLI may change between releases.\n\n## Server\n\n| Command | What it does |\n| --- | --- |\n| `nullhub` | Start server and open the browser at the dashboard |\n| `nullhub serve [--host H] [--port N] [--allowed-origin ORIGIN] ...` | Start the server; repeat `--allowed-origin` to authorize extra CORS origins |\n| `nullhub serve --no-open` | Start the server without opening the browser |\n| `nullhub version` (also `-v`, `--version`) | Print version |\n| `nullhub help` (also `-h`, `--help`) | Print usage |\n\nThe server binds `127.0.0.1:19800` by default and the dashboard serves at `http://nullhub.localhost:19800`, with `nullhub.local` published via mDNS (`dns-sd` on macOS, `avahi-publish` on Linux) when available. Allowed origins can also come from `NULLHUB_ALLOWED_ORIGINS` as a comma-separated list — that plus `--allowed-origin` is how remote access over a tailnet (Tailscale, for example) is enabled. Origins are validated: http/https only, no path, query or userinfo.\n\n## Install and remove\n\n| Command | What it does |\n| --- | --- |\n| `nullhub install \u003Ccomponent> [--name NAME] [--version V] [--build-from-source]` | Terminal install wizard (manifest-driven; same steps as the web UI) |\n| `nullhub wizard \u003Ccomponent>` | Print the component's setup wizard steps without installing |\n| `nullhub uninstall \u003Cc>/\u003Cn> [--remove-data]` | Remove an instance, optionally with its data |\n\nValid components today: `nullclaw`, `nullboiler`, `nulltickets`, `nullwatch`. Downloads are SHA256-verified and deleted on mismatch.\n\n## Lifecycle\n\n| Command | What it does |\n| --- | --- |\n| `nullhub start \u003Cc>/\u003Cn>` | Start an instance |\n| `nullhub stop \u003Cc>/\u003Cn>` | Stop an instance |\n| `nullhub restart \u003Cc>/\u003Cn>` | Restart an instance |\n| `nullhub start-all` | Start every installed instance |\n| `nullhub stop-all` | Stop every installed instance |\n\n## Inspect\n\n| Command | What it does |\n| --- | --- |\n| `nullhub status [--host H] [--port N]` | Table of all instances |\n| `nullhub status \u003Cc>/\u003Cn>` | Single-instance detail |\n| `nullhub logs \u003Cc>/\u003Cn> [--lines N]` | Tail logs |\n| `nullhub logs \u003Cc>/\u003Cn> -f` (also `--follow`) | Follow logs — note: log following is not stream-backed yet in v2026.5.29; the CLI says so and shows the current tail |\n\n## Updates\n\n| Command | What it does |\n| --- | --- |\n| `nullhub check-updates` | Check all instances for new versions |\n| `nullhub update \u003Cc>/\u003Cn>` | Update one instance: download, migrate config, rollback on failure |\n| `nullhub update-all` | Update everything |\n\nSee [Updates and rollback](/docs/operate/updates-and-rollback/).\n\n## Config\n\n| Command | What it does |\n| --- | --- |\n| `nullhub config \u003Cc>/\u003Cn>` | View instance config |\n| `nullhub config \u003Cc>/\u003Cn> --edit` | Edit instance config in `$EDITOR` |\n\n## Discover and call the API\n\nThe server describes its own API — 108 routes with method and path templates at `/api/meta/routes` (also `/api/spec`):\n\n| Command | What it does |\n| --- | --- |\n| `nullhub routes` | List every API route the server exposes |\n| `nullhub routes --json` | Same, machine-readable |\n| `nullhub api \u003CMETHOD> \u003CPATH> [--host] [--port] [--body JSON] [--body-file F] [--token T] [--content-type CT] [--pretty]` | Send a raw request to any route and print the JSON |\n\n```bash\nnullhub api GET /api/instances/nullclaw/main/status --pretty\nnullhub api GET /api/instances/nullclaw/main/cron --pretty\n```\n\nEverything the dashboard does goes through this same API, so anything you can click, you can script. The bundled `nullhub-admin` skill teaches managed NullClaw agents this exact flow: `routes --json` to discover, `api` to act.\n\n## Report an issue\n\n| Command | What it does |\n| --- | --- |\n| `nullhub report [--repo R] [--type T] [--message M] [--yes] [--dry-run]` | File a GitHub issue interactively from the terminal |\n\nUses the `gh` CLI when present, falls back to `GITHUB_TOKEN` + curl, and as a last resort prints a prefilled issue URL. `--dry-run` shows what would be filed.\n\n## OS service\n\n| Command | What it does |\n| --- | --- |\n| `nullhub service install` | Register and start NullHub as a systemd user unit (Linux) or launchd service (macOS) |\n| `nullhub service uninstall` | Remove the OS service |\n| `nullhub service status` | Show OS service status |\n\nWindows binaries ship, but `nullhub service` is not supported on Windows yet — it returns `UnsupportedPlatform`.\n\n## Environment variables\n\n| Variable | Purpose |\n| --- | --- |\n| `NULLHUB_ALLOWED_ORIGINS` | Comma-separated extra CORS origins, merged with `--allowed-origin` flags (http/https only, no path or query) |\n| `GITHUB_TOKEN` | Fallback auth for `nullhub report` when the `gh` CLI is absent |\n| `EDITOR` | Editor opened by `nullhub config --edit` |\n\n## Files\n\nAll state lives under `~/.nullhub/`:\n\n| Path | Contents |\n| --- | --- |\n| `config.json`, `state.json` | Hub config; instance registry plus the saved-provider and saved-channel vaults |\n| `manifests/{component}@{version}.json` | Cached component manifests |\n| `bin/` | Installed component binaries |\n| `instances/{component}/{name}/` | `instance.json`, `config.json`, `data`, `logs` per instance |\n| `ui/{module}@{version}` | Installed UI modules |\n| `mission-control/replays/` | Saved Mission Control replays |\n| `cache/downloads` | Download cache |\n",html:"\u003Cp>One binary, two modes. Run \u003Ccode>nullhub\u003C/code> with no arguments and it becomes a server (HTTP plus a supervisor thread); run it with a command and it acts as an HTTP client to that server — every subcommand except \u003Ccode>serve\u003C/code>, \u003Ccode>service\u003C/code> and \u003Ccode>report\u003C/code> calls the REST API and prints the result. If the server is down, the CLI tells you: \u003Ccode>nullhub is not running\u003C/code>. Instances are addressed as \u003Ccode>{component}/{instance-name}\u003C/code> everywhere, abbreviated \u003Ccode>&lt;c&gt;/&lt;n&gt;\u003C/code> below.\u003C/p>\n\u003Caside class=\"callout callout--note\">\u003Cdiv class=\"callout-title\">Note\u003C/div>\u003Cp>Pre-1.0: config and CLI may change between releases.\u003C/p>\n\u003C/aside>\n\u003Ch2 id=\"server\" aria-labelledby=\"heading-label-server\">\u003Cspan id=\"heading-label-server\">Server\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#server\" aria-label=\"Permalink to Server\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub\u003C/code>\u003C/td>\n\u003Ctd>Start server and open the browser at the dashboard\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub serve [--host H] [--port N] [--allowed-origin ORIGIN] ...\u003C/code>\u003C/td>\n\u003Ctd>Start the server; repeat \u003Ccode>--allowed-origin\u003C/code> to authorize extra CORS origins\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub serve --no-open\u003C/code>\u003C/td>\n\u003Ctd>Start the server without opening the browser\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub version\u003C/code> (also \u003Ccode>-v\u003C/code>, \u003Ccode>--version\u003C/code>)\u003C/td>\n\u003Ctd>Print version\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub help\u003C/code> (also \u003Ccode>-h\u003C/code>, \u003Ccode>--help\u003C/code>)\u003C/td>\n\u003Ctd>Print usage\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>The server binds \u003Ccode>127.0.0.1:19800\u003C/code> by default and the dashboard serves at \u003Ccode>http://nullhub.localhost:19800\u003C/code>, with \u003Ccode>nullhub.local\u003C/code> published via mDNS (\u003Ccode>dns-sd\u003C/code> on macOS, \u003Ccode>avahi-publish\u003C/code> on Linux) when available. Allowed origins can also come from \u003Ccode>NULLHUB_ALLOWED_ORIGINS\u003C/code> as a comma-separated list — that plus \u003Ccode>--allowed-origin\u003C/code> is how remote access over a tailnet (Tailscale, for example) is enabled. Origins are validated: http/https only, no path, query or userinfo.\u003C/p>\n\u003Ch2 id=\"install-and-remove\" aria-labelledby=\"heading-label-install-and-remove\">\u003Cspan id=\"heading-label-install-and-remove\">Install and remove\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#install-and-remove\" aria-label=\"Permalink to Install and remove\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub install &lt;component&gt; [--name NAME] [--version V] [--build-from-source]\u003C/code>\u003C/td>\n\u003Ctd>Terminal install wizard (manifest-driven; same steps as the web UI)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub wizard &lt;component&gt;\u003C/code>\u003C/td>\n\u003Ctd>Print the component&#39;s setup wizard steps without installing\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub uninstall &lt;c&gt;/&lt;n&gt; [--remove-data]\u003C/code>\u003C/td>\n\u003Ctd>Remove an instance, optionally with its data\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>Valid components today: \u003Ccode>nullclaw\u003C/code>, \u003Ccode>nullboiler\u003C/code>, \u003Ccode>nulltickets\u003C/code>, \u003Ccode>nullwatch\u003C/code>. Downloads are SHA256-verified and deleted on mismatch.\u003C/p>\n\u003Ch2 id=\"lifecycle\" aria-labelledby=\"heading-label-lifecycle\">\u003Cspan id=\"heading-label-lifecycle\">Lifecycle\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#lifecycle\" aria-label=\"Permalink to Lifecycle\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub start &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>Start an instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub stop &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>Stop an instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub restart &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>Restart an instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub start-all\u003C/code>\u003C/td>\n\u003Ctd>Start every installed instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub stop-all\u003C/code>\u003C/td>\n\u003Ctd>Stop every installed instance\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"inspect\" aria-labelledby=\"heading-label-inspect\">\u003Cspan id=\"heading-label-inspect\">Inspect\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#inspect\" aria-label=\"Permalink to Inspect\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub status [--host H] [--port N]\u003C/code>\u003C/td>\n\u003Ctd>Table of all instances\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub status &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>Single-instance detail\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub logs &lt;c&gt;/&lt;n&gt; [--lines N]\u003C/code>\u003C/td>\n\u003Ctd>Tail logs\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub logs &lt;c&gt;/&lt;n&gt; -f\u003C/code> (also \u003Ccode>--follow\u003C/code>)\u003C/td>\n\u003Ctd>Follow logs — note: log following is not stream-backed yet in v2026.5.29; the CLI says so and shows the current tail\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"updates\" aria-labelledby=\"heading-label-updates\">\u003Cspan id=\"heading-label-updates\">Updates\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#updates\" aria-label=\"Permalink to Updates\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub check-updates\u003C/code>\u003C/td>\n\u003Ctd>Check all instances for new versions\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub update &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>Update one instance: download, migrate config, rollback on failure\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub update-all\u003C/code>\u003C/td>\n\u003Ctd>Update everything\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>See \u003Ca href=\"/docs/operate/updates-and-rollback/\">Updates and rollback\u003C/a>.\u003C/p>\n\u003Ch2 id=\"config\" aria-labelledby=\"heading-label-config\">\u003Cspan id=\"heading-label-config\">Config\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#config\" aria-label=\"Permalink to Config\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub config &lt;c&gt;/&lt;n&gt;\u003C/code>\u003C/td>\n\u003Ctd>View instance config\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub config &lt;c&gt;/&lt;n&gt; --edit\u003C/code>\u003C/td>\n\u003Ctd>Edit instance config in \u003Ccode>$EDITOR\u003C/code>\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"discover-and-call-the-api\" aria-labelledby=\"heading-label-discover-and-call-the-api\">\u003Cspan id=\"heading-label-discover-and-call-the-api\">Discover and call the API\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#discover-and-call-the-api\" aria-label=\"Permalink to Discover and call the API\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>The server describes its own API — 108 routes with method and path templates at \u003Ccode>/api/meta/routes\u003C/code> (also \u003Ccode>/api/spec\u003C/code>):\u003C/p>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub routes\u003C/code>\u003C/td>\n\u003Ctd>List every API route the server exposes\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub routes --json\u003C/code>\u003C/td>\n\u003Ctd>Same, machine-readable\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub api &lt;METHOD&gt; &lt;PATH&gt; [--host] [--port] [--body JSON] [--body-file F] [--token T] [--content-type CT] [--pretty]\u003C/code>\u003C/td>\n\u003Ctd>Send a raw request to any route and print the JSON\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cfigure class=\"code-figure\" data-lang=\"bash\">\u003Cpre class=\"shiki null-kitchen\" style=\"background-color:#0a0806;color:#d9d1c3\" tabindex=\"0\">\u003Ccode>\u003Cspan class=\"line\">\u003Cspan style=\"color:#ECE5D8\">nullhub\u003C/span>\u003Cspan style=\"color:#C9B795\"> api\u003C/span>\u003Cspan style=\"color:#C9B795\"> GET\u003C/span>\u003Cspan style=\"color:#C9B795\"> /api/instances/nullclaw/main/status\u003C/span>\u003Cspan style=\"color:#C9B795\"> --pretty\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#ECE5D8\">nullhub\u003C/span>\u003Cspan style=\"color:#C9B795\"> api\u003C/span>\u003Cspan style=\"color:#C9B795\"> GET\u003C/span>\u003Cspan style=\"color:#C9B795\"> /api/instances/nullclaw/main/cron\u003C/span>\u003Cspan style=\"color:#C9B795\"> --pretty\u003C/span>\u003C/span>\u003C/code>\u003C/pre>\u003Cbutton class=\"code-copy\" type=\"button\" data-code data-pagefind-ignore aria-live=\"polite\">copy\u003C/button>\u003C/figure>\n\u003Cp>Everything the dashboard does goes through this same API, so anything you can click, you can script. The bundled \u003Ccode>nullhub-admin\u003C/code> skill teaches managed NullClaw agents this exact flow: \u003Ccode>routes --json\u003C/code> to discover, \u003Ccode>api\u003C/code> to act.\u003C/p>\n\u003Ch2 id=\"report-an-issue\" aria-labelledby=\"heading-label-report-an-issue\">\u003Cspan id=\"heading-label-report-an-issue\">Report an issue\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#report-an-issue\" aria-label=\"Permalink to Report an issue\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub report [--repo R] [--type T] [--message M] [--yes] [--dry-run]\u003C/code>\u003C/td>\n\u003Ctd>File a GitHub issue interactively from the terminal\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>Uses the \u003Ccode>gh\u003C/code> CLI when present, falls back to \u003Ccode>GITHUB_TOKEN\u003C/code> + curl, and as a last resort prints a prefilled issue URL. \u003Ccode>--dry-run\u003C/code> shows what would be filed.\u003C/p>\n\u003Ch2 id=\"os-service\" aria-labelledby=\"heading-label-os-service\">\u003Cspan id=\"heading-label-os-service\">OS service\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#os-service\" aria-label=\"Permalink to OS service\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Command, What it does\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Command\u003C/th>\n\u003Cth>What it does\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub service install\u003C/code>\u003C/td>\n\u003Ctd>Register and start NullHub as a systemd user unit (Linux) or launchd service (macOS)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub service uninstall\u003C/code>\u003C/td>\n\u003Ctd>Remove the OS service\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>nullhub service status\u003C/code>\u003C/td>\n\u003Ctd>Show OS service status\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>Windows binaries ship, but \u003Ccode>nullhub service\u003C/code> is not supported on Windows yet — it returns \u003Ccode>UnsupportedPlatform\u003C/code>.\u003C/p>\n\u003Ch2 id=\"environment-variables\" aria-labelledby=\"heading-label-environment-variables\">\u003Cspan id=\"heading-label-environment-variables\">Environment variables\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#environment-variables\" aria-label=\"Permalink to Environment variables\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Variable, Purpose\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Variable\u003C/th>\n\u003Cth>Purpose\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>NULLHUB_ALLOWED_ORIGINS\u003C/code>\u003C/td>\n\u003Ctd>Comma-separated extra CORS origins, merged with \u003Ccode>--allowed-origin\u003C/code> flags (http/https only, no path or query)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>GITHUB_TOKEN\u003C/code>\u003C/td>\n\u003Ctd>Fallback auth for \u003Ccode>nullhub report\u003C/code> when the \u003Ccode>gh\u003C/code> CLI is absent\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>EDITOR\u003C/code>\u003C/td>\n\u003Ctd>Editor opened by \u003Ccode>nullhub config --edit\u003C/code>\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"files\" aria-labelledby=\"heading-label-files\">\u003Cspan id=\"heading-label-files\">Files\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#files\" aria-label=\"Permalink to Files\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>All state lives under \u003Ccode>~/.nullhub/\u003C/code>:\u003C/p>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Path, Contents\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Path\u003C/th>\n\u003Cth>Contents\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>config.json\u003C/code>, \u003Ccode>state.json\u003C/code>\u003C/td>\n\u003Ctd>Hub config; instance registry plus the saved-provider and saved-channel vaults\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>manifests/{component}@{version}.json\u003C/code>\u003C/td>\n\u003Ctd>Cached component manifests\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>bin/\u003C/code>\u003C/td>\n\u003Ctd>Installed component binaries\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>instances/{component}/{name}/\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>instance.json\u003C/code>, \u003Ccode>config.json\u003C/code>, \u003Ccode>data\u003C/code>, \u003Ccode>logs\u003C/code> per instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>ui/{module}@{version}\u003C/code>\u003C/td>\n\u003Ctd>Installed UI modules\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>mission-control/replays/\u003C/code>\u003C/td>\n\u003Ctd>Saved Mission Control replays\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>cache/downloads\u003C/code>\u003C/td>\n\u003Ctd>Download cache\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n",toc:[{id:"server",text:"Server",depth:2},{id:"install-and-remove",text:"Install and remove",depth:2},{id:"lifecycle",text:"Lifecycle",depth:2},{id:"inspect",text:"Inspect",depth:2},{id:"updates",text:"Updates",depth:2},{id:"config",text:"Config",depth:2},{id:"discover-and-call-the-api",text:"Discover and call the API",depth:2},{id:"report-an-issue",text:"Report an issue",depth:2},{id:"os-service",text:"OS service",depth:2},{id:"environment-variables",text:"Environment variables",depth:2},{id:"files",text:"Files",depth:2}]},raw:"\nOne binary, two modes. Run `nullhub` with no arguments and it becomes a server (HTTP plus a supervisor thread); run it with a command and it acts as an HTTP client to that server — every subcommand except `serve`, `service` and `report` calls the REST API and prints the result. If the server is down, the CLI tells you: `nullhub is not running`. Instances are addressed as `{component}/{instance-name}` everywhere, abbreviated `\u003Cc>/\u003Cn>` below.\n\n> [!NOTE]\n> Pre-1.0: config and CLI may change between releases.\n\n## Server\n\n| Command | What it does |\n| --- | --- |\n| `nullhub` | Start server and open the browser at the dashboard |\n| `nullhub serve [--host H] [--port N] [--allowed-origin ORIGIN] ...` | Start the server; repeat `--allowed-origin` to authorize extra CORS origins |\n| `nullhub serve --no-open` | Start the server without opening the browser |\n| `nullhub version` (also `-v`, `--version`) | Print version |\n| `nullhub help` (also `-h`, `--help`) | Print usage |\n\nThe server binds `127.0.0.1:19800` by default and the dashboard serves at `http://nullhub.localhost:19800`, with `nullhub.local` published via mDNS (`dns-sd` on macOS, `avahi-publish` on Linux) when available. Allowed origins can also come from `NULLHUB_ALLOWED_ORIGINS` as a comma-separated list — that plus `--allowed-origin` is how remote access over a tailnet (Tailscale, for example) is enabled. Origins are validated: http/https only, no path, query or userinfo.\n\n## Install and remove\n\n| Command | What it does |\n| --- | --- |\n| `nullhub install \u003Ccomponent> [--name NAME] [--version V] [--build-from-source]` | Terminal install wizard (manifest-driven; same steps as the web UI) |\n| `nullhub wizard \u003Ccomponent>` | Print the component's setup wizard steps without installing |\n| `nullhub uninstall \u003Cc>/\u003Cn> [--remove-data]` | Remove an instance, optionally with its data |\n\nValid components today: `nullclaw`, `nullboiler`, `nulltickets`, `nullwatch`. Downloads are SHA256-verified and deleted on mismatch.\n\n## Lifecycle\n\n| Command | What it does |\n| --- | --- |\n| `nullhub start \u003Cc>/\u003Cn>` | Start an instance |\n| `nullhub stop \u003Cc>/\u003Cn>` | Stop an instance |\n| `nullhub restart \u003Cc>/\u003Cn>` | Restart an instance |\n| `nullhub start-all` | Start every installed instance |\n| `nullhub stop-all` | Stop every installed instance |\n\n## Inspect\n\n| Command | What it does |\n| --- | --- |\n| `nullhub status [--host H] [--port N]` | Table of all instances |\n| `nullhub status \u003Cc>/\u003Cn>` | Single-instance detail |\n| `nullhub logs \u003Cc>/\u003Cn> [--lines N]` | Tail logs |\n| `nullhub logs \u003Cc>/\u003Cn> -f` (also `--follow`) | Follow logs — note: log following is not stream-backed yet in v2026.5.29; the CLI says so and shows the current tail |\n\n## Updates\n\n| Command | What it does |\n| --- | --- |\n| `nullhub check-updates` | Check all instances for new versions |\n| `nullhub update \u003Cc>/\u003Cn>` | Update one instance: download, migrate config, rollback on failure |\n| `nullhub update-all` | Update everything |\n\nSee [Updates and rollback](/docs/operate/updates-and-rollback/).\n\n## Config\n\n| Command | What it does |\n| --- | --- |\n| `nullhub config \u003Cc>/\u003Cn>` | View instance config |\n| `nullhub config \u003Cc>/\u003Cn> --edit` | Edit instance config in `$EDITOR` |\n\n## Discover and call the API\n\nThe server describes its own API — 108 routes with method and path templates at `/api/meta/routes` (also `/api/spec`):\n\n| Command | What it does |\n| --- | --- |\n| `nullhub routes` | List every API route the server exposes |\n| `nullhub routes --json` | Same, machine-readable |\n| `nullhub api \u003CMETHOD> \u003CPATH> [--host] [--port] [--body JSON] [--body-file F] [--token T] [--content-type CT] [--pretty]` | Send a raw request to any route and print the JSON |\n\n```bash\nnullhub api GET /api/instances/nullclaw/main/status --pretty\nnullhub api GET /api/instances/nullclaw/main/cron --pretty\n```\n\nEverything the dashboard does goes through this same API, so anything you can click, you can script. The bundled `nullhub-admin` skill teaches managed NullClaw agents this exact flow: `routes --json` to discover, `api` to act.\n\n## Report an issue\n\n| Command | What it does |\n| --- | --- |\n| `nullhub report [--repo R] [--type T] [--message M] [--yes] [--dry-run]` | File a GitHub issue interactively from the terminal |\n\nUses the `gh` CLI when present, falls back to `GITHUB_TOKEN` + curl, and as a last resort prints a prefilled issue URL. `--dry-run` shows what would be filed.\n\n## OS service\n\n| Command | What it does |\n| --- | --- |\n| `nullhub service install` | Register and start NullHub as a systemd user unit (Linux) or launchd service (macOS) |\n| `nullhub service uninstall` | Remove the OS service |\n| `nullhub service status` | Show OS service status |\n\nWindows binaries ship, but `nullhub service` is not supported on Windows yet — it returns `UnsupportedPlatform`.\n\n## Environment variables\n\n| Variable | Purpose |\n| --- | --- |\n| `NULLHUB_ALLOWED_ORIGINS` | Comma-separated extra CORS origins, merged with `--allowed-origin` flags (http/https only, no path or query) |\n| `GITHUB_TOKEN` | Fallback auth for `nullhub report` when the `gh` CLI is absent |\n| `EDITOR` | Editor opened by `nullhub config --edit` |\n\n## Files\n\nAll state lives under `~/.nullhub/`:\n\n| Path | Contents |\n| --- | --- |\n| `config.json`, `state.json` | Hub config; instance registry plus the saved-provider and saved-channel vaults |\n| `manifests/{component}@{version}.json` | Cached component manifests |\n| `bin/` | Installed component binaries |\n| `instances/{component}/{name}/` | `instance.json`, `config.json`, `data`, `logs` per instance |\n| `ui/{module}@{version}` | Installed UI modules |\n| `mission-control/replays/` | Saved Mission Control replays |\n| `cache/downloads` | Download cache |\n",dateModified:"2026-07-17",sectionTitle:"Reference",prev:{siteId:"hub",section:"operate",slug:"multi-instance",path:"/content/hub/docs/operate/multi-instance.md",title:"Multi-instance",description:"Run several instances of the same component side by side, addressed as component/name.",order:2,verified:"v2026.5.29",sectionTitle:"Operate"},next:{siteId:"hub",section:"reference",slug:"manifests",path:"/content/hub/docs/reference/manifests.md",title:"Manifests",description:"The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.",order:2,verified:"v2026.5.29",sectionTitle:"Reference"}},uses:{params:["section","slug"]}}],
+							form: null,
+							error: null
+						});
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>

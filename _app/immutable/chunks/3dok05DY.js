@@ -1,0 +1,1 @@
+import{Z as e}from"./Bneb2paa.js";e();

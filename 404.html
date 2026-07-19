@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="content-security-policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://api.github.com; font-src 'self'; form-action 'self'; frame-src 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-IRprildjLL+3SuNhpxASNxA3FHtF9vaMbtB0cdufpr4=' 'sha256-oBPjZpht4Qk2zsgqXMFdtAP9doTIRZF+GSX0whRPArQ='; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:" data-null-security-policy>
+		<meta name="referrer" content="strict-origin-when-cross-origin" data-null-security-policy>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#0c0a08" />
+		<script>
+			document.documentElement.classList.add('js');
+			// Resolve the shared theme mode before first paint.
+			(function () {
+				var key = 'nullmenu-theme';
+				var valid = function (value) {
+					return value === 'system' || value === 'light' || value === 'dark';
+				};
+				var cookieMode = null;
+				try {
+					var cookie = document.cookie
+						.split(';')
+						.map(function (part) { return part.trim(); })
+						.find(function (part) { return part.indexOf(key + '=') === 0; });
+					if (cookie) {
+						try { cookieMode = decodeURIComponent(cookie.slice(key.length + 1)); } catch (e) {}
+					}
+				} catch (e) {}
+				var localMode = null;
+				try { localMode = localStorage.getItem(key); } catch (e) {}
+				var mode = valid(cookieMode) ? cookieMode : valid(localMode) ? localMode : 'system';
+				var theme = mode === 'system'
+					? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+					: mode;
+				document.documentElement.dataset.themeMode = mode;
+				document.documentElement.dataset.theme = theme;
+				if (theme === 'light') {
+					document.querySelector('meta[name="theme-color"]').content = '#f2ead8';
+				}
+			})();
+		</script>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link
+			rel="preload"
+			href="/fonts/InstrumentSerif-normal-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="/fonts/InstrumentSerif-italic-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="/fonts/Geist-normal-300_700-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="/fonts/GeistMono-normal-400_600-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link href="/_app/immutable/entry/start.6R6bJIUu.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/CGMkUONz.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/Bneb2paa.js" rel="modulepreload">
+		<link href="/_app/immutable/entry/app.d_YkXizr.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/HclGiUj8.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/xihTtKlq.js" rel="modulepreload">
+		<link href="/_app/immutable/nodes/0.BWRI0n53.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DIs7c8UJ.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/CAuGsAyG.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DsBvvBRv.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/Bc0JvcBg.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/3dok05DY.js" rel="modulepreload">
+		
+		<link href="/_app/immutable/assets/0.b4SYXXpF.css" rel="stylesheet">
+	<title>Page not found — NullHub</title>
+		<meta name="robots" content="noindex" />
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<noscript>
+			<style>
+				.static-404{min-height:100vh;display:grid;place-items:center;padding:2rem;background:#0c0a08;color:#ece5d8;font:400 16px/1.6 system-ui,sans-serif}
+				.static-404__inner{max-width:38rem}.static-404__mark{color:#b0a695;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase}
+				.static-404 h1{margin:.7rem 0;font:400 clamp(3rem,12vw,6rem)/1 Georgia,serif}.static-404 p{color:#b0a695;max-width:32rem}
+				.static-404 a{display:inline-flex;margin-top:1.5rem;padding:.75rem 1.1rem;border:1px solid #8a8173;color:#ece5d8;text-decoration:none}
+				@media(prefers-color-scheme:light){.static-404{background:#f2ead8;color:#26211a}.static-404 p,.static-404__mark{color:#52483a}.static-404 a{color:#26211a;border-color:#665c4a}}
+			</style>
+			<main class="static-404" data-static-404>
+				<div class="static-404__inner">
+					<p class="static-404__mark">Error 404 · NullHub</p>
+					<h1>Page not found.</h1>
+					<p>We could not find this page. It may have moved, or the address may be incorrect.</p>
+					<a href="/">Go to NullHub home</a>
+				</div>
+			</main>
+		</noscript>
+		<div style="display: contents">
+			<script>
+				{
+					__sveltekit_zpj1a5 = {
+						base: ""
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("/_app/immutable/entry/start.6R6bJIUu.js"),
+						import("/_app/immutable/entry/app.d_YkXizr.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element);
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>

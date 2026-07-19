@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+	<url><loc>https://hub.nullmenu.ai/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/start/install/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/start/quickstart/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/guides/install-components/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/guides/web-dashboard/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/operate/updates-and-rollback/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/operate/multi-instance/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/reference/cli/</loc><lastmod>2026-07-19</lastmod></url>
+	<url><loc>https://hub.nullmenu.ai/docs/reference/manifests/</loc><lastmod>2026-07-19</lastmod></url>
+</urlset>

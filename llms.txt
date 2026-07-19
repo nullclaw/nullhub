@@ -1,0 +1,29 @@
+# NullHub
+
+> Install, supervise and update the Null stack from one embedded dashboard and API. NullHub is a single Zig binary with local state under ~/.nullhub.
+
+Part of the Null ecosystem (https://nullmenu.ai) — single-binary Zig tools for running AI agents on your own hardware. All components are pre-1.0 with CalVer releases. The links below point to canonical documentation pages.
+
+## Start
+
+- [Install](https://hub.nullmenu.ai/docs/start/install/): Get the NullHub binary — Docker, prebuilt release, or build from source.
+- [Quickstart](https://hub.nullmenu.ai/docs/start/quickstart/): Start the server, open the dashboard, install your first component.
+
+## Guides
+
+- [Installing components](https://hub.nullmenu.ai/docs/guides/install-components/): Add NullClaw, NullBoiler, NullTickets and NullWatch through the manifest-driven wizard.
+- [Web dashboard](https://hub.nullmenu.ai/docs/guides/web-dashboard/): The embedded UI — status cards, config editors, logs, component pages, Mission Control.
+
+## Operate
+
+- [Updates and rollback](https://hub.nullmenu.ai/docs/operate/updates-and-rollback/): Check for new component versions, update with config migration, roll back on failure.
+- [Multi-instance](https://hub.nullmenu.ai/docs/operate/multi-instance/): Run several instances of the same component side by side, addressed as component/name.
+
+## Reference
+
+- [CLI](https://hub.nullmenu.ai/docs/reference/cli/): Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.
+- [Manifests](https://hub.nullmenu.ai/docs/reference/manifests/): The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.
+
+## Source
+
+- [GitHub](https://github.com/nullclaw/nullhub)

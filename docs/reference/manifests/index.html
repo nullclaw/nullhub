@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="content-security-policy" content="default-src 'self'; base-uri 'self'; connect-src 'self' https://api.github.com; font-src 'self'; form-action 'self'; frame-src 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-+UNAW5C47ucu9EvOaL8JD8M2TtVHCvmm+0XRUYzuI1E=' 'sha256-IRprildjLL+3SuNhpxASNxA3FHtF9vaMbtB0cdufpr4=' 'sha256-IxsIvqhZHvPtNvCmSeFDS4DalLo3zOoZY2PcD8ukUKs='; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:" data-null-security-policy>
+		<meta name="referrer" content="strict-origin-when-cross-origin" data-null-security-policy>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="theme-color" content="#0c0a08" />
+		<script>
+			document.documentElement.classList.add('js');
+			// Resolve the shared theme mode before first paint.
+			(function () {
+				var key = 'nullmenu-theme';
+				var valid = function (value) {
+					return value === 'system' || value === 'light' || value === 'dark';
+				};
+				var cookieMode = null;
+				try {
+					var cookie = document.cookie
+						.split(';')
+						.map(function (part) { return part.trim(); })
+						.find(function (part) { return part.indexOf(key + '=') === 0; });
+					if (cookie) {
+						try { cookieMode = decodeURIComponent(cookie.slice(key.length + 1)); } catch (e) {}
+					}
+				} catch (e) {}
+				var localMode = null;
+				try { localMode = localStorage.getItem(key); } catch (e) {}
+				var mode = valid(cookieMode) ? cookieMode : valid(localMode) ? localMode : 'system';
+				var theme = mode === 'system'
+					? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+					: mode;
+				document.documentElement.dataset.themeMode = mode;
+				document.documentElement.dataset.theme = theme;
+				if (theme === 'light') {
+					document.querySelector('meta[name="theme-color"]').content = '#f2ead8';
+				}
+			})();
+		</script>
+		<link rel="icon" href="../../../favicon.svg" type="image/svg+xml" />
+		<link
+			rel="preload"
+			href="../../../fonts/InstrumentSerif-normal-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/InstrumentSerif-italic-400-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/Geist-normal-300_700-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link
+			rel="preload"
+			href="../../../fonts/GeistMono-normal-400_600-latin.woff2"
+			as="font"
+			type="font/woff2"
+			crossorigin
+		/>
+		<link href="../../../_app/immutable/entry/start.6R6bJIUu.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/CGMkUONz.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/Bneb2paa.js" rel="modulepreload">
+		<link href="../../../_app/immutable/entry/app.d_YkXizr.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/HclGiUj8.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/xihTtKlq.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/0.BWRI0n53.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DIs7c8UJ.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/CAuGsAyG.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DsBvvBRv.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/Bc0JvcBg.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/3dok05DY.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/2.a5kTMHys.js" rel="modulepreload">
+		<link href="../../../_app/immutable/nodes/5.rpju0Pm_.js" rel="modulepreload">
+		<link href="../../../_app/immutable/chunks/DtsPaqkl.js" rel="modulepreload">
+		<!--12qhfyh--><!----><style>:root:root{--spice:#e3a93c;--spice-dim:#96702a;}</style><!----> <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%2312100d%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%229%22%20stroke%3D%22%23ece5d8%22%20stroke-width%3D%223.4%22%20fill%3D%22none%22%2F%3E%3Cline%20x1%3D%228.5%22%20y1%3D%2225.5%22%20x2%3D%2223.5%22%20y2%3D%226.5%22%20stroke%3D%22%23e3a93c%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E" type="image/svg+xml"/><!----><!--gsrl61--><meta name="description" content="The nullhub-manifest.json schema — how components describe their install, launch, health and wizard."/> <link rel="canonical" href="https://hub.nullmenu.ai/docs/reference/manifests/"/> <meta property="og:type" content="article"/> <meta property="og:site_name" content="NullHub"/> <meta property="og:title" content="Manifests — NullHub docs"/> <meta property="og:description" content="The nullhub-manifest.json schema — how components describe their install, launch, health and wizard."/> <meta property="og:url" content="https://hub.nullmenu.ai/docs/reference/manifests/"/> <meta property="og:image" content="https://hub.nullmenu.ai/og/hub.png"/> <meta property="og:image:alt" content="Social preview for NullHub: Manifests — NullHub docs"/> <meta property="og:image:width" content="1200"/> <meta property="og:image:height" content="630"/> <meta name="twitter:card" content="summary_large_image"/> <meta name="twitter:title" content="Manifests — NullHub docs"/> <meta name="twitter:description" content="The nullhub-manifest.json schema — how components describe their install, launch, health and wizard."/> <meta name="twitter:image" content="https://hub.nullmenu.ai/og/hub.png"/> <meta name="twitter:image:alt" content="Social preview for NullHub: Manifests — NullHub docs"/> <!----><script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://nullmenu.ai/#organization","name":"Null ecosystem","url":"https://nullmenu.ai/","sameAs":["https://github.com/nullclaw"]},{"@type":"TechArticle","@id":"https://hub.nullmenu.ai/docs/reference/manifests/#article","headline":"Manifests — NullHub docs","description":"The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.","url":"https://hub.nullmenu.ai/docs/reference/manifests/","image":"https://hub.nullmenu.ai/og/hub.png","inLanguage":"en","articleSection":"Reference","version":"v2026.5.29","dateModified":"2026-07-16","mainEntityOfPage":"https://hub.nullmenu.ai/docs/reference/manifests/","author":{"@id":"https://nullmenu.ai/#organization"},"publisher":{"@id":"https://nullmenu.ai/#organization"}},{"@type":"BreadcrumbList","@id":"https://hub.nullmenu.ai/docs/reference/manifests/#breadcrumbs","itemListElement":[{"@type":"ListItem","position":1,"name":"NullHub","item":"https://hub.nullmenu.ai/"},{"@type":"ListItem","position":2,"name":"Documentation","item":"https://hub.nullmenu.ai/docs/"},{"@type":"ListItem","position":3,"name":"Manifests","item":"https://hub.nullmenu.ai/docs/reference/manifests/"}]}]}</script><!----><!----><title>Manifests — NullHub docs</title>
+		<link href="../../../_app/immutable/assets/0.b4SYXXpF.css" rel="stylesheet">
+		<link href="../../../_app/immutable/assets/2.D_3iEgFB.css" rel="stylesheet">
+		<link href="../../../_app/immutable/assets/5.s1K1snEQ.css" rel="stylesheet">
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents"><!--[--><!--[0--><!--[--><a class="skip mono svelte-12qhfyh" href="#main">Skip to content</a> <span id="sr-status" class="sr-status" role="status" aria-live="polite"></span> <header class="svelte-1elxaub"><div class="inner container svelte-1elxaub"><div class="left svelte-1elxaub"><a class="brand svelte-1elxaub" href="/" aria-label="NullHub home"><svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="1.75"></circle><line class="slash" x1="7" y1="27" x2="25" y2="5" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="round"></line></svg><!----> <span class="word mono svelte-1elxaub">null<span class="suffix serif-i svelte-1elxaub">·hub</span></span></a> <!--[0--><a class="version mono svelte-1elxaub" href="https://github.com/nullclaw/nullhub/releases/tag/v2026.5.29" target="_blank" rel="noopener" aria-label="Published release v2026.5.29 (opens in a new tab)">v2026.5.29<!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a><!--]--></div> <nav class="desktop svelte-1elxaub" aria-label="Main"><!--[--><a href="/docs/" class="nav-link mono svelte-1elxaub active" aria-current="page">Docs<!--[-1--><!--]--></a><a href="https://nullmenu.ai" class="nav-link mono svelte-1elxaub">The menu<!--[-1--><!--]--></a><a href="https://github.com/nullclaw/nullhub" class="nav-link mono svelte-1elxaub" target="_blank" rel="noopener">GitHub<!--[0--><span class="ext svelte-1elxaub"><!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></span><!--]--></a><!--]--> <button class="search-btn mono svelte-1elxaub" aria-label="Search docs"><!----><svg class="functional-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="5.75"></circle><path d="m14.8 14.8 4.7 4.7"></path></g></svg><!----><!----> <kbd class="svelte-1elxaub">Ctrl K</kbd></button> <button class="theme-toggle svelte-1elxaub" aria-label="Theme: system (dark). Switch to light theme" title="Theme: system (dark). Switch to light theme"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" class="svelte-1elxaub"><circle cx="9" cy="9" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"></circle><path class="half" d="M9 2.25 a6.75 6.75 0 0 1 0 13.5 Z" fill="currentColor"></path></svg> <span class="theme-mode mono svelte-1elxaub" aria-hidden="true">system</span></button></nav> <button class="burger svelte-1elxaub" aria-expanded="false" aria-controls="mobile-navigation" aria-label="Open navigation"><span class="svelte-1elxaub"></span><span class="svelte-1elxaub"></span></button></div> <details class="nojs-navigation svelte-1elxaub" data-pagefind-ignore=""><summary class="mono svelte-1elxaub">Menu</summary> <nav aria-label="Main navigation" class="svelte-1elxaub"><!--[--><a href="/docs/" class="mono svelte-1elxaub">Docs<!--[-1--><!--]--></a><a href="https://nullmenu.ai" class="mono svelte-1elxaub">The menu<!--[-1--><!--]--></a><a href="https://github.com/nullclaw/nullhub" class="mono svelte-1elxaub" target="_blank" rel="noopener">GitHub<!--[0--><span class="ext svelte-1elxaub"><!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></span><!--]--></a><!--]--></nav></details> <!--[-1--><!--]--></header><!----> <!--[-1--><!--]--><!----> <main id="main" class="svelte-12qhfyh"><!--[0--><!--[--><div class="docs container svelte-1bpnej"><button class="nav-toggle mono svelte-1bpnej" aria-expanded="false" aria-controls="docs-navigation">menu — docs</button> <details class="nojs-docs-navigation svelte-1bpnej" data-pagefind-ignore=""><summary class="mono svelte-1bpnej">Browse documentation</summary> <nav aria-label="Documentation navigation" class="svelte-1bpnej"><a href="/docs/" class="serif-i svelte-1bpnej">Docs home</a> <!--[--><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Start</h2> <!--[--><a href="/docs/start/install/" class="svelte-1bpnej">Install</a><a href="/docs/start/quickstart/" class="svelte-1bpnej">Quickstart</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Guides</h2> <!--[--><a href="/docs/guides/install-components/" class="svelte-1bpnej">Installing components</a><a href="/docs/guides/web-dashboard/" class="svelte-1bpnej">Web dashboard</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Operate</h2> <!--[--><a href="/docs/operate/updates-and-rollback/" class="svelte-1bpnej">Updates and rollback</a><a href="/docs/operate/multi-instance/" class="svelte-1bpnej">Multi-instance</a><!--]--></div><div class="nojs-group svelte-1bpnej"><h2 class="label svelte-1bpnej">Reference</h2> <!--[--><a href="/docs/reference/cli/" class="svelte-1bpnej">CLI</a><a href="/docs/reference/manifests/" class="svelte-1bpnej">Manifests</a><!--]--></div><!--]--> <!--[-1--><!--]--></nav></details> <!--[-1--><!--]--> <div id="docs-navigation" class="sidebar svelte-1bpnej" role="navigation" aria-label="Documentation"><div class="drawer-head mono svelte-1bpnej"><div class="svelte-1bpnej"><span class="drawer-kicker svelte-1bpnej">Browse</span> <span id="docs-navigation-title" class="drawer-title svelte-1bpnej">Documentation</span></div> <button class="drawer-close svelte-1bpnej"><span>close</span><!----><svg class="functional-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10"></path><path d="M17 7 7 17"></path></g></svg><!----><!----></button></div> <a href="/docs/" class="cookbook-link serif-i svelte-1bpnej">Docs home</a> <!--[--><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Start</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/start/install/" class="svelte-1bpnej">Install</a></li><li class="svelte-1bpnej"><a href="/docs/start/quickstart/" class="svelte-1bpnej">Quickstart</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Guides</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/guides/install-components/" class="svelte-1bpnej">Installing components</a></li><li class="svelte-1bpnej"><a href="/docs/guides/web-dashboard/" class="svelte-1bpnej">Web dashboard</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Operate</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/operate/updates-and-rollback/" class="svelte-1bpnej">Updates and rollback</a></li><li class="svelte-1bpnej"><a href="/docs/operate/multi-instance/" class="svelte-1bpnej">Multi-instance</a></li><!--]--></ul></div><div class="group svelte-1bpnej"><h2 class="label svelte-1bpnej">Reference</h2> <ul class="svelte-1bpnej"><!--[--><li class="svelte-1bpnej"><a href="/docs/reference/cli/" class="svelte-1bpnej">CLI</a></li><li class="svelte-1bpnej"><a href="/docs/reference/manifests/" aria-current="page" class="svelte-1bpnej active">Manifests</a></li><!--]--></ul></div><!--]--> <!--[-1--><!--]--></div> <div class="content svelte-1bpnej"><!--[--><!----> <div class="page svelte-5oqt2y has-toc"><article data-pagefind-body=""><p class="label label--accent" data-pagefind-ignore="">Reference</p> <h1 class="serif svelte-5oqt2y">Manifests</h1> <div class="meta mono svelte-5oqt2y" data-pagefind-ignore=""><!--[0--><span class="chip svelte-5oqt2y" title="Last verified with this release">verified · v2026.5.29</span><!--]--> <button class="meta-link svelte-5oqt2y"><!--[-1-->copy as markdown<!--]--></button> <a class="meta-link svelte-5oqt2y" href="https://github.com/nullclaw/nullmenu/edit/main/content/hub/docs/reference/manifests.md" target="_blank" rel="noopener">edit on github <!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></div> <!--[0--><details class="mobile-toc svelte-5oqt2y" data-pagefind-ignore=""><summary class="svelte-5oqt2y"><span class="label">On this page</span> <span class="toc-count mono svelte-5oqt2y">10 sections <!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.5v11"></path><path d="M6.5 12h11"></path></g></svg><!----><!----></span></summary> <nav aria-label="On this page" class="svelte-5oqt2y"><ul class="svelte-5oqt2y"><!--[--><li class="d2 svelte-5oqt2y"><a href="#top-level-fields" class="svelte-5oqt2y">Top-level fields</a></li><li class="d2 svelte-5oqt2y"><a href="#platforms" class="svelte-5oqt2y">platforms</a></li><li class="d2 svelte-5oqt2y"><a href="#buildfromsource" class="svelte-5oqt2y">build_from_source</a></li><li class="d2 svelte-5oqt2y"><a href="#launch" class="svelte-5oqt2y">launch</a></li><li class="d2 svelte-5oqt2y"><a href="#health" class="svelte-5oqt2y">health</a></li><li class="d2 svelte-5oqt2y"><a href="#ports" class="svelte-5oqt2y">ports</a></li><li class="d2 svelte-5oqt2y"><a href="#wizardsteps" class="svelte-5oqt2y">wizard.steps</a></li><li class="d2 svelte-5oqt2y"><a href="#connectsto" class="svelte-5oqt2y">connects_to</a></li><li class="d2 svelte-5oqt2y"><a href="#minimal-example" class="svelte-5oqt2y">Minimal example</a></li><li class="d2 svelte-5oqt2y"><a href="#who-publishes-manifests" class="svelte-5oqt2y">Who publishes manifests</a></li><!--]--></ul></nav></details><!--]--> <div class="prose"><!----><p>NullHub has no component-specific installers. Each component publishes a <code>nullhub-manifest.json</code> that declares how to fetch it, build it, configure it, launch it, and check its health — NullHub is a generic engine that interprets the manifest. This page documents the schema as parsed by <code>src/core/manifest.zig</code> at v2026.5.29. Unknown fields are ignored by the parser.</p>
+<aside class="callout callout--warning"><div class="callout-title">Warning</div><p>Pre-1.0: the manifest schema may change between releases. The current <code>schema_version</code> is <code>1</code>.</p>
+</aside>
+<h2 id="top-level-fields" aria-labelledby="heading-label-top-level-fields"><span id="heading-label-top-level-fields">Top-level fields</span><a class="heading-anchor" href="#top-level-fields" aria-label="Permalink to Top-level fields" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Type, Required" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>schema_version</code></td>
+<td>number</td>
+<td>yes</td>
+<td>Schema version; currently <code>1</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Component id, e.g. <code>nullclaw</code></td>
+</tr>
+<tr>
+<td><code>display_name</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Human-readable name shown in the UI</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>string</td>
+<td>yes</td>
+<td>One-line description</td>
+</tr>
+<tr>
+<td><code>icon</code></td>
+<td>string</td>
+<td>yes</td>
+<td>Icon identifier</td>
+</tr>
+<tr>
+<td><code>repo</code></td>
+<td>string</td>
+<td>yes</td>
+<td>GitHub repo, <code>owner/name</code></td>
+</tr>
+<tr>
+<td><code>platforms</code></td>
+<td>map</td>
+<td>yes</td>
+<td>Platform target → release asset (see below)</td>
+</tr>
+<tr>
+<td><code>build_from_source</code></td>
+<td>object</td>
+<td>no</td>
+<td>Fallback build recipe (see below)</td>
+</tr>
+<tr>
+<td><code>launch</code></td>
+<td>object</td>
+<td>yes</td>
+<td>How to start an instance</td>
+</tr>
+<tr>
+<td><code>health</code></td>
+<td>object</td>
+<td>yes</td>
+<td>Health-check spec</td>
+</tr>
+<tr>
+<td><code>ports</code></td>
+<td>array</td>
+<td>yes</td>
+<td>Declared ports</td>
+</tr>
+<tr>
+<td><code>wizard</code></td>
+<td>object</td>
+<td>yes</td>
+<td>Install-wizard steps</td>
+</tr>
+<tr>
+<td><code>depends_on</code></td>
+<td>array of strings</td>
+<td>yes</td>
+<td>Component ids this one needs</td>
+</tr>
+<tr>
+<td><code>connects_to</code></td>
+<td>array</td>
+<td>yes</td>
+<td>Optional integrations (see below)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="platforms" aria-labelledby="heading-label-platforms"><span id="heading-label-platforms"><code>platforms</code></span><a class="heading-anchor" href="#platforms" aria-label="Permalink to platforms" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>Keys are target triples like <code>aarch64-macos</code>; values name the release asset and the binary inside it:</p>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Description" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>asset</code></td>
+<td>Release asset name, e.g. <code>nullclaw-macos-aarch64</code></td>
+</tr>
+<tr>
+<td><code>binary</code></td>
+<td>Binary name inside the asset</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="buildfromsource" aria-labelledby="heading-label-buildfromsource"><span id="heading-label-buildfromsource"><code>build_from_source</code></span><a class="heading-anchor" href="#buildfromsource" aria-label="Permalink to build_from_source" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>Used when no prebuilt asset matches the platform:</p>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Description" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>zig_version</code></td>
+<td>Required Zig version (the family pins <code>0.16.0</code>)</td>
+</tr>
+<tr>
+<td><code>command</code></td>
+<td>Build command</td>
+</tr>
+<tr>
+<td><code>output</code></td>
+<td>Path of the produced binary</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="launch" aria-labelledby="heading-label-launch"><span id="heading-label-launch"><code>launch</code></span><a class="heading-anchor" href="#launch" aria-label="Permalink to launch" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Default, Description" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>command</code></td>
+<td>—</td>
+<td>Subcommand or executable to launch</td>
+</tr>
+<tr>
+<td><code>args</code></td>
+<td><code>[]</code></td>
+<td>Argument list</td>
+</tr>
+<tr>
+<td><code>env</code></td>
+<td><code>null</code></td>
+<td>Environment variables as a JSON object</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="health" aria-labelledby="heading-label-health"><span id="heading-label-health"><code>health</code></span><a class="heading-anchor" href="#health" aria-label="Permalink to health" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Default, Description" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>endpoint</code></td>
+<td>—</td>
+<td>HTTP path to poll, e.g. <code>/health</code></td>
+</tr>
+<tr>
+<td><code>port_from_config</code></td>
+<td>—</td>
+<td>Config key holding the port, e.g. <code>gateway.port</code></td>
+</tr>
+<tr>
+<td><code>interval_ms</code></td>
+<td><code>15000</code></td>
+<td>Poll interval</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="ports" aria-labelledby="heading-label-ports"><span id="heading-label-ports"><code>ports</code></span><a class="heading-anchor" href="#ports" aria-label="Permalink to ports" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>Each entry: <code>name</code>, <code>config_key</code> (where the value lives in the instance config), <code>default</code> (number), <code>protocol</code> (e.g. <code>http</code>). The wizard prompts for these, which is what makes <a href="/docs/operate/multi-instance/">multi-instance</a> port separation work.</p>
+<h2 id="wizardsteps" aria-labelledby="heading-label-wizardsteps"><span id="heading-label-wizardsteps"><code>wizard.steps</code></span><a class="heading-anchor" href="#wizardsteps" aria-label="Permalink to wizard.steps" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>Each step:</p>
+<div class="table-scroll" role="region" aria-label="Data table: Field, Default, Description" tabindex="0"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td>—</td>
+<td>Step identifier</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>—</td>
+<td>Prompt title</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Longer prompt text</td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>—</td>
+<td>One of <code>select</code>, <code>multi_select</code>, <code>secret</code>, <code>text</code>, <code>number</code>, <code>toggle</code>, <code>dynamic_select</code></td>
+</tr>
+<tr>
+<td><code>required</code></td>
+<td><code>true</code></td>
+<td>Whether the step must be answered</td>
+</tr>
+<tr>
+<td><code>options</code></td>
+<td><code>[]</code></td>
+<td>For selects: <code>value</code>, <code>label</code>, <code>description</code>, <code>recommended</code></td>
+</tr>
+<tr>
+<td><code>default_value</code></td>
+<td><code>&quot;&quot;</code></td>
+<td>Pre-filled value</td>
+</tr>
+<tr>
+<td><code>dynamic_source</code></td>
+<td><code>null</code></td>
+<td>For <code>dynamic_select</code>: a <code>command</code> producing options, plus <code>depends_on</code> step ids</td>
+</tr>
+<tr>
+<td><code>condition</code></td>
+<td><code>null</code></td>
+<td>Show the step only when another step&#39;s answer matches</td>
+</tr>
+<tr>
+<td><code>advanced</code></td>
+<td><code>false</code></td>
+<td>Tucked behind the advanced toggle</td>
+</tr>
+<tr>
+<td><code>group</code></td>
+<td><code>null</code></td>
+<td>Visual grouping</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Conditions reference an earlier step and match with one of <code>equals</code>, <code>not_equals</code>, <code>contains</code>, or <code>not_in</code> (comma-separated exclusion list).</p>
+<h2 id="connectsto" aria-labelledby="heading-label-connectsto"><span id="heading-label-connectsto"><code>connects_to</code></span><a class="heading-anchor" href="#connectsto" aria-label="Permalink to connects_to" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>Declares optional integrations between components: <code>component</code> (target id), <code>role</code>, <code>description</code>, and <code>auto_config</code> (a JSON object NullHub applies to wire the two together). This is what drives the automatic NullTickets → NullBoiler linking during install.</p>
+<h2 id="minimal-example" aria-labelledby="heading-label-minimal-example"><span id="heading-label-minimal-example">Minimal example</span><a class="heading-anchor" href="#minimal-example" aria-label="Permalink to Minimal example" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>The parser&#39;s own test fixture:</p>
+<figure class="code-figure" data-lang="json"><pre class="shiki null-kitchen" style="background-color:#0a0806;color:#d9d1c3" tabindex="0"><code><span class="line"><span style="color:#8D8375">{</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">schema_version</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#D9A441"> 1</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">name</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "nullclaw"</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">display_name</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "NullClaw"</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">description</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "AI agent"</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">icon</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "agent"</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">repo</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "nullclaw/nullclaw"</span><span style="color:#8D8375">,</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">platforms</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> {</span></span>
+<span class="line"><span style="color:#8D8375">    "</span><span style="color:#ECE5D8">aarch64-macos</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> {</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">asset</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "nullclaw-macos-aarch64"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">binary</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "nullclaw"</span><span style="color:#8D8375"> }</span></span>
+<span class="line"><span style="color:#8D8375">  },</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">launch</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> {</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">command</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "gateway"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">args</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> []</span><span style="color:#8D8375"> },</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">health</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> {</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">endpoint</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "/health"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">port_from_config</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "gateway.port"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">interval_ms</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#D9A441"> 15000</span><span style="color:#8D8375"> },</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">ports</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> [{</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">name</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "gateway"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">config_key</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "gateway.port"</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">default</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#D9A441"> 3000</span><span style="color:#8D8375">,</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">protocol</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#C9B795"> "http"</span><span style="color:#8D8375"> }],</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">wizard</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> {</span><span style="color:#8D8375"> "</span><span style="color:#ECE5D8">steps</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> []</span><span style="color:#8D8375"> },</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">depends_on</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> [],</span></span>
+<span class="line"><span style="color:#8D8375">  "</span><span style="color:#ECE5D8">connects_to</span><span style="color:#8D8375">"</span><span style="color:#8D8375">:</span><span style="color:#8D8375"> []</span></span>
+<span class="line"><span style="color:#8D8375">}</span></span></code></pre><button class="code-copy" type="button" data-code data-pagefind-ignore aria-live="polite">copy</button></figure>
+<h2 id="who-publishes-manifests" aria-labelledby="heading-label-who-publishes-manifests"><span id="heading-label-who-publishes-manifests">Who publishes manifests</span><a class="heading-anchor" href="#who-publishes-manifests" aria-label="Permalink to Who publishes manifests" data-pagefind-ignore><span aria-hidden="true">#</span></a></h2>
+<p>NullClaw, NullBoiler, NullTickets and NullWatch all ship manifest support — that set defines what <code>nullhub install</code> accepts. Cached manifests live under <code>~/.nullhub/</code>.</p>
+<!----></div> <nav class="pager svelte-5oqt2y" aria-label="Previous and next" data-pagefind-ignore=""><!--[0--><a class="pager-link prev svelte-5oqt2y" href="/docs/reference/cli/"><span class="dir mono svelte-5oqt2y"><!----><svg class="functional-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 7-5 5 5 5"></path><path d="M6 12h12.5"></path></g></svg><!----><!----> previous</span> <span class="serif-i svelte-5oqt2y">CLI</span></a><!--]--> <!--[-1--><!--]--></nav></article> <!--[0--><aside class="toc svelte-5oqt2y" aria-label="On this page"><h2 class="label svelte-5oqt2y">On this page</h2> <ul class="svelte-5oqt2y"><!--[--><li class="d2 svelte-5oqt2y"><a href="#top-level-fields" class="svelte-5oqt2y">Top-level fields</a></li><li class="d2 svelte-5oqt2y"><a href="#platforms" class="svelte-5oqt2y">platforms</a></li><li class="d2 svelte-5oqt2y"><a href="#buildfromsource" class="svelte-5oqt2y">build_from_source</a></li><li class="d2 svelte-5oqt2y"><a href="#launch" class="svelte-5oqt2y">launch</a></li><li class="d2 svelte-5oqt2y"><a href="#health" class="svelte-5oqt2y">health</a></li><li class="d2 svelte-5oqt2y"><a href="#ports" class="svelte-5oqt2y">ports</a></li><li class="d2 svelte-5oqt2y"><a href="#wizardsteps" class="svelte-5oqt2y">wizard.steps</a></li><li class="d2 svelte-5oqt2y"><a href="#connectsto" class="svelte-5oqt2y">connects_to</a></li><li class="d2 svelte-5oqt2y"><a href="#minimal-example" class="svelte-5oqt2y">Minimal example</a></li><li class="d2 svelte-5oqt2y"><a href="#who-publishes-manifests" class="svelte-5oqt2y">Who publishes manifests</a></li><!--]--></ul></aside><!--]--></div><!--]--><!----></div></div><!--]--><!--]--><!----></main> <footer class="svelte-jz8lnl"><div class="container"><div class="signoff svelte-jz8lnl"><p class="serif-i big svelte-jz8lnl">Built for your hardware.</p> <p class="sub svelte-jz8lnl">Single-binary Zig tools for running and supervising AI agents locally.</p></div> <div class="cols svelte-jz8lnl"><div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Products</h3> <ul class="svelte-jz8lnl"><!--[--><li><a href="https://hub.nullmenu.ai" class="mono svelte-jz8lnl">nullhub</a></li><li><a href="https://claw.nullmenu.ai" class="mono svelte-jz8lnl">nullclaw</a></li><li><a href="https://boiler.nullmenu.ai" class="mono svelte-jz8lnl">nullboiler</a></li><li><a href="https://tickets.nullmenu.ai" class="mono svelte-jz8lnl">nulltickets</a></li><li><a href="https://watch.nullmenu.ai" class="mono svelte-jz8lnl">nullwatch</a></li><li><a href="https://pantry.nullmenu.ai" class="mono svelte-jz8lnl">nullpantry</a></li><li><a href="https://clw.nullmenu.ai" class="mono svelte-jz8lnl">nllclw</a></li><li><a href="https://desk.nullmenu.ai" class="mono svelte-jz8lnl">nulldesk</a></li><li><a href="https://cap.nullmenu.ai" class="mono svelte-jz8lnl">nullcap</a></li><li><a href="https://builder.nullmenu.ai" class="mono svelte-jz8lnl">nullbuilder</a></li><!--]--></ul></div> <div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Explore</h3> <ul class="svelte-jz8lnl"><li><a href="https://nullmenu.ai/products/" class="svelte-jz8lnl">All products</a></li> <li><a href="/docs/" class="svelte-jz8lnl">Documentation</a></li> <li><a href="/llms.txt" class="mono svelte-jz8lnl">llms.txt</a></li></ul></div> <div class="col svelte-jz8lnl"><h3 class="label svelte-jz8lnl">Source</h3> <ul class="svelte-jz8lnl"><li><a href="https://github.com/nullclaw/nullhub" target="_blank" rel="noopener" class="svelte-jz8lnl">GitHub <!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></li> <li><a href="https://github.com/nullclaw" target="_blank" rel="noopener" class="svelte-jz8lnl">nullclaw org <!----><svg class="functional-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="opens in a new tab"><g stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16 16 8"></path><path d="M10 8h6v6"></path></g></svg><!----><!----></a></li> <!--[0--><li><span class="dim svelte-jz8lnl">MIT licensed</span></li><!--]--> <!--[0--><li><span class="dim mono svelte-jz8lnl">v2026.5.29</span></li><!--]--></ul></div></div> <div class="bottom svelte-jz8lnl"><span class="mark svelte-jz8lnl"><svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="16" cy="16" r="10.5" stroke="currentColor" stroke-width="1.75"></circle><line class="slash" x1="7" y1="27" x2="25" y2="5" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="round"></line></svg><!----></span> <span class="mono note svelte-jz8lnl">© 2026 the Null ecosystem</span> <span class="mono note svelte-jz8lnl">built with Zig 0.16</span> <span class="mono note svelte-jz8lnl">local-first · no cloud</span></div></div></footer><!----> <div class="grain svelte-2z0jyf" aria-hidden="true" style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E&quot;);"></div><!----><!--]--><!--]--> <!--[-1--><!--]--><!--]-->
+			
+			<script>
+				{
+					__sveltekit_zpj1a5 = {
+						base: new URL("../../..", location).pathname.slice(0, -1)
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("../../../_app/immutable/entry/start.6R6bJIUu.js"),
+						import("../../../_app/immutable/entry/app.d_YkXizr.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element, {
+							node_ids: [0, 2, 5],
+							data: [null,{type:"data",data:{tree:[{slug:"start",title:"Start",pages:[{siteId:"hub",section:"start",slug:"install",path:"/content/hub/docs/start/install.md",title:"Install",description:"Get the NullHub binary — Docker, prebuilt release, or build from source.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"start",slug:"quickstart",path:"/content/hub/docs/start/quickstart.md",title:"Quickstart",description:"Start the server, open the dashboard, install your first component.",order:2,verified:"v2026.5.29"}]},{slug:"guides",title:"Guides",pages:[{siteId:"hub",section:"guides",slug:"install-components",path:"/content/hub/docs/guides/install-components.md",title:"Installing components",description:"Add NullClaw, NullBoiler, NullTickets and NullWatch through the manifest-driven wizard.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"guides",slug:"web-dashboard",path:"/content/hub/docs/guides/web-dashboard.md",title:"Web dashboard",description:"The embedded UI — status cards, config editors, logs, component pages, Mission Control.",order:2,verified:"v2026.5.29"}]},{slug:"operate",title:"Operate",pages:[{siteId:"hub",section:"operate",slug:"updates-and-rollback",path:"/content/hub/docs/operate/updates-and-rollback.md",title:"Updates and rollback",description:"Check for new component versions, update with config migration, roll back on failure.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"operate",slug:"multi-instance",path:"/content/hub/docs/operate/multi-instance.md",title:"Multi-instance",description:"Run several instances of the same component side by side, addressed as component/name.",order:2,verified:"v2026.5.29"}]},{slug:"reference",title:"Reference",pages:[{siteId:"hub",section:"reference",slug:"cli",path:"/content/hub/docs/reference/cli.md",title:"CLI",description:"Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.",order:1,verified:"v2026.5.29"},{siteId:"hub",section:"reference",slug:"manifests",path:"/content/hub/docs/reference/manifests.md",title:"Manifests",description:"The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.",order:2,verified:"v2026.5.29"}]}]},uses:{}},{type:"data",data:{doc:{siteId:"hub",section:"reference",slug:"manifests",path:"/content/hub/docs/reference/manifests.md",title:"Manifests",description:"The nullhub-manifest.json schema — how components describe their install, launch, health and wizard.",order:2,verified:"v2026.5.29",body:"\nNullHub has no component-specific installers. Each component publishes a `nullhub-manifest.json` that declares how to fetch it, build it, configure it, launch it, and check its health — NullHub is a generic engine that interprets the manifest. This page documents the schema as parsed by `src/core/manifest.zig` at v2026.5.29. Unknown fields are ignored by the parser.\n\n> [!WARNING]\n> Pre-1.0: the manifest schema may change between releases. The current `schema_version` is `1`.\n\n## Top-level fields\n\n| Field | Type | Required | Description |\n| --- | --- | --- | --- |\n| `schema_version` | number | yes | Schema version; currently `1` |\n| `name` | string | yes | Component id, e.g. `nullclaw` |\n| `display_name` | string | yes | Human-readable name shown in the UI |\n| `description` | string | yes | One-line description |\n| `icon` | string | yes | Icon identifier |\n| `repo` | string | yes | GitHub repo, `owner/name` |\n| `platforms` | map | yes | Platform target → release asset (see below) |\n| `build_from_source` | object | no | Fallback build recipe (see below) |\n| `launch` | object | yes | How to start an instance |\n| `health` | object | yes | Health-check spec |\n| `ports` | array | yes | Declared ports |\n| `wizard` | object | yes | Install-wizard steps |\n| `depends_on` | array of strings | yes | Component ids this one needs |\n| `connects_to` | array | yes | Optional integrations (see below) |\n\n## `platforms`\n\nKeys are target triples like `aarch64-macos`; values name the release asset and the binary inside it:\n\n| Field | Description |\n| --- | --- |\n| `asset` | Release asset name, e.g. `nullclaw-macos-aarch64` |\n| `binary` | Binary name inside the asset |\n\n## `build_from_source`\n\nUsed when no prebuilt asset matches the platform:\n\n| Field | Description |\n| --- | --- |\n| `zig_version` | Required Zig version (the family pins `0.16.0`) |\n| `command` | Build command |\n| `output` | Path of the produced binary |\n\n## `launch`\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `command` | — | Subcommand or executable to launch |\n| `args` | `[]` | Argument list |\n| `env` | `null` | Environment variables as a JSON object |\n\n## `health`\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `endpoint` | — | HTTP path to poll, e.g. `/health` |\n| `port_from_config` | — | Config key holding the port, e.g. `gateway.port` |\n| `interval_ms` | `15000` | Poll interval |\n\n## `ports`\n\nEach entry: `name`, `config_key` (where the value lives in the instance config), `default` (number), `protocol` (e.g. `http`). The wizard prompts for these, which is what makes [multi-instance](/docs/operate/multi-instance/) port separation work.\n\n## `wizard.steps`\n\nEach step:\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `id` | — | Step identifier |\n| `title` | — | Prompt title |\n| `description` | `\"\"` | Longer prompt text |\n| `type` | — | One of `select`, `multi_select`, `secret`, `text`, `number`, `toggle`, `dynamic_select` |\n| `required` | `true` | Whether the step must be answered |\n| `options` | `[]` | For selects: `value`, `label`, `description`, `recommended` |\n| `default_value` | `\"\"` | Pre-filled value |\n| `dynamic_source` | `null` | For `dynamic_select`: a `command` producing options, plus `depends_on` step ids |\n| `condition` | `null` | Show the step only when another step's answer matches |\n| `advanced` | `false` | Tucked behind the advanced toggle |\n| `group` | `null` | Visual grouping |\n\nConditions reference an earlier step and match with one of `equals`, `not_equals`, `contains`, or `not_in` (comma-separated exclusion list).\n\n## `connects_to`\n\nDeclares optional integrations between components: `component` (target id), `role`, `description`, and `auto_config` (a JSON object NullHub applies to wire the two together). This is what drives the automatic NullTickets → NullBoiler linking during install.\n\n## Minimal example\n\nThe parser's own test fixture:\n\n```json\n{\n  \"schema_version\": 1,\n  \"name\": \"nullclaw\",\n  \"display_name\": \"NullClaw\",\n  \"description\": \"AI agent\",\n  \"icon\": \"agent\",\n  \"repo\": \"nullclaw/nullclaw\",\n  \"platforms\": {\n    \"aarch64-macos\": { \"asset\": \"nullclaw-macos-aarch64\", \"binary\": \"nullclaw\" }\n  },\n  \"launch\": { \"command\": \"gateway\", \"args\": [] },\n  \"health\": { \"endpoint\": \"/health\", \"port_from_config\": \"gateway.port\", \"interval_ms\": 15000 },\n  \"ports\": [{ \"name\": \"gateway\", \"config_key\": \"gateway.port\", \"default\": 3000, \"protocol\": \"http\" }],\n  \"wizard\": { \"steps\": [] },\n  \"depends_on\": [],\n  \"connects_to\": []\n}\n```\n\n## Who publishes manifests\n\nNullClaw, NullBoiler, NullTickets and NullWatch all ship manifest support — that set defines what `nullhub install` accepts. Cached manifests live under `~/.nullhub/`.\n",html:"\u003Cp>NullHub has no component-specific installers. Each component publishes a \u003Ccode>nullhub-manifest.json\u003C/code> that declares how to fetch it, build it, configure it, launch it, and check its health — NullHub is a generic engine that interprets the manifest. This page documents the schema as parsed by \u003Ccode>src/core/manifest.zig\u003C/code> at v2026.5.29. Unknown fields are ignored by the parser.\u003C/p>\n\u003Caside class=\"callout callout--warning\">\u003Cdiv class=\"callout-title\">Warning\u003C/div>\u003Cp>Pre-1.0: the manifest schema may change between releases. The current \u003Ccode>schema_version\u003C/code> is \u003Ccode>1\u003C/code>.\u003C/p>\n\u003C/aside>\n\u003Ch2 id=\"top-level-fields\" aria-labelledby=\"heading-label-top-level-fields\">\u003Cspan id=\"heading-label-top-level-fields\">Top-level fields\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#top-level-fields\" aria-label=\"Permalink to Top-level fields\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Type, Required\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Type\u003C/th>\n\u003Cth>Required\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>schema_version\u003C/code>\u003C/td>\n\u003Ctd>number\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Schema version; currently \u003Ccode>1\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>name\u003C/code>\u003C/td>\n\u003Ctd>string\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Component id, e.g. \u003Ccode>nullclaw\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>display_name\u003C/code>\u003C/td>\n\u003Ctd>string\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Human-readable name shown in the UI\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>description\u003C/code>\u003C/td>\n\u003Ctd>string\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>One-line description\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>icon\u003C/code>\u003C/td>\n\u003Ctd>string\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Icon identifier\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>repo\u003C/code>\u003C/td>\n\u003Ctd>string\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>GitHub repo, \u003Ccode>owner/name\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>platforms\u003C/code>\u003C/td>\n\u003Ctd>map\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Platform target → release asset (see below)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>build_from_source\u003C/code>\u003C/td>\n\u003Ctd>object\u003C/td>\n\u003Ctd>no\u003C/td>\n\u003Ctd>Fallback build recipe (see below)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>launch\u003C/code>\u003C/td>\n\u003Ctd>object\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>How to start an instance\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>health\u003C/code>\u003C/td>\n\u003Ctd>object\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Health-check spec\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>ports\u003C/code>\u003C/td>\n\u003Ctd>array\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Declared ports\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>wizard\u003C/code>\u003C/td>\n\u003Ctd>object\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Install-wizard steps\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>depends_on\u003C/code>\u003C/td>\n\u003Ctd>array of strings\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Component ids this one needs\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>connects_to\u003C/code>\u003C/td>\n\u003Ctd>array\u003C/td>\n\u003Ctd>yes\u003C/td>\n\u003Ctd>Optional integrations (see below)\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"platforms\" aria-labelledby=\"heading-label-platforms\">\u003Cspan id=\"heading-label-platforms\">\u003Ccode>platforms\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#platforms\" aria-label=\"Permalink to platforms\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>Keys are target triples like \u003Ccode>aarch64-macos\u003C/code>; values name the release asset and the binary inside it:\u003C/p>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Description\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>asset\u003C/code>\u003C/td>\n\u003Ctd>Release asset name, e.g. \u003Ccode>nullclaw-macos-aarch64\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>binary\u003C/code>\u003C/td>\n\u003Ctd>Binary name inside the asset\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"buildfromsource\" aria-labelledby=\"heading-label-buildfromsource\">\u003Cspan id=\"heading-label-buildfromsource\">\u003Ccode>build_from_source\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#buildfromsource\" aria-label=\"Permalink to build_from_source\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>Used when no prebuilt asset matches the platform:\u003C/p>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Description\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>zig_version\u003C/code>\u003C/td>\n\u003Ctd>Required Zig version (the family pins \u003Ccode>0.16.0\u003C/code>)\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>command\u003C/code>\u003C/td>\n\u003Ctd>Build command\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>output\u003C/code>\u003C/td>\n\u003Ctd>Path of the produced binary\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"launch\" aria-labelledby=\"heading-label-launch\">\u003Cspan id=\"heading-label-launch\">\u003Ccode>launch\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#launch\" aria-label=\"Permalink to launch\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Default, Description\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Default\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>command\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>Subcommand or executable to launch\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>args\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>[]\u003C/code>\u003C/td>\n\u003Ctd>Argument list\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>env\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>null\u003C/code>\u003C/td>\n\u003Ctd>Environment variables as a JSON object\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"health\" aria-labelledby=\"heading-label-health\">\u003Cspan id=\"heading-label-health\">\u003Ccode>health\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#health\" aria-label=\"Permalink to health\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Default, Description\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Default\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>endpoint\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>HTTP path to poll, e.g. \u003Ccode>/health\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>port_from_config\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>Config key holding the port, e.g. \u003Ccode>gateway.port\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>interval_ms\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>15000\u003C/code>\u003C/td>\n\u003Ctd>Poll interval\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Ch2 id=\"ports\" aria-labelledby=\"heading-label-ports\">\u003Cspan id=\"heading-label-ports\">\u003Ccode>ports\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#ports\" aria-label=\"Permalink to ports\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>Each entry: \u003Ccode>name\u003C/code>, \u003Ccode>config_key\u003C/code> (where the value lives in the instance config), \u003Ccode>default\u003C/code> (number), \u003Ccode>protocol\u003C/code> (e.g. \u003Ccode>http\u003C/code>). The wizard prompts for these, which is what makes \u003Ca href=\"/docs/operate/multi-instance/\">multi-instance\u003C/a> port separation work.\u003C/p>\n\u003Ch2 id=\"wizardsteps\" aria-labelledby=\"heading-label-wizardsteps\">\u003Cspan id=\"heading-label-wizardsteps\">\u003Ccode>wizard.steps\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#wizardsteps\" aria-label=\"Permalink to wizard.steps\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>Each step:\u003C/p>\n\u003Cdiv class=\"table-scroll\" role=\"region\" aria-label=\"Data table: Field, Default, Description\" tabindex=\"0\">\u003Ctable>\n\u003Cthead>\n\u003Ctr>\n\u003Cth>Field\u003C/th>\n\u003Cth>Default\u003C/th>\n\u003Cth>Description\u003C/th>\n\u003C/tr>\n\u003C/thead>\n\u003Ctbody>\u003Ctr>\n\u003Ctd>\u003Ccode>id\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>Step identifier\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>title\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>Prompt title\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>description\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>&quot;&quot;\u003C/code>\u003C/td>\n\u003Ctd>Longer prompt text\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>type\u003C/code>\u003C/td>\n\u003Ctd>—\u003C/td>\n\u003Ctd>One of \u003Ccode>select\u003C/code>, \u003Ccode>multi_select\u003C/code>, \u003Ccode>secret\u003C/code>, \u003Ccode>text\u003C/code>, \u003Ccode>number\u003C/code>, \u003Ccode>toggle\u003C/code>, \u003Ccode>dynamic_select\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>required\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>true\u003C/code>\u003C/td>\n\u003Ctd>Whether the step must be answered\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>options\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>[]\u003C/code>\u003C/td>\n\u003Ctd>For selects: \u003Ccode>value\u003C/code>, \u003Ccode>label\u003C/code>, \u003Ccode>description\u003C/code>, \u003Ccode>recommended\u003C/code>\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>default_value\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>&quot;&quot;\u003C/code>\u003C/td>\n\u003Ctd>Pre-filled value\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>dynamic_source\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>null\u003C/code>\u003C/td>\n\u003Ctd>For \u003Ccode>dynamic_select\u003C/code>: a \u003Ccode>command\u003C/code> producing options, plus \u003Ccode>depends_on\u003C/code> step ids\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>condition\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>null\u003C/code>\u003C/td>\n\u003Ctd>Show the step only when another step&#39;s answer matches\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>advanced\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>false\u003C/code>\u003C/td>\n\u003Ctd>Tucked behind the advanced toggle\u003C/td>\n\u003C/tr>\n\u003Ctr>\n\u003Ctd>\u003Ccode>group\u003C/code>\u003C/td>\n\u003Ctd>\u003Ccode>null\u003C/code>\u003C/td>\n\u003Ctd>Visual grouping\u003C/td>\n\u003C/tr>\n\u003C/tbody>\n\u003C/table>\n\u003C/div>\n\u003Cp>Conditions reference an earlier step and match with one of \u003Ccode>equals\u003C/code>, \u003Ccode>not_equals\u003C/code>, \u003Ccode>contains\u003C/code>, or \u003Ccode>not_in\u003C/code> (comma-separated exclusion list).\u003C/p>\n\u003Ch2 id=\"connectsto\" aria-labelledby=\"heading-label-connectsto\">\u003Cspan id=\"heading-label-connectsto\">\u003Ccode>connects_to\u003C/code>\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#connectsto\" aria-label=\"Permalink to connects_to\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>Declares optional integrations between components: \u003Ccode>component\u003C/code> (target id), \u003Ccode>role\u003C/code>, \u003Ccode>description\u003C/code>, and \u003Ccode>auto_config\u003C/code> (a JSON object NullHub applies to wire the two together). This is what drives the automatic NullTickets → NullBoiler linking during install.\u003C/p>\n\u003Ch2 id=\"minimal-example\" aria-labelledby=\"heading-label-minimal-example\">\u003Cspan id=\"heading-label-minimal-example\">Minimal example\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#minimal-example\" aria-label=\"Permalink to Minimal example\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>The parser&#39;s own test fixture:\u003C/p>\n\u003Cfigure class=\"code-figure\" data-lang=\"json\">\u003Cpre class=\"shiki null-kitchen\" style=\"background-color:#0a0806;color:#d9d1c3\" tabindex=\"0\">\u003Ccode>\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">{\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">schema_version\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#D9A441\"> 1\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">name\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"nullclaw\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">display_name\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"NullClaw\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">description\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"AI agent\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">icon\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"agent\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">repo\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"nullclaw/nullclaw\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">platforms\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> {\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">    \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">aarch64-macos\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> {\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">asset\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"nullclaw-macos-aarch64\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">binary\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"nullclaw\"\u003C/span>\u003Cspan style=\"color:#8D8375\"> }\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  },\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">launch\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> {\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">command\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"gateway\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">args\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> []\u003C/span>\u003Cspan style=\"color:#8D8375\"> },\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">health\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> {\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">endpoint\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"/health\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">port_from_config\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"gateway.port\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">interval_ms\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#D9A441\"> 15000\u003C/span>\u003Cspan style=\"color:#8D8375\"> },\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">ports\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> [{\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">name\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"gateway\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">config_key\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"gateway.port\"\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">default\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#D9A441\"> 3000\u003C/span>\u003Cspan style=\"color:#8D8375\">,\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">protocol\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#C9B795\"> \"http\"\u003C/span>\u003Cspan style=\"color:#8D8375\"> }],\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">wizard\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> {\u003C/span>\u003Cspan style=\"color:#8D8375\"> \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">steps\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> []\u003C/span>\u003Cspan style=\"color:#8D8375\"> },\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">depends_on\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> [],\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">  \"\u003C/span>\u003Cspan style=\"color:#ECE5D8\">connects_to\u003C/span>\u003Cspan style=\"color:#8D8375\">\"\u003C/span>\u003Cspan style=\"color:#8D8375\">:\u003C/span>\u003Cspan style=\"color:#8D8375\"> []\u003C/span>\u003C/span>\n\u003Cspan class=\"line\">\u003Cspan style=\"color:#8D8375\">}\u003C/span>\u003C/span>\u003C/code>\u003C/pre>\u003Cbutton class=\"code-copy\" type=\"button\" data-code data-pagefind-ignore aria-live=\"polite\">copy\u003C/button>\u003C/figure>\n\u003Ch2 id=\"who-publishes-manifests\" aria-labelledby=\"heading-label-who-publishes-manifests\">\u003Cspan id=\"heading-label-who-publishes-manifests\">Who publishes manifests\u003C/span>\u003Ca class=\"heading-anchor\" href=\"#who-publishes-manifests\" aria-label=\"Permalink to Who publishes manifests\" data-pagefind-ignore>\u003Cspan aria-hidden=\"true\">#\u003C/span>\u003C/a>\u003C/h2>\n\u003Cp>NullClaw, NullBoiler, NullTickets and NullWatch all ship manifest support — that set defines what \u003Ccode>nullhub install\u003C/code> accepts. Cached manifests live under \u003Ccode>~/.nullhub/\u003C/code>.\u003C/p>\n",toc:[{id:"top-level-fields",text:"Top-level fields",depth:2},{id:"platforms",text:"platforms",depth:2},{id:"buildfromsource",text:"build_from_source",depth:2},{id:"launch",text:"launch",depth:2},{id:"health",text:"health",depth:2},{id:"ports",text:"ports",depth:2},{id:"wizardsteps",text:"wizard.steps",depth:2},{id:"connectsto",text:"connects_to",depth:2},{id:"minimal-example",text:"Minimal example",depth:2},{id:"who-publishes-manifests",text:"Who publishes manifests",depth:2}]},raw:"\nNullHub has no component-specific installers. Each component publishes a `nullhub-manifest.json` that declares how to fetch it, build it, configure it, launch it, and check its health — NullHub is a generic engine that interprets the manifest. This page documents the schema as parsed by `src/core/manifest.zig` at v2026.5.29. Unknown fields are ignored by the parser.\n\n> [!WARNING]\n> Pre-1.0: the manifest schema may change between releases. The current `schema_version` is `1`.\n\n## Top-level fields\n\n| Field | Type | Required | Description |\n| --- | --- | --- | --- |\n| `schema_version` | number | yes | Schema version; currently `1` |\n| `name` | string | yes | Component id, e.g. `nullclaw` |\n| `display_name` | string | yes | Human-readable name shown in the UI |\n| `description` | string | yes | One-line description |\n| `icon` | string | yes | Icon identifier |\n| `repo` | string | yes | GitHub repo, `owner/name` |\n| `platforms` | map | yes | Platform target → release asset (see below) |\n| `build_from_source` | object | no | Fallback build recipe (see below) |\n| `launch` | object | yes | How to start an instance |\n| `health` | object | yes | Health-check spec |\n| `ports` | array | yes | Declared ports |\n| `wizard` | object | yes | Install-wizard steps |\n| `depends_on` | array of strings | yes | Component ids this one needs |\n| `connects_to` | array | yes | Optional integrations (see below) |\n\n## `platforms`\n\nKeys are target triples like `aarch64-macos`; values name the release asset and the binary inside it:\n\n| Field | Description |\n| --- | --- |\n| `asset` | Release asset name, e.g. `nullclaw-macos-aarch64` |\n| `binary` | Binary name inside the asset |\n\n## `build_from_source`\n\nUsed when no prebuilt asset matches the platform:\n\n| Field | Description |\n| --- | --- |\n| `zig_version` | Required Zig version (the family pins `0.16.0`) |\n| `command` | Build command |\n| `output` | Path of the produced binary |\n\n## `launch`\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `command` | — | Subcommand or executable to launch |\n| `args` | `[]` | Argument list |\n| `env` | `null` | Environment variables as a JSON object |\n\n## `health`\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `endpoint` | — | HTTP path to poll, e.g. `/health` |\n| `port_from_config` | — | Config key holding the port, e.g. `gateway.port` |\n| `interval_ms` | `15000` | Poll interval |\n\n## `ports`\n\nEach entry: `name`, `config_key` (where the value lives in the instance config), `default` (number), `protocol` (e.g. `http`). The wizard prompts for these, which is what makes [multi-instance](/docs/operate/multi-instance/) port separation work.\n\n## `wizard.steps`\n\nEach step:\n\n| Field | Default | Description |\n| --- | --- | --- |\n| `id` | — | Step identifier |\n| `title` | — | Prompt title |\n| `description` | `\"\"` | Longer prompt text |\n| `type` | — | One of `select`, `multi_select`, `secret`, `text`, `number`, `toggle`, `dynamic_select` |\n| `required` | `true` | Whether the step must be answered |\n| `options` | `[]` | For selects: `value`, `label`, `description`, `recommended` |\n| `default_value` | `\"\"` | Pre-filled value |\n| `dynamic_source` | `null` | For `dynamic_select`: a `command` producing options, plus `depends_on` step ids |\n| `condition` | `null` | Show the step only when another step's answer matches |\n| `advanced` | `false` | Tucked behind the advanced toggle |\n| `group` | `null` | Visual grouping |\n\nConditions reference an earlier step and match with one of `equals`, `not_equals`, `contains`, or `not_in` (comma-separated exclusion list).\n\n## `connects_to`\n\nDeclares optional integrations between components: `component` (target id), `role`, `description`, and `auto_config` (a JSON object NullHub applies to wire the two together). This is what drives the automatic NullTickets → NullBoiler linking during install.\n\n## Minimal example\n\nThe parser's own test fixture:\n\n```json\n{\n  \"schema_version\": 1,\n  \"name\": \"nullclaw\",\n  \"display_name\": \"NullClaw\",\n  \"description\": \"AI agent\",\n  \"icon\": \"agent\",\n  \"repo\": \"nullclaw/nullclaw\",\n  \"platforms\": {\n    \"aarch64-macos\": { \"asset\": \"nullclaw-macos-aarch64\", \"binary\": \"nullclaw\" }\n  },\n  \"launch\": { \"command\": \"gateway\", \"args\": [] },\n  \"health\": { \"endpoint\": \"/health\", \"port_from_config\": \"gateway.port\", \"interval_ms\": 15000 },\n  \"ports\": [{ \"name\": \"gateway\", \"config_key\": \"gateway.port\", \"default\": 3000, \"protocol\": \"http\" }],\n  \"wizard\": { \"steps\": [] },\n  \"depends_on\": [],\n  \"connects_to\": []\n}\n```\n\n## Who publishes manifests\n\nNullClaw, NullBoiler, NullTickets and NullWatch all ship manifest support — that set defines what `nullhub install` accepts. Cached manifests live under `~/.nullhub/`.\n",dateModified:"2026-07-16",sectionTitle:"Reference",prev:{siteId:"hub",section:"reference",slug:"cli",path:"/content/hub/docs/reference/cli.md",title:"CLI",description:"Every nullhub command — server, install, lifecycle, updates, config, routes, raw API, report, OS service.",order:1,verified:"v2026.5.29",sectionTitle:"Reference"},next:null},uses:{params:["section","slug"]}}],
+							form: null,
+							error: null
+						});
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>
