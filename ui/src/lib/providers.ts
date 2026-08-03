@@ -11,6 +11,7 @@ export type ProviderOption = {
  */
 export const PROVIDER_OPTIONS: ProviderOption[] = [
   { value: "openrouter", label: "OpenRouter (multi-provider, recommended)", recommended: true },
+  { value: "minimax", label: "MiniMax" },
   { value: "anthropic", label: "Anthropic" },
   { value: "openai", label: "OpenAI" },
   { value: "google", label: "Google AI" },
@@ -33,6 +34,18 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
 export const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
 export const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
+
+export const PROVIDER_DEFAULT_BASE_URLS: Record<string, string> = {
+  minimax: "https://api.minimax.io/v1",
+};
+
+export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  minimax: "MiniMax-M3",
+};
+
+export function providerUsesOpenAiCompatibleEndpoint(provider: string) {
+  return provider === OPENAI_COMPATIBLE_VALUE || provider in PROVIDER_DEFAULT_BASE_URLS;
+}
 
 /**
  * Set of all provider values that are NOT the openai-compatible catch-all.

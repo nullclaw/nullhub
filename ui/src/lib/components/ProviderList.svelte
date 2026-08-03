@@ -1,7 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
-  import { OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, mergeWithManifestOptions } from "$lib/providers";
+  import {
+    OPENAI_COMPATIBLE_VALUE,
+    LOCAL_PROVIDERS,
+    PROVIDER_DEFAULT_BASE_URLS,
+    PROVIDER_DEFAULT_MODELS,
+    mergeWithManifestOptions,
+    providerUsesOpenAiCompatibleEndpoint,
+  } from "$lib/providers";
   import type { ProviderOption } from "$lib/providers";
 
   let {
@@ -176,7 +183,13 @@
       if (provider === OPENAI_COMPATIBLE_VALUE) {
         return { ...e, provider, base_url: e.base_url || "", provider_name: e.provider_name || "" };
       }
-      return { ...e, provider, base_url: "", provider_name: "" };
+      return {
+        ...e,
+        provider,
+        base_url: PROVIDER_DEFAULT_BASE_URLS[provider] || "",
+        model: e.model || PROVIDER_DEFAULT_MODELS[provider] || "",
+        provider_name: "",
+      };
     });
     emitChange();
   }
@@ -233,9 +246,9 @@
 
   async function ensureModelOptions(entry: ProviderEntry) {
     if (!entry.provider) return;
-    // openai-compatible requires a base_url to probe; skip until one is entered.
-    if (entry.provider === OPENAI_COMPATIBLE_VALUE && !entry.base_url) return;
-    if (entry.provider !== OPENAI_COMPATIBLE_VALUE && !component) return;
+    // OpenAI-compatible endpoints require a base_url to probe; skip until one is entered.
+    if (providerUsesOpenAiCompatibleEndpoint(entry.provider) && !entry.base_url) return;
+    if (!providerUsesOpenAiCompatibleEndpoint(entry.provider) && !component) return;
 
     const key = modelKey(entry);
     if (modelLoadingByKey[key] || modelLoadedByKey[key]) return;
@@ -245,7 +258,7 @@
 
     try {
       let models: string[];
-      if (entry.provider === OPENAI_COMPATIBLE_VALUE && entry.base_url) {
+      if (providerUsesOpenAiCompatibleEndpoint(entry.provider) && entry.base_url) {
         const data = await api.probeProviderModels(entry.base_url, entry.api_key || "");
         models = data.live_ok && Array.isArray(data.models) ? data.models : [];
       } else {
@@ -338,6 +351,9 @@
     if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
       return "e.g. gpt-4o-mini";
     }
+    if (entry.provider in PROVIDER_DEFAULT_MODELS) {
+      return PROVIDER_DEFAULT_MODELS[entry.provider];
+    }
     if (entry.provider === "codex-cli" || entry.provider === "openai-codex") {
       return "e.g. gpt-5.4";
     }
@@ -351,7 +367,7 @@
     if (entry.provider === "openai-codex") {
       return "Uses ChatGPT/Codex auth from ~/.codex/auth.json. No API key required here.";
     }
-    if (entry.provider === OPENAI_COMPATIBLE_VALUE) {
+    if (providerUsesOpenAiCompatibleEndpoint(entry.provider)) {
       return "Click to load models from the endpoint, then filter as you type.";
     }
     return "Click to load models, then filter as you type.";
@@ -432,6 +448,8 @@
             placeholder="e.g. infini-ai, xiaomi-mimo"
           />
         </div>
+      {/if}
+      {#if providerUsesOpenAiCompatibleEndpoint(entry.provider)}
         <div class="provider-field">
           <label for={`provider-base-url-${i}`}>Base URL</label>
           <input
@@ -439,7 +457,7 @@
             type="text"
             value={entry.base_url}
             oninput={(e) => updateEntry(i, "base_url", e.currentTarget.value)}
-            placeholder="https://api.example.com/v1"
+            placeholder={PROVIDER_DEFAULT_BASE_URLS[entry.provider] || "https://api.example.com/v1"}
           />
         </div>
       {/if}
