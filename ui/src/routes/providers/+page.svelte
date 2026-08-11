@@ -6,8 +6,10 @@
     OPENAI_COMPATIBLE_VALUE,
     LOCAL_PROVIDERS,
     KNOWN_PROVIDER_VALUES,
+    PROVIDER_BASE_URL_OPTIONS,
     PROVIDER_DEFAULT_BASE_URLS,
     PROVIDER_DEFAULT_MODELS,
+    mergeProviderModelOptions,
     providerUsesOpenAiCompatibleEndpoint,
   } from "$lib/providers";
 
@@ -246,14 +248,12 @@
     return provider.last_validation_at || provider.validated_at || "";
   }
 
-  $effect(() => {
-    if (addForm.provider in PROVIDER_DEFAULT_BASE_URLS && !addForm.base_url) {
-      addForm.base_url = PROVIDER_DEFAULT_BASE_URLS[addForm.provider];
-    }
-    if (addForm.provider in PROVIDER_DEFAULT_MODELS && !addForm.model) {
-      addForm.model = PROVIDER_DEFAULT_MODELS[addForm.provider];
-    }
-  });
+  function selectAddProvider(provider: string) {
+    addForm.provider = provider;
+    addForm.provider_name = "";
+    addForm.base_url = PROVIDER_DEFAULT_BASE_URLS[provider] || "";
+    addForm.model = PROVIDER_DEFAULT_MODELS[provider] || "";
+  }
 
   $effect(() => {
     // Clear probed models when the add form's endpoint, key, or provider changes
@@ -282,11 +282,12 @@
   {/if}
 
   {#if showAddForm}
+    {@const addModelOptions = mergeProviderModelOptions(addForm.provider, addProbedModels)}
     <div class="add-form">
       <h2>Add Provider</h2>
       <div class="field">
         <label for="add-provider">Provider</label>
-        <select id="add-provider" bind:value={addForm.provider}>
+        <select id="add-provider" value={addForm.provider} onchange={(event) => selectAddProvider(event.currentTarget.value)}>
           {#each PROVIDER_OPTIONS as opt}
             <option value={opt.value}>{opt.label}</option>
           {/each}
@@ -306,7 +307,15 @@
             type="text"
             bind:value={addForm.base_url}
             placeholder={PROVIDER_DEFAULT_BASE_URLS[addForm.provider] || "https://api.example.com/v1"}
+            list="add-provider-base-url-options"
           />
+          {#if PROVIDER_BASE_URL_OPTIONS[addForm.provider]?.length}
+            <datalist id="add-provider-base-url-options">
+              {#each PROVIDER_BASE_URL_OPTIONS[addForm.provider] as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </datalist>
+          {/if}
         </div>
       {/if}
       {#if !isLocal(addForm.provider)}
@@ -337,9 +346,9 @@
           {#if addProbeError}
             <div class="probe-error">{addProbeError}</div>
           {/if}
-          {#if addProbedModels.length > 0}
+          {#if addModelOptions.length > 0}
             <div class="model-list">
-              {#each addProbedModels as m}
+              {#each addModelOptions as m}
                 <button
                   class="model-chip"
                   class:selected={addForm.model === m}
@@ -375,6 +384,7 @@
       {#each providers as p}
         <div class="provider-card">
           {#if editingId === p.id}
+            {@const editModelOptions = mergeProviderModelOptions(p.provider, editProbedModels)}
             <div class="edit-form">
               <div class="field">
                 <label for="edit-name-{p.id}">Name</label>
@@ -383,7 +393,20 @@
               {#if isCustomProvider(p)}
                 <div class="field">
                   <label for="edit-base-url-{p.id}">Base URL</label>
-                  <input id="edit-base-url-{p.id}" type="text" bind:value={editForm.base_url} placeholder="https://api.example.com/v1" />
+                  <input
+                    id="edit-base-url-{p.id}"
+                    type="text"
+                    bind:value={editForm.base_url}
+                    placeholder={PROVIDER_DEFAULT_BASE_URLS[p.provider] || "https://api.example.com/v1"}
+                    list={`edit-provider-base-url-options-${p.id}`}
+                  />
+                  {#if PROVIDER_BASE_URL_OPTIONS[p.provider]?.length}
+                    <datalist id={`edit-provider-base-url-options-${p.id}`}>
+                      {#each PROVIDER_BASE_URL_OPTIONS[p.provider] as option}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </datalist>
+                  {/if}
                 </div>
               {/if}
               {#if !isLocal(p.provider)}
@@ -396,7 +419,12 @@
                 <label for="edit-model-{p.id}">Model</label>
                 {#if isCustomProvider(p)}
                   <div class="model-input-row">
-                    <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. gpt-4" />
+                    <input
+                      id="edit-model-{p.id}"
+                      type="text"
+                      bind:value={editForm.model}
+                      placeholder={PROVIDER_DEFAULT_MODELS[p.provider] || "e.g. gpt-4"}
+                    />
                     <button
                       class="btn fetch-models-btn"
                       onclick={fetchEditModels}
@@ -409,9 +437,9 @@
                   {#if editProbeError}
                     <div class="probe-error">{editProbeError}</div>
                   {/if}
-                  {#if editProbedModels.length > 0}
+                  {#if editModelOptions.length > 0}
                     <div class="model-list">
-                      {#each editProbedModels as m}
+                      {#each editModelOptions as m}
                         <button
                           class="model-chip"
                           class:selected={editForm.model === m}

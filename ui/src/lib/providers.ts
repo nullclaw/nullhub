@@ -35,16 +35,37 @@ export const OPENAI_COMPATIBLE_VALUE = "openai-compatible";
 
 export const LOCAL_PROVIDERS = ["ollama", "lm-studio", "claude-cli", "codex-cli", "openai-codex"];
 
+export type ProviderBaseUrlOption = {
+  value: string;
+  label: string;
+};
+
+export const PROVIDER_BASE_URL_OPTIONS: Record<string, ProviderBaseUrlOption[]> = {
+  minimax: [
+    { value: "https://api.minimax.io/v1", label: "Global" },
+    { value: "https://api.minimaxi.com/v1", label: "China" },
+  ],
+};
+
+export const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
+  minimax: ["MiniMax-M3", "MiniMax-M2.7"],
+};
+
 export const PROVIDER_DEFAULT_BASE_URLS: Record<string, string> = {
-  minimax: "https://api.minimax.io/v1",
+  minimax: PROVIDER_BASE_URL_OPTIONS.minimax[0].value,
 };
 
 export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
-  minimax: "MiniMax-M3",
+  minimax: PROVIDER_MODEL_OPTIONS.minimax[0],
 };
 
 export function providerUsesOpenAiCompatibleEndpoint(provider: string) {
   return provider === OPENAI_COMPATIBLE_VALUE || provider in PROVIDER_DEFAULT_BASE_URLS;
+}
+
+export function mergeProviderModelOptions(provider: string, models: unknown[] = []): string[] {
+  const candidates = [...(PROVIDER_MODEL_OPTIONS[provider] || []), ...models];
+  return [...new Set(candidates.filter((model): model is string => typeof model === "string" && model.length > 0))];
 }
 
 /**

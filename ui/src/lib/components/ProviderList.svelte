@@ -4,8 +4,10 @@
   import {
     OPENAI_COMPATIBLE_VALUE,
     LOCAL_PROVIDERS,
+    PROVIDER_BASE_URL_OPTIONS,
     PROVIDER_DEFAULT_BASE_URLS,
     PROVIDER_DEFAULT_MODELS,
+    mergeProviderModelOptions,
     mergeWithManifestOptions,
     providerUsesOpenAiCompatibleEndpoint,
   } from "$lib/providers";
@@ -89,7 +91,8 @@
   }
 
   function useSaved(sp: any) {
-    const isCompat = sp.base_url && sp.base_url.length > 0;
+    const isNamedEndpointProvider = sp.provider in PROVIDER_DEFAULT_BASE_URLS;
+    const isCompat = Boolean(sp.base_url) && !isNamedEndpointProvider;
     const savedEntry = {
       provider: isCompat ? OPENAI_COMPATIBLE_VALUE : sp.provider,
       api_key: sp.api_key,
@@ -233,7 +236,7 @@
   }
 
   function getModelOptions(entry: ProviderEntry) {
-    return modelOptionsByKey[modelKey(entry)] || [];
+    return mergeProviderModelOptions(entry.provider, modelOptionsByKey[modelKey(entry)] || []);
   }
 
   function getModelError(entry: ProviderEntry) {
@@ -458,7 +461,15 @@
             value={entry.base_url}
             oninput={(e) => updateEntry(i, "base_url", e.currentTarget.value)}
             placeholder={PROVIDER_DEFAULT_BASE_URLS[entry.provider] || "https://api.example.com/v1"}
+            list={`provider-base-url-options-${i}`}
           />
+          {#if PROVIDER_BASE_URL_OPTIONS[entry.provider]?.length}
+            <datalist id={`provider-base-url-options-${i}`}>
+              {#each PROVIDER_BASE_URL_OPTIONS[entry.provider] as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </datalist>
+          {/if}
         </div>
       {/if}
 
@@ -482,9 +493,7 @@
             {@const filteredModels = getFilteredModels(entry)}
             {@const totalMatches = getFilteredModelCount(entry)}
             <div class="model-dropdown">
-              {#if isModelLoading(entry)}
-                <div class="model-empty">Loading models...</div>
-              {:else if filteredModels.length > 0}
+              {#if filteredModels.length > 0}
                 {#each filteredModels as model}
                   <button
                     type="button"
@@ -503,6 +512,11 @@
                     Showing {filteredModels.length} of {totalMatches}. Keep typing to narrow.
                   </div>
                 {/if}
+                {#if isModelLoading(entry)}
+                  <div class="model-summary">Loading additional models from the endpoint...</div>
+                {/if}
+              {:else if isModelLoading(entry)}
+                <div class="model-empty">Loading models...</div>
               {:else if getModelError(entry)}
                 <div class="model-empty model-error">
                   {getModelError(entry)}. You can still type a model manually.
