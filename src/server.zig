@@ -129,6 +129,7 @@ pub const Server = struct {
         };
 
         orchestrator.syncLocalUiModules(allocator, paths);
+        orchestrator.syncMissingUiModules(allocator, paths, state);
 
         return .{
             .allocator = allocator,

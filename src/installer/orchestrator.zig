@@ -384,6 +384,9 @@ pub fn install(
         error.StartFailed => return error.StartFailed,
     };
 
+    // Best effort: a failed UI module install must not fail the instance.
+    ensureComponentUiModules(allocator, p, comp);
+
     return .{
         .version = version,
         .instance_name = opts.instance_name,
@@ -1358,6 +1361,35 @@ pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void
     }
 }
 
+/// Install the component's declared UI modules, best effort. Already-installed
+/// modules are skipped and a failed install never fails the caller — the
+/// module can still be installed via the API endpoint afterwards.
+/// NOTE: No unit test for the download path — tests must not hit the network;
+/// the guard below makes this a no-op under `zig build test`. Covered by a
+/// manual smoke test against a seeded state.
+fn ensureComponentUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, comp: registry.KnownComponent) void {
+    if (builtin.is_test) return;
+
+    for (comp.ui_modules) |ui_mod| {
+        installUiModule(allocator, p, ui_mod, "latest") catch |err| {
+            std.log.warn("ui module {s} auto-install failed: {s}", .{ ui_mod.name, @errorName(err) });
+        };
+    }
+}
+
+/// Download declared UI modules for components that have at least one
+/// instance. Complements syncLocalUiModules (which builds from a local
+/// sibling checkout) by covering release installs, so a fresh binary ends
+/// up with a working chat UI without a manual API call.
+pub fn syncMissingUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, s: *state_mod.State) void {
+    for (&registry.known_components) |*comp| {
+        if (comp.ui_modules.len == 0) continue;
+        const instances = s.instances.getPtr(comp.name) orelse continue;
+        if (instances.count() == 0) continue;
+        ensureComponentUiModules(allocator, p, comp.*);
+    }
+}
+
 /// Write content to a file at an absolute path, creating the file if needed.
 fn writeFile(path: []const u8, content: []const u8) !void {
     const file = try std_compat.fs.createFileAbsolute(path, .{});
@@ -2029,4 +2061,36 @@ test "patchNullclawRuntimeProfileIntoConfig prepares stateless gateway config fo
     try std.testing.expectEqual(@as(usize, 1), paired_tokens.len);
     try std.testing.expectEqualStrings(expected_hash, paired_tokens[0].string);
     try std.testing.expect(!nullclaw_gateway_config.isNullhubGatewayToken(paired_tokens[0].string));
+}
+
+test "nullclaw component declares nullclaw-chat-ui ui module" {
+    const comp = registry.findKnownComponent("nullclaw") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), comp.ui_modules.len);
+    try std.testing.expectEqualStrings("nullclaw-chat-ui", comp.ui_modules[0].name);
+    try std.testing.expectEqualStrings("nullclaw/nullclaw-chat-ui", comp.ui_modules[0].repo);
+}
+
+test "syncMissingUiModules leaves module uninstalled under test despite qualifying instance" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_helpers.TempPaths.init(allocator);
+    defer fixture.deinit();
+    const state_path = try fixture.paths.state(allocator);
+    defer allocator.free(state_path);
+    var state = state_mod.State.init(allocator, state_path);
+    defer state.deinit();
+    try state.addInstance("nullclaw", "backfill-target", .{ .version = "v2026.5.29" });
+
+    syncMissingUiModules(allocator, fixture.paths, &state);
+
+    // The test guard held: the network download never ran, so the module
+    // destination directory was not created.
+    const dest = try fixture.paths.uiModule(allocator, "nullclaw-chat-ui", "latest");
+    defer allocator.free(dest);
+    if (std_compat.fs.openDirAbsolute(dest, .{})) |existing| {
+        var dir = existing;
+        dir.close();
+        return error.TestUnexpectedResult;
+    } else |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    }
 }
