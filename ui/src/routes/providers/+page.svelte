@@ -1,7 +1,17 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api } from "$lib/api/client";
-  import { PROVIDER_OPTIONS, OPENAI_COMPATIBLE_VALUE, LOCAL_PROVIDERS, KNOWN_PROVIDER_VALUES } from "$lib/providers";
+  import {
+    PROVIDER_OPTIONS,
+    OPENAI_COMPATIBLE_VALUE,
+    LOCAL_PROVIDERS,
+    KNOWN_PROVIDER_VALUES,
+    PROVIDER_BASE_URL_OPTIONS,
+    PROVIDER_DEFAULT_BASE_URLS,
+    PROVIDER_DEFAULT_MODELS,
+    mergeProviderModelOptions,
+    providerUsesOpenAiCompatibleEndpoint,
+  } from "$lib/providers";
 
 
   let providers = $state<any[]>([]);
@@ -107,26 +117,28 @@
     addValidating = true;
     addError = "";
     try {
+      const usesCompatibleEndpoint = providerUsesOpenAiCompatibleEndpoint(addForm.provider);
       const isCustom = addForm.provider === OPENAI_COMPATIBLE_VALUE;
       const providerValue = addForm.provider === OPENAI_COMPATIBLE_VALUE
         ? addForm.provider_name.trim()
         : addForm.provider;
-      const baseUrl = addForm.base_url.trim();
+      const baseUrl = addForm.base_url.trim() || PROVIDER_DEFAULT_BASE_URLS[addForm.provider] || "";
+      const model = addForm.model || PROVIDER_DEFAULT_MODELS[addForm.provider] || undefined;
       if (isCustom && !providerValue) {
         addError = "Provider name is required for OpenAI Compatible providers.";
         addValidating = false;
         return;
       }
-      if (isCustom && !baseUrl) {
-        addError = "Base URL is required for OpenAI Compatible providers.";
+      if (usesCompatibleEndpoint && !baseUrl) {
+        addError = "Base URL is required for this provider.";
         addValidating = false;
         return;
       }
       await api.createSavedProvider({
         provider: providerValue,
         api_key: addForm.api_key,
-        model: addForm.model || undefined,
-        base_url: isCustom ? baseUrl : undefined,
+        model,
+        base_url: usesCompatibleEndpoint ? baseUrl : undefined,
       });
       showAddForm = false;
       addForm = { provider: "openrouter", provider_name: "", api_key: "", model: "", base_url: "" };
@@ -209,7 +221,7 @@
   // A provider is "custom" if its type is not one of the built-in nullclaw-known providers.
   // This determines whether the base_url / Fetch Models fields appear in edit form.
   function isCustomProvider(p: any) {
-    return !KNOWN_PROVIDER_VALUES.has(p.provider);
+    return !KNOWN_PROVIDER_VALUES.has(p.provider) || p.provider in PROVIDER_DEFAULT_BASE_URLS;
   }
 
   function getProviderLabel(value: string) {
@@ -236,8 +248,16 @@
     return provider.last_validation_at || provider.validated_at || "";
   }
 
+  function selectAddProvider(provider: string) {
+    addForm.provider = provider;
+    addForm.provider_name = "";
+    addForm.base_url = PROVIDER_DEFAULT_BASE_URLS[provider] || "";
+    addForm.model = PROVIDER_DEFAULT_MODELS[provider] || "";
+  }
+
   $effect(() => {
-    // Clear probed models when the add form's base_url or api_key changes
+    // Clear probed models when the add form's endpoint, key, or provider changes
+    addForm.provider;
     addForm.base_url;
     addForm.api_key;
     addProbedModels = [];
@@ -262,11 +282,12 @@
   {/if}
 
   {#if showAddForm}
+    {@const addModelOptions = mergeProviderModelOptions(addForm.provider, addProbedModels)}
     <div class="add-form">
       <h2>Add Provider</h2>
       <div class="field">
         <label for="add-provider">Provider</label>
-        <select id="add-provider" bind:value={addForm.provider}>
+        <select id="add-provider" value={addForm.provider} onchange={(event) => selectAddProvider(event.currentTarget.value)}>
           {#each PROVIDER_OPTIONS as opt}
             <option value={opt.value}>{opt.label}</option>
           {/each}
@@ -277,9 +298,24 @@
           <label for="add-provider-name">Provider Name</label>
           <input id="add-provider-name" type="text" bind:value={addForm.provider_name} placeholder="e.g. infini-ai, xiaomi-mimo" />
         </div>
+      {/if}
+      {#if providerUsesOpenAiCompatibleEndpoint(addForm.provider)}
         <div class="field">
           <label for="add-base-url">Base URL</label>
-          <input id="add-base-url" type="text" bind:value={addForm.base_url} placeholder="https://api.example.com/v1" />
+          <input
+            id="add-base-url"
+            type="text"
+            bind:value={addForm.base_url}
+            placeholder={PROVIDER_DEFAULT_BASE_URLS[addForm.provider] || "https://api.example.com/v1"}
+            list="add-provider-base-url-options"
+          />
+          {#if PROVIDER_BASE_URL_OPTIONS[addForm.provider]?.length}
+            <datalist id="add-provider-base-url-options">
+              {#each PROVIDER_BASE_URL_OPTIONS[addForm.provider] as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </datalist>
+          {/if}
         </div>
       {/if}
       {#if !isLocal(addForm.provider)}
@@ -288,11 +324,16 @@
           <input id="add-api-key" type="password" bind:value={addForm.api_key} placeholder="Enter API key..." />
         </div>
       {/if}
-      {#if addForm.provider === OPENAI_COMPATIBLE_VALUE}
+      {#if providerUsesOpenAiCompatibleEndpoint(addForm.provider)}
         <div class="field">
           <label for="add-model">Model</label>
           <div class="model-input-row">
-            <input id="add-model" type="text" bind:value={addForm.model} placeholder="e.g. gpt-4" />
+            <input
+              id="add-model"
+              type="text"
+              bind:value={addForm.model}
+              placeholder={PROVIDER_DEFAULT_MODELS[addForm.provider] || "e.g. gpt-4"}
+            />
             <button
               class="btn fetch-models-btn"
               onclick={fetchAddModels}
@@ -305,9 +346,9 @@
           {#if addProbeError}
             <div class="probe-error">{addProbeError}</div>
           {/if}
-          {#if addProbedModels.length > 0}
+          {#if addModelOptions.length > 0}
             <div class="model-list">
-              {#each addProbedModels as m}
+              {#each addModelOptions as m}
                 <button
                   class="model-chip"
                   class:selected={addForm.model === m}
@@ -343,6 +384,7 @@
       {#each providers as p}
         <div class="provider-card">
           {#if editingId === p.id}
+            {@const editModelOptions = mergeProviderModelOptions(p.provider, editProbedModels)}
             <div class="edit-form">
               <div class="field">
                 <label for="edit-name-{p.id}">Name</label>
@@ -351,7 +393,20 @@
               {#if isCustomProvider(p)}
                 <div class="field">
                   <label for="edit-base-url-{p.id}">Base URL</label>
-                  <input id="edit-base-url-{p.id}" type="text" bind:value={editForm.base_url} placeholder="https://api.example.com/v1" />
+                  <input
+                    id="edit-base-url-{p.id}"
+                    type="text"
+                    bind:value={editForm.base_url}
+                    placeholder={PROVIDER_DEFAULT_BASE_URLS[p.provider] || "https://api.example.com/v1"}
+                    list={`edit-provider-base-url-options-${p.id}`}
+                  />
+                  {#if PROVIDER_BASE_URL_OPTIONS[p.provider]?.length}
+                    <datalist id={`edit-provider-base-url-options-${p.id}`}>
+                      {#each PROVIDER_BASE_URL_OPTIONS[p.provider] as option}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </datalist>
+                  {/if}
                 </div>
               {/if}
               {#if !isLocal(p.provider)}
@@ -364,7 +419,12 @@
                 <label for="edit-model-{p.id}">Model</label>
                 {#if isCustomProvider(p)}
                   <div class="model-input-row">
-                    <input id="edit-model-{p.id}" type="text" bind:value={editForm.model} placeholder="e.g. gpt-4" />
+                    <input
+                      id="edit-model-{p.id}"
+                      type="text"
+                      bind:value={editForm.model}
+                      placeholder={PROVIDER_DEFAULT_MODELS[p.provider] || "e.g. gpt-4"}
+                    />
                     <button
                       class="btn fetch-models-btn"
                       onclick={fetchEditModels}
@@ -377,9 +437,9 @@
                   {#if editProbeError}
                     <div class="probe-error">{editProbeError}</div>
                   {/if}
-                  {#if editProbedModels.length > 0}
+                  {#if editModelOptions.length > 0}
                     <div class="model-list">
-                      {#each editProbedModels as m}
+                      {#each editModelOptions as m}
                         <button
                           class="model-chip"
                           class:selected={editForm.model === m}

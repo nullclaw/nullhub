@@ -73,6 +73,7 @@ pub const SavedChannelUpdate = struct {
 fn providerLabel(provider: []const u8) []const u8 {
     const map = .{
         .{ "openrouter", "OpenRouter" },
+        .{ "minimax", "MiniMax" },
         .{ "anthropic", "Anthropic" },
         .{ "openai", "OpenAI" },
         .{ "google", "Google" },
@@ -1272,13 +1273,15 @@ test "auto-generated name increments per provider type" {
 
     try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key1" });
     try s.addSavedProvider(.{ .provider = "openrouter", .api_key = "key2" });
-    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key3" });
+    try s.addSavedProvider(.{ .provider = "minimax", .api_key = "key3" });
+    try s.addSavedProvider(.{ .provider = "anthropic", .api_key = "key4" });
 
     const providers = s.savedProviders();
-    try std.testing.expectEqual(@as(usize, 3), providers.len);
+    try std.testing.expectEqual(@as(usize, 4), providers.len);
     try std.testing.expectEqualStrings("OpenRouter", providers[0].name);
     try std.testing.expectEqualStrings("OpenRouter #2", providers[1].name);
-    try std.testing.expectEqualStrings("Anthropic", providers[2].name);
+    try std.testing.expectEqualStrings("MiniMax", providers[2].name);
+    try std.testing.expectEqualStrings("Anthropic", providers[3].name);
 }
 
 test "update saved provider name only" {
