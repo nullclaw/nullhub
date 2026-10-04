@@ -406,3 +406,15 @@ fn delayedOpenBrowser(
     std_compat.thread.sleep(750 * std.time.ns_per_ms);
     openBrowser(allocator, host, port, publisher.accessOptions());
 }
+
+// TODO(#88): `build.zig` uses `src/main.zig` as the unit-test root, but this
+// file had no test wiring at all — `zig build test` therefore executed **zero**
+// tests while still reporting success. Wiring the full `root.zig` test block
+// surfaces 15 pre-existing compile errors in unrelated modules (supervisor,
+// discovery, downloader, managed_skills, compat/fs); those are tracked in #88.
+//
+// Until #88 lands, wire only the modules this change touches so its regression
+// coverage actually runs rather than silently compiling to nothing.
+test {
+    _ = @import("installer/ui_modules.zig");
+}

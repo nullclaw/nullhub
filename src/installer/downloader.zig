@@ -58,7 +58,7 @@ pub fn download(allocator: std.mem.Allocator, url: []const u8, dest_path: []cons
 
     const result = std_compat.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "curl", "-sfL", "-o", tmp_path, url },
+        .argv = &.{ "curl", "-sfL", "--max-time", prereqs.curl_max_time_secs, "-o", tmp_path, url },
     }) catch return error.DownloadFailed;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);

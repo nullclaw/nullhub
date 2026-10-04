@@ -9,7 +9,8 @@ pub const TempPaths = struct {
     paths: paths_mod.Paths,
 
     pub fn init(allocator: std.mem.Allocator) !TempPaths {
-        const tmp = std.testing.tmpDir(.{});
+        // `cleanup(self: *TmpDir)` needs a mutable receiver.
+        var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
         const root = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");

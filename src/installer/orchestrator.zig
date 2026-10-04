@@ -1254,26 +1254,19 @@ pub fn installUiModule(
     ui_mod: registry.UiModuleRef,
     version: []const u8,
 ) !void {
+    const dest = try p.uiModule(allocator, ui_mod.name, version);
+    defer allocator.free(dest);
+
+    // A local sibling checkout is the authoritative source in dev setups, so
+    // refresh `dev-local` from it on every install. The build goes to staging
+    // and only replaces the live module on success — a failed npm run leaves
+    // the previously working module in place.
     if (!builtin.is_test) {
         if (findLocalUiModuleDir(allocator, ui_mod.name)) |module_dir| {
             defer allocator.free(module_dir);
-
-            const dev_local_version = "dev-local";
-            const dev_local_dest = try p.uiModule(allocator, ui_mod.name, dev_local_version);
-            defer allocator.free(dev_local_dest);
-
-            std_compat.fs.deleteTreeAbsolute(dev_local_dest) catch |err| switch (err) {
-                error.FileNotFound => {},
-                else => {},
-            };
-
-            if (buildLocalUiModuleFromDir(allocator, module_dir, dev_local_dest)) return;
-            return error.DownloadFailed;
+            return installFromLocalSource(allocator, p, ui_mod.name, module_dir);
         }
     }
-
-    const dest = try p.uiModule(allocator, ui_mod.name, version);
-    defer allocator.free(dest);
 
     // Skip if already installed
     if (ui_modules_mod.isModuleInstalled(dest)) return;
@@ -1282,6 +1275,26 @@ pub fn installUiModule(
     ui_modules_mod.downloadUiModule(allocator, ui_mod.repo, ui_mod.name, version, dest) catch {
         return error.DownloadFailed;
     };
+}
+
+/// Build `module_dir` into staging and promote it over the `dev-local`
+/// install. Staging is discarded on failure so an existing `module.js`
+/// survives a broken build.
+fn installFromLocalSource(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    module_name: []const u8,
+    module_dir: []const u8,
+) !void {
+    const dest = try p.uiModule(allocator, module_name, "dev-local");
+    defer allocator.free(dest);
+
+    // Clears staging only — `dest` stays untouched until the build succeeds.
+    const staging = try ui_modules_mod.prepareStaging(allocator, dest);
+    defer allocator.free(staging);
+
+    if (!buildLocalUiModuleFromDir(allocator, module_dir, staging)) return error.DownloadFailed;
+    try ui_modules_mod.promoteStagedModule(allocator, staging, dest);
 }
 
 /// Build a UI module from a local sibling repository.
@@ -1361,16 +1374,20 @@ pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void
     }
 }
 
-/// Install the component's declared UI modules, best effort. Already-installed
-/// modules are skipped and a failed install never fails the caller — the
-/// module can still be installed via the API endpoint afterwards.
-/// NOTE: No unit test for the download path — tests must not hit the network;
-/// the guard below makes this a no-op under `zig build test`. Covered by a
-/// manual smoke test against a seeded state.
-fn ensureComponentUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, comp: registry.KnownComponent) void {
-    if (builtin.is_test) return;
-
+/// Install the component's declared UI modules, best effort. A failed install
+/// never fails the caller — the module can still be installed via the API
+/// endpoint afterwards.
+///
+/// Modules that already exist (in **any** version directory) are skipped, so
+/// the two startup passes — `syncLocalUiModules` (local build) and
+/// `syncMissingUiModules` (release download) — never build or fetch the same
+/// module twice. `builtin.is_test` keeps the npm/network boundary offline; the
+/// skip decision and the staged promotion it guards are covered by tests.
+pub fn ensureComponentUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, comp: registry.KnownComponent) void {
     for (comp.ui_modules) |ui_mod| {
+        if (ui_modules_mod.isInstalledUnderRoot(allocator, p.root, ui_mod.name)) continue;
+        if (builtin.is_test) continue;
+
         installUiModule(allocator, p, ui_mod, "latest") catch |err| {
             std.log.warn("ui module {s} auto-install failed: {s}", .{ ui_mod.name, @errorName(err) });
         };
@@ -2061,36 +2078,4 @@ test "patchNullclawRuntimeProfileIntoConfig prepares stateless gateway config fo
     try std.testing.expectEqual(@as(usize, 1), paired_tokens.len);
     try std.testing.expectEqualStrings(expected_hash, paired_tokens[0].string);
     try std.testing.expect(!nullclaw_gateway_config.isNullhubGatewayToken(paired_tokens[0].string));
-}
-
-test "nullclaw component declares nullclaw-chat-ui ui module" {
-    const comp = registry.findKnownComponent("nullclaw") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), comp.ui_modules.len);
-    try std.testing.expectEqualStrings("nullclaw-chat-ui", comp.ui_modules[0].name);
-    try std.testing.expectEqualStrings("nullclaw/nullclaw-chat-ui", comp.ui_modules[0].repo);
-}
-
-test "syncMissingUiModules leaves module uninstalled under test despite qualifying instance" {
-    const allocator = std.testing.allocator;
-    var fixture = try test_helpers.TempPaths.init(allocator);
-    defer fixture.deinit();
-    const state_path = try fixture.paths.state(allocator);
-    defer allocator.free(state_path);
-    var state = state_mod.State.init(allocator, state_path);
-    defer state.deinit();
-    try state.addInstance("nullclaw", "backfill-target", .{ .version = "v2026.5.29" });
-
-    syncMissingUiModules(allocator, fixture.paths, &state);
-
-    // The test guard held: the network download never ran, so the module
-    // destination directory was not created.
-    const dest = try fixture.paths.uiModule(allocator, "nullclaw-chat-ui", "latest");
-    defer allocator.free(dest);
-    if (std_compat.fs.openDirAbsolute(dest, .{})) |existing| {
-        var dir = existing;
-        dir.close();
-        return error.TestUnexpectedResult;
-    } else |err| {
-        try std.testing.expectEqual(error.FileNotFound, err);
-    }
 }

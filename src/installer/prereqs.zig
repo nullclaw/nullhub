@@ -4,6 +4,11 @@ const builtin = @import("builtin");
 
 const log = std.log.scoped(.prereqs);
 
+/// Wall-clock ceiling for every outbound curl invocation, in seconds.
+/// Registry metadata fetches and artifact downloads run on the startup path,
+/// so an unbounded request must never be able to hang the hub.
+pub const curl_max_time_secs = "30";
+
 pub const EnsureError = error{
     ToolInstallFailed,
     UnsupportedPlatform,

@@ -198,7 +198,7 @@ pub fn fetchLatestRelease(allocator: std.mem.Allocator, repo: []const u8) !std.j
 
     const result = std_compat.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
+        .argv = &.{ "curl", "-sfL", "--max-time", prereqs.curl_max_time_secs, "-H", "Accept: application/vnd.github+json", url },
     }) catch return error.FetchFailed;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -225,7 +225,7 @@ pub fn fetchReleaseByTag(allocator: std.mem.Allocator, repo: []const u8, tag: []
 
     const result = std_compat.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "curl", "-sfL", "-H", "Accept: application/vnd.github+json", url },
+        .argv = &.{ "curl", "-sfL", "--max-time", prereqs.curl_max_time_secs, "-H", "Accept: application/vnd.github+json", url },
     }) catch return error.FetchFailed;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -389,4 +389,11 @@ test "findAssetForComponentPlatform matches swapped platform order" {
     const asset = findAssetForComponentPlatform(allocator, release, "nullclaw", "aarch64-macos");
     try std.testing.expect(asset != null);
     try std.testing.expectEqualStrings("nullclaw-macos-aarch64.bin", asset.?.name);
+}
+
+test "nullclaw component declares nullclaw-chat-ui ui module" {
+    const comp = findKnownComponent("nullclaw") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), comp.ui_modules.len);
+    try std.testing.expectEqualStrings("nullclaw-chat-ui", comp.ui_modules[0].name);
+    try std.testing.expectEqualStrings("nullclaw/nullclaw-chat-ui", comp.ui_modules[0].repo);
 }
