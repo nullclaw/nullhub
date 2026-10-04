@@ -114,6 +114,8 @@ pub const Server = struct {
     mission_control: mission_control_api.RuntimeStore = .{},
     mission_workflow_evidence_cache: MissionWorkflowEvidenceCache = .{},
     start_time: i64,
+    /// Background UI-module backfill started by `startUiModuleSync`.
+    ui_sync_thread: ?std.Thread = null,
 
     pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, manager: *manager_mod.Manager, mutex: *std_compat.sync.Mutex) !Server {
         var paths = try paths_mod.Paths.init(allocator, null);
@@ -128,8 +130,9 @@ pub const Server = struct {
             break :blk state_mod.State.init(allocator, state_path);
         };
 
-        orchestrator.syncLocalUiModules(allocator, paths);
-
+        // UI module sync is deliberately NOT done here: both passes can run
+        // `npm` and unbounded network requests, and `init` runs before
+        // `listener.listen()`. See startUiModuleSync().
         return .{
             .allocator = allocator,
             .host = host,
@@ -159,10 +162,36 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) void {
+        // The sync worker borrows `state`/`paths`, so it must finish before
+        // they are freed. Bounded by the curl --max-time ceiling.
+        if (self.ui_sync_thread) |thread| {
+            thread.join();
+            self.ui_sync_thread = null;
+        }
         self.mission_workflow_evidence_cache.deinit();
         self.state.deinit();
         self.allocator.destroy(self.state);
         self.paths.deinit(self.allocator);
+    }
+
+    /// Backfill declared UI modules on a background thread.
+    ///
+    /// This used to run inline in `init()`, before `listener.listen()`: a
+    /// stalled registry fetch could delay or prevent the hub from becoming
+    /// reachable at all. Called from `run()` once we are accepting connections,
+    /// so the worst case is a late-arriving module rather than an unavailable
+    /// hub. Joined in `deinit()`.
+    pub fn startUiModuleSync(self: *Server) void {
+        if (self.ui_sync_thread != null) return;
+        self.ui_sync_thread = std.Thread.spawn(.{}, uiModuleSyncWorker, .{self}) catch |err| {
+            std.log.warn("ui module sync not started: {s}", .{@errorName(err)});
+            return;
+        };
+    }
+
+    fn uiModuleSyncWorker(self: *Server) void {
+        orchestrator.syncLocalUiModules(self.allocator, self.paths);
+        orchestrator.syncMissingUiModules(self.allocator, self.paths, self.state);
     }
 
     pub fn setAccessOptions(self: *Server, options: access.Options) void {
@@ -469,6 +498,8 @@ pub const Server = struct {
         defer listener.deinit();
 
         std.debug.print("listening on http://{s}:{d}\n", .{ self.host, self.port });
+        // Only now that we accept connections: best-effort UI module backfill.
+        self.startUiModuleSync();
         var urls = access.buildAccessUrlsWithOptions(self.allocator, self.host, self.port, self.currentAccessOptions()) catch null;
         defer if (urls) |*u| u.deinit(self.allocator);
         if (urls) |u| {

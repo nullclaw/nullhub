@@ -5,6 +5,7 @@ const state_mod = @import("../core/state.zig");
 const manager_mod = @import("../supervisor/manager.zig");
 const paths_mod = @import("../core/paths.zig");
 const registry = @import("../installer/registry.zig");
+const orchestrator = @import("../installer/orchestrator.zig");
 const downloader = @import("../installer/downloader.zig");
 const platform = @import("../core/platform.zig");
 const helpers = @import("helpers.zig");
@@ -4498,6 +4499,13 @@ pub fn handleImport(allocator: std.mem.Allocator, s: *state_mod.State, paths: pa
         std_compat.fs.deleteFileAbsolute(inst_dir) catch {};
         return helpers.serverError();
     };
+
+    // Best effort: registration must also provision the component's declared
+    // UI modules, otherwise an import into an already-running hub still needs
+    // a restart (or a manual API call) before the UI is available.
+    if (registry.findKnownComponent(component)) |comp| {
+        orchestrator.ensureComponentUiModules(allocator, paths, comp);
+    }
 
     const response_body = buildImportResponse(allocator, instance_name, source_dir) catch return helpers.serverError();
     return jsonOk(response_body);

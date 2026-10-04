@@ -384,6 +384,9 @@ pub fn install(
         error.StartFailed => return error.StartFailed,
     };
 
+    // Best effort: a failed UI module install must not fail the instance.
+    ensureComponentUiModules(allocator, p, comp);
+
     return .{
         .version = version,
         .instance_name = opts.instance_name,
@@ -1251,26 +1254,19 @@ pub fn installUiModule(
     ui_mod: registry.UiModuleRef,
     version: []const u8,
 ) !void {
+    const dest = try p.uiModule(allocator, ui_mod.name, version);
+    defer allocator.free(dest);
+
+    // A local sibling checkout is the authoritative source in dev setups, so
+    // refresh `dev-local` from it on every install. The build goes to staging
+    // and only replaces the live module on success — a failed npm run leaves
+    // the previously working module in place.
     if (!builtin.is_test) {
         if (findLocalUiModuleDir(allocator, ui_mod.name)) |module_dir| {
             defer allocator.free(module_dir);
-
-            const dev_local_version = "dev-local";
-            const dev_local_dest = try p.uiModule(allocator, ui_mod.name, dev_local_version);
-            defer allocator.free(dev_local_dest);
-
-            std_compat.fs.deleteTreeAbsolute(dev_local_dest) catch |err| switch (err) {
-                error.FileNotFound => {},
-                else => {},
-            };
-
-            if (buildLocalUiModuleFromDir(allocator, module_dir, dev_local_dest)) return;
-            return error.DownloadFailed;
+            return installFromLocalSource(allocator, p, ui_mod.name, module_dir);
         }
     }
-
-    const dest = try p.uiModule(allocator, ui_mod.name, version);
-    defer allocator.free(dest);
 
     // Skip if already installed
     if (ui_modules_mod.isModuleInstalled(dest)) return;
@@ -1279,6 +1275,26 @@ pub fn installUiModule(
     ui_modules_mod.downloadUiModule(allocator, ui_mod.repo, ui_mod.name, version, dest) catch {
         return error.DownloadFailed;
     };
+}
+
+/// Build `module_dir` into staging and promote it over the `dev-local`
+/// install. Staging is discarded on failure so an existing `module.js`
+/// survives a broken build.
+fn installFromLocalSource(
+    allocator: std.mem.Allocator,
+    p: paths_mod.Paths,
+    module_name: []const u8,
+    module_dir: []const u8,
+) !void {
+    const dest = try p.uiModule(allocator, module_name, "dev-local");
+    defer allocator.free(dest);
+
+    // Clears staging only — `dest` stays untouched until the build succeeds.
+    const staging = try ui_modules_mod.prepareStaging(allocator, dest);
+    defer allocator.free(staging);
+
+    if (!buildLocalUiModuleFromDir(allocator, module_dir, staging)) return error.DownloadFailed;
+    try ui_modules_mod.promoteStagedModule(allocator, staging, dest);
 }
 
 /// Build a UI module from a local sibling repository.
@@ -1355,6 +1371,39 @@ pub fn syncLocalUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths) void
                 installUiModule(allocator, p, ui_mod, "latest") catch {};
             }
         }
+    }
+}
+
+/// Install the component's declared UI modules, best effort. A failed install
+/// never fails the caller — the module can still be installed via the API
+/// endpoint afterwards.
+///
+/// Modules that already exist (in **any** version directory) are skipped, so
+/// the two startup passes — `syncLocalUiModules` (local build) and
+/// `syncMissingUiModules` (release download) — never build or fetch the same
+/// module twice. `builtin.is_test` keeps the npm/network boundary offline; the
+/// skip decision and the staged promotion it guards are covered by tests.
+pub fn ensureComponentUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, comp: registry.KnownComponent) void {
+    for (comp.ui_modules) |ui_mod| {
+        if (ui_modules_mod.isInstalledUnderRoot(allocator, p.root, ui_mod.name)) continue;
+        if (builtin.is_test) continue;
+
+        installUiModule(allocator, p, ui_mod, "latest") catch |err| {
+            std.log.warn("ui module {s} auto-install failed: {s}", .{ ui_mod.name, @errorName(err) });
+        };
+    }
+}
+
+/// Download declared UI modules for components that have at least one
+/// instance. Complements syncLocalUiModules (which builds from a local
+/// sibling checkout) by covering release installs, so a fresh binary ends
+/// up with a working chat UI without a manual API call.
+pub fn syncMissingUiModules(allocator: std.mem.Allocator, p: paths_mod.Paths, s: *state_mod.State) void {
+    for (&registry.known_components) |*comp| {
+        if (comp.ui_modules.len == 0) continue;
+        const instances = s.instances.getPtr(comp.name) orelse continue;
+        if (instances.count() == 0) continue;
+        ensureComponentUiModules(allocator, p, comp.*);
     }
 }
 
