@@ -345,12 +345,24 @@ test "extractTarGz creates dest_dir and extracts contents" {
     const archive_path = try std.fmt.allocPrint(allocator, "{s}/test-bundle.tar.gz", .{tmp_dir});
     defer allocator.free(archive_path);
 
+    // Building the fixture needs a working `tar`. Its CLI differs across
+    // environments (GNU tar vs the bsdtar shipped with Windows), so an
+    // unusable archive tool is a skip rather than a failure — otherwise the
+    // extraction assertion below would fail on the fixture, not the code.
     const tar_result = std_compat.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "tar", "-czf", archive_path, "-C", src_dir, "." },
-    }) catch return;
+    }) catch return error.SkipZigTest;
     defer allocator.free(tar_result.stdout);
     defer allocator.free(tar_result.stderr);
+
+    switch (tar_result.term) {
+        .exited => |code| if (code != 0) {
+            std.debug.print("tar -czf unavailable here (exit {d}): {s}\n", .{ code, tar_result.stderr });
+            return error.SkipZigTest;
+        },
+        else => return error.SkipZigTest,
+    }
 
     // Extract to a new directory.
     const dest_dir = try std.fmt.allocPrint(allocator, "{s}/extracted", .{tmp_dir});
