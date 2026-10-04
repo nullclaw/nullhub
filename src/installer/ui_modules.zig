@@ -322,10 +322,11 @@ test "findUiModuleArchiveAsset does not match a different module prefix" {
 test "extractTarGz creates dest_dir and extracts contents" {
     const allocator = std.testing.allocator;
 
-    const tmp_dir = "/tmp/test-nullhub-ui-extract";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    // A per-test scratch dir: hardcoded /tmp paths do not exist on Windows.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_dir);
 
     // Create a test file to put in the tarball.
     const src_dir = try std.fmt.allocPrint(allocator, "{s}/src", .{tmp_dir});
@@ -371,10 +372,10 @@ test "extractTarGz creates dest_dir and extracts contents" {
 test "installExtractedUiModule flattens single top-level archive directory" {
     const allocator = std.testing.allocator;
 
-    const tmp_dir = "/tmp/test-nullhub-ui-install-extracted";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_dir);
 
     const extract_dir = try std.fmt.allocPrint(allocator, "{s}/extract", .{tmp_dir});
     defer allocator.free(extract_dir);
@@ -407,13 +408,14 @@ test "installExtractedUiModule flattens single top-level archive directory" {
 }
 
 test "isModuleInstalled returns true when module entrypoint exists" {
-    const tmp_dir = "/tmp/test-nullhub-ui-installed";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_dir);
 
-    const module_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/module.js", .{tmp_dir});
-    defer std.testing.allocator.free(module_path);
+    const module_path = try std.fmt.allocPrint(allocator, "{s}/module.js", .{tmp_dir});
+    defer allocator.free(module_path);
     {
         var file = try std_compat.fs.createFileAbsolute(module_path, .{});
         defer file.close();
@@ -424,10 +426,11 @@ test "isModuleInstalled returns true when module entrypoint exists" {
 }
 
 test "isModuleInstalled returns false without module entrypoint" {
-    const tmp_dir = "/tmp/test-nullhub-ui-installed-no-entrypoint";
-    std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
-    try std_compat.fs.makeDirAbsolute(tmp_dir);
-    defer std_compat.fs.deleteTreeAbsolute(tmp_dir) catch {};
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_dir = try std_compat.fs.Dir.wrap(tmp.dir).realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_dir);
 
     try std.testing.expect(!isModuleInstalled(tmp_dir));
 }
